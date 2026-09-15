@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lattice Admin — Subscribers</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Serif&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared/shell.css" />
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar" id="sidebar-root"></aside>
+
+  <div class="main">
+    <div class="topbar" id="topbar-root"></div>
+
+    <div class="view-body-scroll">
+      <div class="view-hd-main">
+        <div>
+          <div class="view-hd-title">Subscribers</div>
+          <div class="view-hd-sub">Accounts with an active or past paid subscription.</div>
+        </div>
+        <button class="btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12"/><path d="m7 12 5 5 5-5"/><path d="M5 21h14"/></svg>
+          Export
+        </button>
+      </div>
+
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-label">Active subscribers</div>
+          <div class="stat-value">412</div>
+          <div class="stat-delta up">↑ 3.4% <span class="prior">vs last month</span></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">MRR</div>
+          <div class="stat-value">$18,940</div>
+          <div class="stat-delta up">↑ 8.1% <span class="prior">vs last month</span></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Avg. revenue / user</div>
+          <div class="stat-value">$45.97</div>
+          <div class="stat-delta up">↑ 1.2% <span class="prior">vs last month</span></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Past due</div>
+          <div class="stat-value">18</div>
+          <div class="stat-delta down">↑ 4 <span class="prior">vs last month</span></div>
+        </div>
+      </div>
+
+      <div class="view-filters">
+        <div class="view-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          <input placeholder="Search subscribers…" />
+        </div>
+        <select class="set-select">
+          <option value="">All plans</option>
+          <option>Pro</option>
+          <option>Team</option>
+          <option>Enterprise</option>
+        </select>
+        <select class="set-select">
+          <option value="">All statuses</option>
+          <option>Active</option>
+          <option>Past due</option>
+          <option>Canceled</option>
+        </select>
+        <div class="view-filters-spacer"></div>
+        <span class="rows-count">7 rows</span>
+      </div>
+
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr><th>Subscriber</th><th>Plan</th><th>Status</th><th>Renews</th><th>Payment method</th><th class="num">MRR</th><th></th></tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="shared/shell.js"></script>
+<script>
+  renderShell({ active: "subscribers", crumb: "Subscribers" });
+
+  const SUBS = [
+    { name: "Avery Chen",      email: "avery@northwind.io",     plan: "Enterprise", status: "active",   renews: "Aug 12, 2026", pm: "Visa •••• 4242", mrr: 2490, color:"#2563eb" },
+    { name: "Noah Kim",        email: "noah.kim@orbitlabs.ai",  plan: "Enterprise", status: "active",   renews: "Jul 18, 2026", pm: "Mastercard •••• 1188", mrr: 2490, color:"#ea580c" },
+    { name: "Maya Reyes",      email: "maya@northwind.io",      plan: "Team",       status: "active",   renews: "Aug 3, 2026",  pm: "Visa •••• 7710", mrr: 490, color:"#7c3aed" },
+    { name: "Camille Laurent", email: "camille@duvalgroup.fr",  plan: "Team",       status: "active",   renews: "Jul 11, 2026", pm: "Amex •••• 2201", mrr: 490, color:"#0d9488" },
+    { name: "Sofia Marchetti", email: "sofia@marchetti.design", plan: "Team",       status: "past_due",  renews: "Jun 30, 2026", pm: "Visa •••• 5541", mrr: 490, color:"#db2777" },
+    { name: "Diego Fuentes",   email: "diego@copyxyz.dev",      plan: "Pro",        status: "active",   renews: "Jul 21, 2026", pm: "Visa •••• 9032", mrr: 29, color:"#16a34a" },
+    { name: "Ethan Park",      email: "ethan@parkstudio.co",    plan: "Pro",        status: "canceled",  renews: "—",            pm: "—", mrr: 0, color:"#4f46e5" },
+  ];
+
+  const initials = (n) => n.split(" ").map(w => w[0]).slice(0,2).join("").toUpperCase();
+  const statusLabel = { active: "Active", past_due: "Past due", canceled: "Canceled" };
+
+  document.getElementById("tbody").innerHTML = SUBS.map(s => `
+    <tr>
+      <td>
+        <div class="user-cell">
+          <span class="u-avatar" style="background:${s.color}">${initials(s.name)}</span>
+          <div class="u-meta">
+            <span class="u-name">${s.name}</span>
+            <span class="u-email">${s.email}</span>
+          </div>
+        </div>
+      </td>
+      <td><span class="badge plan-${s.plan.toLowerCase()}">${s.plan}</span></td>
+      <td><span class="status-pill"><span class="status-dot ${s.status}"></span>${statusLabel[s.status]}</span></td>
+      <td>${s.renews}</td>
+      <td>${s.pm}</td>
+      <td class="num">${s.mrr > 0 ? "$" + s.mrr.toLocaleString() : "—"}</td>
+      <td>
+        <div class="row-actions">
+          <button class="kebab" aria-label="Actions">
+            <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+          </button>
+        </div>
+      </td>
+    </tr>
+  `).join("");
+</script>
+</body>
+</html>

@@ -1,0 +1,1 @@
+{"nodes": [{"id": "cockpit_html", "label": "Cockpit SPA", "file_type": "code", "source_file": "Cockpit.html", "rationale": "Main application for AI video generation and channel management."}], "edges": [], "hyperedges": []}

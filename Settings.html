@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lattice Admin — Settings</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Serif&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared/shell.css" />
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar" id="sidebar-root"></aside>
+
+  <div class="main">
+    <div class="topbar" id="topbar-root"></div>
+
+    <div class="view-body-scroll" style="max-width:760px;">
+      <div class="view-hd-main">
+        <div>
+          <div class="view-hd-title">Workspace settings</div>
+          <div class="view-hd-sub">General configuration, access and danger zone.</div>
+        </div>
+      </div>
+
+      <div class="set-card">
+        <div class="set-card-hd">General</div>
+        <div class="set-row">
+          <div>
+            <div class="set-label">Workspace name</div>
+          </div>
+          <input class="np-input" value="Default Workspace" style="width:220px;" />
+        </div>
+        <div class="set-row">
+          <div>
+            <div class="set-label">Workspace URL</div>
+            <div class="set-hint">lattice.app/w/default-workspace</div>
+          </div>
+          <button class="btn" style="padding:5px 10px; font-size:12.5px;">Edit</button>
+        </div>
+        <div class="set-row">
+          <div>
+            <div class="set-label">Default role for new members</div>
+          </div>
+          <select class="set-select"><option>Member</option><option>Admin</option></select>
+        </div>
+      </div>
+
+      <div class="set-card">
+        <div class="set-card-hd">Access & security</div>
+        <div class="set-row">
+          <div>
+            <div class="set-label">Require SSO</div>
+            <div class="set-hint">Enforce single sign-on for all members.</div>
+          </div>
+          <button class="switch on"><span class="thumb"></span></button>
+        </div>
+        <div class="set-row">
+          <div>
+            <div class="set-label">Two-factor authentication</div>
+            <div class="set-hint">Require 2FA for admin accounts.</div>
+          </div>
+          <button class="switch"><span class="thumb"></span></button>
+        </div>
+        <div class="set-row">
+          <div>
+            <div class="set-label">Allow public invite links</div>
+          </div>
+          <button class="switch on"><span class="thumb"></span></button>
+        </div>
+      </div>
+
+      <div class="set-card">
+        <div class="set-card-hd">Billing</div>
+        <div class="set-row">
+          <div>
+            <div class="set-label">Billing email</div>
+          </div>
+          <input class="np-input" value="billing@northwind.io" style="width:220px;" />
+        </div>
+        <div class="set-row">
+          <div>
+            <div class="set-label">Auto top-up</div>
+            <div class="set-hint">Automatically purchase credits when balance is low.</div>
+          </div>
+          <button class="switch on"><span class="thumb"></span></button>
+        </div>
+      </div>
+
+      <div class="set-card">
+        <div class="set-card-hd" style="color:var(--err);">Danger zone</div>
+        <div class="set-row">
+          <div>
+            <div class="set-label">Remove all inactive users</div>
+            <div class="set-hint">Removes members with no activity in 90+ days.</div>
+          </div>
+          <button class="btn danger">Remove</button>
+        </div>
+        <div class="set-row">
+          <div>
+            <div class="set-label">Delete workspace</div>
+            <div class="set-hint">Permanently deletes the workspace and all data.</div>
+          </div>
+          <button class="btn danger">Delete</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="shared/shell.js"></script>
+<script>
+  renderShell({ active: "settings", crumb: "Settings" });
+  document.querySelectorAll(".switch").forEach(sw => {
+    sw.addEventListener("click", () => sw.classList.toggle("on"));
+  });
+</script>
+</body>
+</html>

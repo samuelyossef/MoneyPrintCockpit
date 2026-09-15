@@ -1,0 +1,1 @@
+{"nodes": [{"id": "lattice_app_lattice_html", "label": "Lattice Desktop App", "file_type": "code", "source_file": "lattice-app/Lattice.html", "rationale": "React-based desktop interface for AI interaction and artifact management."}], "edges": [], "hyperedges": []}

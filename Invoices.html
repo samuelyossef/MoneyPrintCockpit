@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lattice Admin — Invoices</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Serif&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared/shell.css" />
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar" id="sidebar-root"></aside>
+
+  <div class="main">
+    <div class="topbar" id="topbar-root"></div>
+
+    <div class="view-body-scroll">
+      <div class="view-hd-main">
+        <div>
+          <div class="view-hd-title">Invoices</div>
+          <div class="view-hd-sub">Billing history across all subscribers.</div>
+        </div>
+        <button class="btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12"/><path d="m7 12 5 5 5-5"/><path d="M5 21h14"/></svg>
+          Export CSV
+        </button>
+      </div>
+
+      <div class="view-filters">
+        <div class="view-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          <input placeholder="Search by subscriber or invoice ID…" />
+        </div>
+        <select class="set-select">
+          <option value="">All statuses</option>
+          <option>Paid</option>
+          <option>Pending</option>
+          <option>Overdue</option>
+        </select>
+        <div class="view-filters-spacer"></div>
+        <span class="rows-count">8 rows</span>
+      </div>
+
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr><th>Invoice</th><th>Subscriber</th><th>Plan</th><th>Date</th><th>Status</th><th class="num">Amount</th><th></th></tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="shared/shell.js"></script>
+<script>
+  renderShell({ active: "invoices", crumb: "Invoices" });
+
+  const INVOICES = [
+    { id: "INV-10482", name: "Avery Chen",      plan: "Enterprise", date: "Jun 12, 2026", status: "paid",    amount: 2490 },
+    { id: "INV-10481", name: "Noah Kim",        plan: "Enterprise", date: "Jun 18, 2026", status: "paid",    amount: 2490 },
+    { id: "INV-10465", name: "Maya Reyes",      plan: "Team",       date: "Jun 3, 2026",  status: "paid",    amount: 490 },
+    { id: "INV-10460", name: "Camille Laurent", plan: "Team",       date: "Jun 11, 2026", status: "paid",    amount: 490 },
+    { id: "INV-10452", name: "Sofia Marchetti", plan: "Team",       date: "May 30, 2026", status: "overdue", amount: 490 },
+    { id: "INV-10441", name: "Diego Fuentes",   plan: "Pro",        date: "Jun 21, 2026", status: "paid",    amount: 29 },
+    { id: "INV-10430", name: "Ethan Park",      plan: "Pro",        date: "May 22, 2026", status: "pending", amount: 29 },
+    { id: "INV-10412", name: "Ravi Patel",      plan: "Pro",        date: "May 20, 2026", status: "paid",    amount: 29 },
+  ];
+  const statusLabel = { paid: "Paid", pending: "Pending", overdue: "Overdue" };
+
+  document.getElementById("tbody").innerHTML = INVOICES.map(inv => `
+    <tr>
+      <td><span style="font-family:var(--font-mono); font-size:12px;">${inv.id}</span></td>
+      <td>${inv.name}</td>
+      <td><span class="badge plan-${inv.plan.toLowerCase()}">${inv.plan}</span></td>
+      <td>${inv.date}</td>
+      <td><span class="status-pill"><span class="status-dot ${inv.status}"></span>${statusLabel[inv.status]}</span></td>
+      <td class="num">$${inv.amount.toLocaleString()}</td>
+      <td>
+        <div class="row-actions">
+          <button class="btn" style="padding:5px 10px; font-size:12.5px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12"/><path d="m7 12 5 5 5-5"/><path d="M5 21h14"/></svg>
+            PDF
+          </button>
+        </div>
+      </td>
+    </tr>
+  `).join("");
+</script>
+</body>
+</html>

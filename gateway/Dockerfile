@@ -1,0 +1,10 @@
+FROM python:3.12-slim
+WORKDIR /app
+COPY gateway/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+COPY gateway /app/gateway
+COPY index.html Cockpit.html /app/
+COPY shared /app/shared
+EXPOSE 3000
+CMD ["uvicorn", "gateway.main:app", "--host", "0.0.0.0", "--port", "3000"]
+

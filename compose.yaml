@@ -1,0 +1,57 @@
+services:
+  cockpit-api:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    environment:
+      APP_DATA_DIR: /runtime
+      TURBO_BASE_URL: http://moneyprinterturbo:8080
+      MPT_API_KEY_FILE: /run/secrets/mpt_api_key
+    volumes:
+      - ./runtime:/runtime
+    secrets:
+      - mpt_api_key
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      moneyprinterturbo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/api/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  moneyprinterturbo:
+    image: ghcr.io/harry0703/moneyprinterturbo:v1.3.7@sha256:999fbf91934e763a6405b4aecce9a2acaa84c76d0dcae39cf2cf170e9d530889
+    command: ["python3", "main.py"]
+    volumes:
+      - ./runtime/moneyprinter/config.toml:/MoneyPrinterTurbo/config.toml:ro
+      - moneyprinter-storage:/MoneyPrinterTurbo/storage
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ping')"]
+      interval: 20s
+      timeout: 8s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+secrets:
+  mpt_api_key:
+    file: ./runtime/secrets/mpt_api_key.txt
+
+volumes:
+  moneyprinter-storage:
+  redis-data:

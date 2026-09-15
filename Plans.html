@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lattice Admin — Plans</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Serif&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared/shell.css" />
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar" id="sidebar-root"></aside>
+
+  <div class="main">
+    <div class="topbar" id="topbar-root"></div>
+
+    <div class="view-body-scroll">
+      <div class="view-hd-main">
+        <div>
+          <div class="view-hd-title">Plans</div>
+          <div class="view-hd-sub">Manage subscription tiers offered to workspace members.</div>
+        </div>
+        <button class="btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          Edit pricing
+        </button>
+      </div>
+
+      <div class="plans-grid">
+        <div class="plan-card">
+          <div class="plan-name">Free</div>
+          <div class="plan-price">$0 <span>/ mo</span></div>
+          <div class="plan-sub">867 users</div>
+          <ul class="plan-feats">
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>3 projects</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>Community support</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>lattice-4.1 model</li>
+          </ul>
+          <button class="btn" disabled style="opacity:.5;">Default</button>
+        </div>
+        <div class="plan-card is-current">
+          <div class="plan-name">Pro</div>
+          <div class="plan-price">$29 <span>/ mo</span></div>
+          <div class="plan-sub">318 users</div>
+          <ul class="plan-feats">
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>Unlimited projects</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>Priority support</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>Connectors & Skills</li>
+          </ul>
+          <button class="btn primary">Most popular</button>
+        </div>
+        <div class="plan-card">
+          <div class="plan-name">Team</div>
+          <div class="plan-price">$49 <span>/ mo · seat</span></div>
+          <div class="plan-sub">86 users</div>
+          <ul class="plan-feats">
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>Shared workspace</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>Admin roles</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>Usage analytics</li>
+          </ul>
+          <button class="btn">Manage</button>
+        </div>
+        <div class="plan-card">
+          <div class="plan-name">Enterprise</div>
+          <div class="plan-price">Custom</div>
+          <div class="plan-sub">13 users</div>
+          <ul class="plan-feats">
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>SSO & SCIM</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>Dedicated support</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>Custom contracts</li>
+          </ul>
+          <button class="btn">Contact sales</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="shared/shell.js"></script>
+<script>
+  renderShell({ active: "plans", crumb: "Plans" });
+</script>
+</body>
+</html>

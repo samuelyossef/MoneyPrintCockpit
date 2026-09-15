@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lattice Admin — Activity</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Serif&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared/shell.css" />
+<style>
+  .split2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 20px; }
+  .split3 { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; margin-bottom: 20px; }
+  .list-card { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); padding: 4px 0; }
+  .list-card-hd { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px 8px; }
+  .list-card-title { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+  .list-card-link { font-size: 12px; color: var(--accent-ink); cursor: default; }
+  .list-row { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 13px; }
+  .list-rank { width: 16px; color: var(--muted-2); font-family: var(--font-mono); font-size: 11px; flex: 0 0 auto; }
+  .list-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+  .list-name { flex: 1; min-width: 0; color: var(--ink); }
+  .list-sub { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .list-val { font-family: var(--font-mono); font-size: 12px; color: var(--ink-2); flex: 0 0 auto; }
+  .list-empty { padding: 30px 16px; text-align: center; color: var(--muted); font-size: 13px; }
+
+  .trend-item { display: flex; align-items: center; gap: 10px; padding: 10px 16px; }
+  .trend-icon { width: 26px; height: 26px; border-radius: 6px; background: var(--rail-2); border: 1px solid var(--border); display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--ink-2); flex: 0 0 auto; }
+  .trend-meta { flex: 1; min-width: 0; }
+  .trend-name { font-size: 13px; color: var(--ink); }
+  .trend-sub { font-size: 11px; color: var(--muted); }
+  .trend-badge { font-size: 11px; color: var(--ok); display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+
+  .mini-bars { display: flex; align-items: flex-end; gap: 5px; height: 120px; padding: 8px 16px 14px; }
+  .mini-bar-col { flex: 1; display: flex; flex-direction: column-reverse; border-radius: 4px 4px 0 0; overflow: hidden; min-height: 2px; transition: opacity .12s; }
+  .mini-bar-col:hover { opacity: .78; }
+  .mini-seg { width: 100%; }
+
+  /* stat card sparkline */
+  .stat-card { position: relative; overflow: hidden; }
+  .stat-spark { position: absolute; right: 14px; top: 16px; width: 76px; height: 30px; }
+  .bar { transition: opacity .12s; }
+  .bar-col:hover .bar { opacity: .78; }
+
+  .legend-row { display: flex; flex-wrap: wrap; gap: 12px; padding: 0 16px 12px; font-size: 11.5px; color: var(--muted); }
+  .legend-row span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend-dot { width: 7px; height: 7px; border-radius: 50%; }
+
+  .explore-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .explore-bar { display: flex; height: 26px; border-radius: 6px; overflow: hidden; margin-bottom: 16px; }
+  .explore-seg { height: 100%; }
+
+  .guard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .guard-card { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); padding: 16px 18px; }
+  .guard-hd { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; margin-bottom: 4px; }
+  .guard-hd svg { width: 15px; height: 15px; }
+  .guard-sub { font-size: 12px; color: var(--muted); margin-bottom: 14px; }
+  .guard-value { font-size: 30px; font-weight: 600; }
+
+  @media (max-width: 900px) {
+    .split2, .split3, .guard-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar" id="sidebar-root"></aside>
+
+  <div class="main">
+    <div class="topbar" id="topbar-root"></div>
+
+    <div class="view-body-scroll">
+      <div class="view-hd-main">
+        <div>
+          <div class="view-hd-title">Activity</div>
+          <div class="view-hd-sub">Usage and revenue across all workspace users.</div>
+        </div>
+        <select class="set-select" id="rangeSelect">
+          <option>Past 7 Days</option>
+          <option selected>Past 1 Month</option>
+          <option>Past 3 Months</option>
+          <option>Past 1 Year</option>
+        </select>
+      </div>
+
+      <div class="view-tabs">
+        <button class="view-tab is-active" data-tab="overview">Overview</button>
+        <button class="view-tab" data-tab="trends">Trends</button>
+        <button class="view-tab" data-tab="explore">Explore</button>
+        <button class="view-tab" data-tab="guardrails">Guardrails</button>
+      </div>
+
+      <!-- OVERVIEW -->
+      <div class="tabpane" id="pane-overview">
+        <div class="stats-row">
+          <div class="stat-card">
+            <div class="stat-label">Total spend</div>
+            <div class="stat-value">$18,940</div>
+            <div class="stat-delta up">↑ 8.1% <span class="prior">vs prior period</span></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Requests</div>
+            <div class="stat-value">96,412</div>
+            <div class="stat-delta up">↑ 11.4% <span class="prior">vs prior period</span></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Signups</div>
+            <div class="stat-value">284</div>
+            <div class="stat-delta up">↑ 6.2% <span class="prior">vs prior period</span></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Churn rate</div>
+            <div class="stat-value">2.1%</div>
+            <div class="stat-delta down">↓ 0.4% <span class="prior">vs prior period</span></div>
+          </div>
+        </div>
+
+        <div class="split2">
+          <div class="list-card">
+            <div class="list-card-hd"><span class="list-card-title">Top users by spend</span><span class="list-card-link">Explore ›</span></div>
+            <div id="topUsers"></div>
+          </div>
+          <div class="list-card">
+            <div class="list-card-hd"><span class="list-card-title">Top plans by MRR</span><span class="list-card-link">Explore ›</span></div>
+            <div id="topPlans"></div>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-hd"><span class="chart-title">Revenue over time</span><span class="rows-count">Daily · by plan</span></div>
+          <div class="bars" id="revenueBars"></div>
+          <div class="legend-row" id="revenueLegend"></div>
+        </div>
+
+        <div class="split2">
+          <div class="chart-card" style="margin-bottom:0;">
+            <div class="chart-hd"><span class="chart-title">Signups over time</span></div>
+            <div class="bars" id="signupBars" style="height:100px;"></div>
+          </div>
+          <div class="chart-card" style="margin-bottom:0;">
+            <div class="chart-hd"><span class="chart-title">Requests by plan</span></div>
+            <div class="bars" id="requestBars" style="height:100px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TRENDS -->
+      <div class="tabpane" id="pane-trends" style="display:none;">
+        <div class="split3">
+          <div class="chart-card" style="margin-bottom:0;">
+            <div class="chart-hd"><span class="chart-title">Plans — spend over time</span></div>
+            <div class="mini-bars" id="trendPlans"></div>
+            <div class="legend-row" id="trendPlansLegend"></div>
+          </div>
+          <div class="list-card">
+            <div class="list-card-hd"><span class="list-card-title">Trending plans</span><span class="list-card-link">Explore ›</span></div>
+            <div id="trendingPlans"></div>
+          </div>
+        </div>
+
+        <div class="split3">
+          <div class="chart-card" style="margin-bottom:0;">
+            <div class="chart-hd"><span class="chart-title">Users — spend over time</span></div>
+            <div class="mini-bars" id="trendUsers"></div>
+            <div class="legend-row" id="trendUsersLegend"></div>
+          </div>
+          <div class="list-card">
+            <div class="list-card-hd"><span class="list-card-title">Trending users</span><span class="list-card-link">Explore ›</span></div>
+            <div id="trendingUsers"></div>
+          </div>
+        </div>
+
+        <div class="split3" style="margin-bottom:0;">
+          <div class="chart-card" style="margin-bottom:0;">
+            <div class="chart-hd"><span class="chart-title">Signup source — spend over time</span></div>
+            <div class="mini-bars" id="trendSource"></div>
+            <div class="legend-row" id="trendSourceLegend"></div>
+          </div>
+          <div class="list-card">
+            <div class="list-card-hd"><span class="list-card-title">Trending sources</span><span class="list-card-link">Explore ›</span></div>
+            <div id="trendingSource"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- EXPLORE -->
+      <div class="tabpane" id="pane-explore" style="display:none;">
+        <div class="explore-toolbar">
+          <select class="set-select"><option>Total Usage ($)</option><option>Requests</option><option>Users</option></select>
+          <span style="color:var(--muted); font-size:13px;">by</span>
+          <select class="set-select"><option>Plan</option><option>User</option><option>Signup source</option></select>
+          <div class="view-filters-spacer"></div>
+          <span class="rows-count">4 rows · 12ms</span>
+        </div>
+        <div class="explore-bar" id="exploreBar"></div>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>Plan</th><th class="num">Value</th><th class="num">% of Total</th></tr></thead>
+            <tbody id="exploreTbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- GUARDRAILS -->
+      <div class="tabpane" id="pane-guardrails" style="display:none;">
+        <div class="guard-grid">
+          <div class="guard-card">
+            <div class="guard-hd" style="color:var(--err);">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 6v6c0 5 3.8 8.5 9 10 5.2-1.5 9-5 9-10V6Z"/></svg>
+              Blocked signups
+            </div>
+            <div class="guard-sub">Rejected before account creation</div>
+            <div class="guard-value">6</div>
+          </div>
+          <div class="guard-card">
+            <div class="guard-hd" style="color:var(--warn);">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 6v6c0 5 3.8 8.5 9 10 5.2-1.5 9-5 9-10V6Z"/></svg>
+              Flagged for review
+            </div>
+            <div class="guard-sub">Accounts held for manual approval</div>
+            <div class="guard-value">3</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="shared/shell.js"></script>
+<script>
+  renderShell({ active: "activity", crumb: "Activity" });
+
+  const MONTHS = ["Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun"];
+  const PLAN_COLORS = { Free: "#9ca3af", Pro: "#2563eb", Team: "#7c3aed", Enterprise: "#b45309" };
+
+  /* ---------- Overview ---------- */
+  document.getElementById("topUsers").innerHTML = [
+    ["Noah Kim","noah.kim@orbitlabs.ai","#ea580c","$1,290.75"],
+    ["Avery Chen","avery@northwind.io","#2563eb","$842.10"],
+    ["Maya Reyes","maya@northwind.io","#7c3aed","$214.60"],
+    ["Camille Laurent","camille@duvalgroup.fr","#0d9488","$189.90"],
+    ["Sofia Marchetti","sofia@marchetti.design","#db2777","$128.00"],
+  ].map((r,i) => `
+    <div class="list-row">
+      <span class="list-rank">${i+1}</span>
+      <span class="list-dot" style="background:${r[2]}"></span>
+      <span class="list-name">${r[0]}<div class="list-sub">${r[1]}</div></span>
+      <span class="list-val">${r[3]}</span>
+    </div>`).join("");
+
+  document.getElementById("topPlans").innerHTML = [
+    ["Enterprise","$9,840"], ["Team","$5,120"], ["Pro","$3,980"], ["Free","$0"],
+  ].map((r,i) => `
+    <div class="list-row">
+      <span class="list-rank">${i+1}</span>
+      <span class="list-dot" style="background:${PLAN_COLORS[r[0]]}"></span>
+      <span class="list-name">${r[0]}</span>
+      <span class="list-val">${r[1]}</span>
+    </div>`).join("");
+
+  function drawBars(elId, data, color) {
+    const max = Math.max(...data);
+    document.getElementById(elId).innerHTML = data.map((v,i) => `
+      <div class="bar-col">
+        <div class="bar" style="height:${(v/max*100).toFixed(0)}%; background:${color || "var(--accent)"}"></div>
+        <div class="bar-label">${MONTHS[i]}</div>
+      </div>`).join("");
+  }
+
+  function sparkline(elId, data, color) {
+    const w = 76, h = 30, max = Math.max(...data), min = Math.min(...data);
+    const rng = max - min || 1;
+    const pts = data.map((v,i) => [i/(data.length-1)*w, h - ((v-min)/rng)*(h-4) - 2]);
+    const d = pts.map((p,i) => (i?"L":"M")+p[0].toFixed(1)+" "+p[1].toFixed(1)).join(" ");
+    const area = d + ` L${w} ${h} L0 ${h} Z`;
+    return `<svg class="stat-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+      <path d="${area}" fill="${color}" opacity=".10"/>
+      <path d="${d}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
+  }
+  const statCards = document.querySelectorAll('#pane-overview .stats-row .stat-card');
+  statCards[0].insertAdjacentHTML('beforeend', sparkline('s0',[3,4,3,5,6,5,7,8,9,8,11,12],'#16a34a'));
+  statCards[1].insertAdjacentHTML('beforeend', sparkline('s1',[4,5,4,6,7,6,8,9,10,9,12,13],'#2563eb'));
+  statCards[2].insertAdjacentHTML('beforeend', sparkline('s2',[2,3,2,4,5,3,5,6,7,6,8,9],'#16a34a'));
+  statCards[3].insertAdjacentHTML('beforeend', sparkline('s3',[4,3,4,3,3,2,3,2,3,2,2,2],'#ef4444'));
+  drawBars("revenueBars", [22,28,19,34,41,30,38,45,52,47,60,55]);
+  drawBars("signupBars", [8,12,7,15,18,11,16,20,24,19,28,26], "#16a34a");
+  drawBars("requestBars", [1200,1800,1400,2600,3100,2200,2900,3400,4100,3700,4600,4300], "#7c3aed");
+
+  document.getElementById("revenueLegend").innerHTML = Object.entries(PLAN_COLORS).map(([k,c]) =>
+    `<span><span class="legend-dot" style="background:${c}"></span>${k}</span>`).join("");
+
+  /* ---------- Trends ---------- */
+  function drawStackedMini(elId, series, colors) {
+    const totals = series[0].map((_, i) => series.reduce((s, arr) => s + arr[i], 0));
+    const max = Math.max(...totals) || 1;
+    const el = document.getElementById(elId);
+    el.innerHTML = totals.map((total, i) => {
+      const colH = (total / max * 100).toFixed(1);
+      const segs = series.map((arr, si) => {
+        const h = total ? (arr[i] / total * 100) : 0;
+        return `<div class="mini-seg" style="height:${h.toFixed(1)}%; background:${colors[si]}"></div>`;
+      }).join("");
+      return `<div class="mini-bar-col" style="height:${colH}%" title="${MONTHS[i]}">${segs}</div>`;
+    }).join("");
+  }
+
+  const planSeries = [
+    [0,0,0,0,0,0,1,0,0,0,0,0.2],       // Free (flat, mostly 0)
+    [0,0,0.5,0,0,0,3,4,6,5,7,6],       // Pro
+    [0,0,0,0,0,0,5,6,8,7,10,9],        // Team
+    [0,0,0,0,0,0,9,10,14,12,17,15],    // Enterprise
+  ];
+  drawStackedMini("trendPlans", planSeries, ["#9ca3af","#2563eb","#7c3aed","#b45309"]);
+  document.getElementById("trendPlansLegend").innerHTML = Object.entries(PLAN_COLORS).map(([k,c]) =>
+    `<span><span class="legend-dot" style="background:${c}"></span>${k}</span>`).join("");
+  document.getElementById("trendingPlans").innerHTML = ["Enterprise","Team","Pro"].map(p => `
+    <div class="trend-item">
+      <span class="trend-icon">${p[0]}</span>
+      <div class="trend-meta"><div class="trend-name">${p}</div><div class="trend-sub">by mrr</div></div>
+      <span class="trend-badge">↑ New</span>
+    </div>`).join("");
+
+  const userColors = ["#2563eb","#7c3aed","#0d9488","#db2777","#ea580c"];
+  const userSeries = [
+    [0,0,0,0,0,0,4,3,5,4,6,5],
+    [0,0,0,0,0,0,2,3,4,3,5,4],
+    [0,0,0,0,0,0,1,2,3,3,4,3],
+    [0,0,0,0,0,0,2,1,2,3,3,2],
+    [0,0,0,0,0,0,1,1,2,1,2,2],
+  ];
+  drawStackedMini("trendUsers", userSeries, userColors);
+  document.getElementById("trendUsersLegend").innerHTML = ["Noah K.","Avery C.","Maya R.","Camille L.","Sofia M."].map((n,i) =>
+    `<span><span class="legend-dot" style="background:${userColors[i]}"></span>${n}</span>`).join("");
+  document.getElementById("trendingUsers").innerHTML = ["Noah Kim","Avery Chen","Maya Reyes"].map(n => `
+    <div class="trend-item">
+      <span class="trend-icon">${n.split(" ").map(w=>w[0]).join("")}</span>
+      <div class="trend-meta"><div class="trend-name">${n}</div><div class="trend-sub">by spend</div></div>
+      <span class="trend-badge">↑ New</span>
+    </div>`).join("");
+
+  const sourceColors = ["#2563eb","#16a34a","#d97706","#6b7280"];
+  const sourceSeries = [
+    [0,0,0,0,0,0,6,7,9,8,11,10],
+    [0,0,0,0,0,0,3,4,5,4,6,5],
+    [0,0,0,0,0,0,2,2,3,3,4,3],
+    [0,0,0,0,0,0,1,1,1,1,2,1],
+  ];
+  drawStackedMini("trendSource", sourceSeries, sourceColors);
+  document.getElementById("trendSourceLegend").innerHTML = ["Organic","Referral","Paid ads","Other"].map((n,i) =>
+    `<span><span class="legend-dot" style="background:${sourceColors[i]}"></span>${n}</span>`).join("");
+  document.getElementById("trendingSource").innerHTML = ["Organic","Referral","Paid ads"].map(n => `
+    <div class="trend-item">
+      <span class="trend-icon">${n[0]}</span>
+      <div class="trend-meta"><div class="trend-name">${n}</div><div class="trend-sub">by signups</div></div>
+      <span class="trend-badge">↑ New</span>
+    </div>`).join("");
+
+  /* ---------- Explore ---------- */
+  const exploreRows = [
+    ["Enterprise", 9840, PLAN_COLORS.Enterprise],
+    ["Team", 5120, PLAN_COLORS.Team],
+    ["Pro", 3980, PLAN_COLORS.Pro],
+    ["Free", 0, PLAN_COLORS.Free],
+  ];
+  const exTotal = exploreRows.reduce((s,r) => s + r[1], 0);
+  document.getElementById("exploreBar").innerHTML = exploreRows.map(r =>
+    `<div class="explore-seg" style="width:${(r[1]/exTotal*100).toFixed(1)}%; background:${r[2]}"></div>`).join("");
+  document.getElementById("exploreTbody").innerHTML = exploreRows.map(r => `
+    <tr>
+      <td><span class="badge plan-${r[0].toLowerCase()}">${r[0]}</span></td>
+      <td class="num">$${r[1].toLocaleString()}</td>
+      <td class="num">${(r[1]/exTotal*100).toFixed(1)}%</td>
+    </tr>`).join("");
+
+  /* ---------- Tabs ---------- */
+  document.querySelectorAll(".view-tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll(".view-tab").forEach(t => t.classList.remove("is-active"));
+      tab.classList.add("is-active");
+      document.querySelectorAll(".tabpane").forEach(p => p.style.display = "none");
+      document.getElementById("pane-" + tab.dataset.tab).style.display = "";
+    });
+  });
+</script>
+</body>
+</html>

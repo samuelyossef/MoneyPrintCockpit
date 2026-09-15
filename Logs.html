@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lattice Admin — Logs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Serif&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared/shell.css" />
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar" id="sidebar-root"></aside>
+
+  <div class="main">
+    <div class="topbar" id="topbar-root"></div>
+
+    <div class="view-body-scroll">
+      <div class="view-hd-main">
+        <div>
+          <div class="view-hd-title">Logs</div>
+          <div class="view-hd-sub">Request and session history across the workspace.</div>
+        </div>
+        <select class="set-select">
+          <option>Past 7 Days</option>
+          <option selected>Past 1 Month</option>
+          <option>This Year</option>
+        </select>
+      </div>
+
+      <div class="view-tabs">
+        <button class="view-tab is-active" data-tab="requests">Requests</button>
+        <button class="view-tab" data-tab="sessions">Sessions</button>
+      </div>
+
+      <div class="view-filters">
+        <div class="view-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          <input placeholder="Search by user or endpoint…" />
+        </div>
+        <div class="view-filters-spacer"></div>
+        <span class="rows-count">14 rows</span>
+      </div>
+
+      <div class="tablewrap" id="requestsTable">
+        <table>
+          <thead>
+            <tr><th>Date</th><th>User</th><th>Endpoint</th><th>Status</th><th class="num">Latency</th><th class="num">Cost</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <div class="foot-pag">
+          <span>Showing 1–10 of 14</span>
+          <div class="pg-btns">
+            <button class="pg-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></button>
+            <button class="pg-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="tablewrap" id="sessionsTable" style="display:none;">
+        <table>
+          <thead>
+            <tr><th>Date</th><th>User</th><th>Session ID</th><th class="num">Requests</th><th class="num">Cost</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="shared/shell.js"></script>
+<script>
+  renderShell({ active: "logs", crumb: "Logs" });
+
+  const REQUESTS = [
+    { date: "Jun 30, 03:12 PM", user: "Avery Chen",  endpoint: "/api/chat/completions", status: 200, latency: "1.1s", cost: 0.0134 },
+    { date: "Jun 30, 02:58 PM", user: "Noah Kim",     endpoint: "/api/chat/completions", status: 200, latency: "845ms", cost: 0.0117 },
+    { date: "Jun 30, 02:40 PM", user: "Maya Reyes",   endpoint: "/api/embeddings",       status: 200, latency: "412ms", cost: 0.0021 },
+    { date: "Jun 29, 11:20 AM", user: "Diego Fuentes",endpoint: "/api/chat/completions", status: 200, latency: "1.4s", cost: 0.0396 },
+    { date: "Jun 29, 09:47 AM", user: "Camille Laurent",endpoint: "/api/chat/completions",status: 429, latency: "88ms", cost: 0 },
+    { date: "Jun 28, 06:41 PM", user: "Sofia Marchetti",endpoint: "/api/chat/completions",status: 200, latency: "2.1s", cost: 0.0543 },
+    { date: "Jun 28, 04:15 PM", user: "Ethan Park",   endpoint: "/api/embeddings",       status: 200, latency: "301ms", cost: 0.0009 },
+    { date: "Jun 27, 01:33 PM", user: "Ravi Patel",   endpoint: "/api/chat/completions", status: 200, latency: "1.0s", cost: 0.0048 },
+    { date: "Jun 27, 10:02 AM", user: "Avery Chen",   endpoint: "/api/chat/completions", status: 500, latency: "3.4s", cost: 0 },
+    { date: "Jun 26, 05:58 PM", user: "Isabel Torres",endpoint: "/api/embeddings",       status: 200, latency: "199ms", cost: 0.0006 },
+  ];
+
+  const SESSIONS = [
+    { date: "Jun 30", user: "Avery Chen", id: "sess-1781128650799", req: 14, cost: 0.398 },
+    { date: "Jun 29", user: "Maya Reyes",  id: "sess-1781097478277", req: 6, cost: 0.112 },
+    { date: "Jun 28", user: "Noah Kim",    id: "sess-1781098880123", req: 22, cost: 0.860 },
+    { date: "Jun 27", user: "Diego Fuentes", id: "sess-1780924651991", req: 3, cost: 0.041 },
+  ];
+
+  function statusClass(s) { return s < 300 ? "active" : s === 429 ? "past_due" : "canceled"; }
+
+  document.querySelector("#requestsTable tbody").innerHTML = REQUESTS.map(r => `
+    <tr>
+      <td>${r.date}</td>
+      <td>${r.user}</td>
+      <td><span style="font-family:var(--font-mono); font-size:12px;">${r.endpoint}</span></td>
+      <td><span class="status-pill"><span class="status-dot ${statusClass(r.status)}"></span>${r.status}</span></td>
+      <td class="num">${r.latency}</td>
+      <td class="num">$${r.cost.toFixed(4)}</td>
+    </tr>
+  `).join("");
+
+  document.querySelector("#sessionsTable tbody").innerHTML = SESSIONS.map(s => `
+    <tr>
+      <td>${s.date}</td>
+      <td>${s.user}</td>
+      <td><span style="font-family:var(--font-mono); font-size:12px;">${s.id}</span></td>
+      <td class="num">${s.req}</td>
+      <td class="num">$${s.cost.toFixed(3)}</td>
+    </tr>
+  `).join("");
+
+  document.querySelectorAll(".view-tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll(".view-tab").forEach(t => t.classList.remove("is-active"));
+      tab.classList.add("is-active");
+      document.getElementById("requestsTable").style.display = tab.dataset.tab === "requests" ? "" : "none";
+      document.getElementById("sessionsTable").style.display = tab.dataset.tab === "sessions" ? "" : "none";
+    });
+  });
+</script>
+</body>
+</html>

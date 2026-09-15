@@ -1,0 +1,162 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - button "Recolher menu" [ref=e294]
+      - generic [ref=e297]:
+        - generic [ref=e298]: Plataforma
+        - generic [ref=e299]:
+          - button "Visão geral" [ref=e300]
+          - button "Canais 4" [ref=e307]:
+            - generic [ref=e310]: Canais
+            - generic [ref=e311]: "4"
+        - generic [ref=e312]: Pessoas
+        - button "Notificações 3" [ref=e314]:
+          - generic [ref=e318]: Notificações
+          - generic [ref=e319]: "3"
+        - generic [ref=e320]: Studio
+        - generic [ref=e321]:
+          - button "Gerador de Vídeo" [ref=e322]
+          - button "YouTube Shorts" [ref=e326]
+          - button "Agentes 42" [ref=e331]:
+            - generic [ref=e334]: Agentes
+            - generic [ref=e335]: "42"
+          - button "Analytics" [ref=e336]
+        - generic [ref=e340]: Observabilidade
+        - generic [ref=e341]:
+          - button "Logs e traces" [ref=e342]
+          - button "Jobs e workers 2" [ref=e347]:
+            - generic [ref=e350]: Jobs e workers
+            - generic [ref=e351]: "2"
+        - generic [ref=e352]: Conta
+        - generic [ref=e353]:
+          - button "Integrações" [ref=e354]
+          - button "Configurações" [ref=e361]
+      - generic [ref=e366]:
+        - generic [ref=e367]: AC
+        - generic [ref=e368]:
+          - generic [ref=e369]: Avery Chen
+          - generic [ref=e370]: Super Admin · Plataforma
+    - generic [ref=e82]:
+      - generic [ref=e84]:
+        - generic [ref=e85]: produção
+        - generic [ref=e87]:
+          - text: "LLM:"
+          - generic [ref=e88]: Claude Sonnet 4
+        - generic [ref=e89]: "Tarefa: Concluída"
+        - button "Alternar tema" [ref=e91]
+        - button "Notificações" [ref=e95]
+      - generic [ref=e99]:
+        - generic [ref=e371]:
+          - generic [ref=e372]: Gerador de Vídeo
+          - generic [ref=e373]: Roteiro IA, voz sintética, filmagens stock e legendas sincronizadas
+        - generic [ref=e374]:
+          - generic [ref=e375]:
+            - generic [ref=e376]:
+              - generic [ref=e377]: Criador de vídeo HD
+              - generic [ref=e378]: All-in-one
+            - generic [ref=e379]:
+              - generic [ref=e380]:
+                - text: Tema / tópico do vídeo
+                - 'textbox "Ex: 5 fatos inacreditáveis sobre as profundezas do oceano" [ref=e381]'
+                - generic [ref=e382]:
+                  - button "Psicologia" [ref=e383]
+                  - button "Profundezas" [ref=e384]
+                  - button "Hábitos Ricos" [ref=e385]
+                  - button "Espaço" [ref=e386]
+                  - button "História Oculta" [ref=e387]
+                - generic [ref=e388]: A IA gera o roteiro completo e as palavras-chave de filmagem a partir deste tema.
+              - generic [ref=e389]:
+                - text: Roteiro customizado (opcional)
+                - textbox "Cole ou digite seu próprio roteiro" [ref=e390]
+              - generic [ref=e391]:
+                - text: Selecione o canal
+                - combobox [ref=e392]:
+                  - option "Sem canal específico" [selected]
+                  - option "Canal Principal"
+                  - option "Clipes Virais"
+                  - option "Shorts Diários"
+                  - option "Histórias Rápidas"
+              - generic [ref=e393]:
+                - generic [ref=e394]:
+                  - text: Idioma da narração
+                  - combobox [ref=e395]:
+                    - option "Português (Brasil)" [selected]
+                    - option "English (US)"
+                    - option "Español"
+                - generic [ref=e396]:
+                  - text: Voz sintética
+                  - combobox [ref=e397]:
+                    - option "Português (Brasil) — Feminina" [selected]
+                    - option "Português (Brasil) — Masculina"
+              - generic [ref=e398]:
+                - text: Formato / proporção de tela
+                - generic [ref=e399]:
+                  - generic [ref=e400] [cursor=pointer]:
+                    - radio "9:16 Vertical Shorts, Reels, TikTok · 1080×1920" [checked]
+                    - generic [ref=e401]: 9:16 Vertical
+                    - generic [ref=e402]: Shorts, Reels, TikTok · 1080×1920
+                  - generic [ref=e403] [cursor=pointer]:
+                    - radio "16:9 Paisagem YouTube padrão · 1920×1080"
+                    - generic [ref=e404]: 16:9 Paisagem
+                    - generic [ref=e405]: YouTube padrão · 1920×1080
+                  - generic [ref=e406] [cursor=pointer]:
+                    - radio "1:1 Quadrado Instagram Feed · 1080×1080"
+                    - generic [ref=e407]: 1:1 Quadrado
+                    - generic [ref=e408]: Instagram Feed · 1080×1080
+              - generic [ref=e409]:
+                - generic [ref=e410]:
+                  - text: Quantidade de frases / cenas
+                  - spinbutton [ref=e411]: "5"
+                  - generic [ref=e412]: Mais frases resultam em vídeos mais longos (30–60s).
+                - generic [ref=e413]:
+                  - text: Duração de cada clipe (segundos)
+                  - spinbutton [ref=e414]: "5"
+                  - generic [ref=e415]: Tempo de corte dinâmico entre cenas.
+              - generic [ref=e416]:
+                - generic [ref=e417]:
+                  - text: Tamanho da legenda
+                  - spinbutton [ref=e418]: "56"
+                - generic [ref=e419]:
+                  - text: Cor do texto
+                  - textbox [ref=e420]: "#FFFFFF"
+                - generic [ref=e421]:
+                  - text: Cor da borda
+                  - textbox [ref=e422]: "#000000"
+              - generic [ref=e423]:
+                - text: Trilha sonora de fundo (BGM)
+                - combobox [ref=e424]:
+                  - option "Sem música de fundo" [selected]
+                  - option "Lo-fi suave"
+                  - option "Corporativo"
+                  - option "Épico cinematográfico"
+              - button "Gerar vídeo HD completo" [ref=e425]
+          - generic [ref=e426]:
+            - generic [ref=e427]:
+              - generic [ref=e428]:
+                - generic [ref=e429]: Pipeline em tempo real
+                - generic [ref=e430]: Pronto para gerar
+              - generic [ref=e431]:
+                - generic [ref=e434]:
+                  - generic [ref=e435]: Aguardando início…
+                  - generic [ref=e436]: 0%
+                - generic [ref=e437]:
+                  - generic [ref=e439]: Roteiro IA
+                  - generic [ref=e445]: Keywords
+                  - generic [ref=e451]: Voz e Legendas
+                  - generic [ref=e457]: Filmagens Stock
+                  - generic [ref=e465]: Render HD
+            - generic [ref=e470]:
+              - generic [ref=e471]:
+                - generic [ref=e472]: Player de pré-visualização
+                - generic [ref=e473]: Nenhum vídeo
+              - generic [ref=e474]:
+                - generic [ref=e475]:
+                  - generic [ref=e476]: O vídeo finalizado será exibido aqui para pré-visualização e download
+                  - generic:
+                    - button "Replace"
+                    - button "Edit"
+                - generic [ref=e483]:
+                  - button "Baixar MP4" [ref=e484]
+                  - button "Publicar no YouTube" [ref=e487]
+                  - button "Copiar Caminho" [ref=e490]
+  - complementary "Inspeção rápida" [ref=e289]

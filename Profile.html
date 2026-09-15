@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lattice Admin — Profile</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Serif&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared/shell.css" />
+<style>
+  .back-link { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: default; margin-bottom: 16px; }
+  .back-link:hover { color: var(--ink); }
+  .back-link svg { width: 14px; height: 14px; }
+
+  .prof-head { display: flex; align-items: center; gap: 16px; margin-bottom: 28px; }
+  .prof-avatar { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 20px; font-weight: 600; flex: 0 0 auto; }
+  .prof-name { font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
+  .prof-email { font-size: 13.5px; color: var(--muted); margin-top: 2px; }
+  .prof-head-meta { flex: 1; min-width: 0; }
+  .prof-head-actions { display: flex; gap: 8px; }
+
+  .section-hd { display: flex; align-items: center; gap: 10px; margin: 8px 0 14px; }
+  .section-title { font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+  .section-spacer { flex: 1; }
+
+  .seg { display: inline-flex; background: var(--rail-2); border: 1px solid var(--border); border-radius: 8px; padding: 2px; }
+  .seg button { appearance: none; border: 0; background: transparent; font: inherit; font-size: 12.5px; padding: 4px 12px; border-radius: 6px; color: var(--muted); cursor: default; }
+  .seg button.is-active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+
+  .usage-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; align-items: start; margin-bottom: 8px; }
+  .usage-big { font-size: 34px; font-weight: 600; letter-spacing: -.02em; }
+  .usage-sub { font-size: 12.5px; color: var(--muted-2); margin-top: 2px; }
+  .usage-chart-hint { font-size: 12px; color: var(--muted-2); text-align: right; margin-bottom: 6px; }
+
+  .topmodels-hd { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+  .topmodels-hd span { font-weight: 400; color: var(--muted); font-size: 12.5px; }
+  .tm-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; font-size: 13px; border-bottom: 1px solid var(--border); }
+  .tm-row:last-child { border-bottom: 0; }
+  .tm-name { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 12px; color: var(--ink-2); }
+  .tm-val { font-family: var(--font-mono); font-size: 12px; color: var(--ink); }
+  .empty-note { font-size: 13px; color: var(--muted); padding: 12px 0; }
+
+  .act-stats { display: flex; gap: 40px; margin-bottom: 18px; }
+  .act-stat-label { font-size: 12px; color: var(--muted); }
+  .act-stat-val { font-size: 18px; font-weight: 600; margin-top: 2px; }
+  .act-stat-val small { font-size: 12px; font-weight: 400; color: var(--muted); }
+
+  .heatmap { display: flex; gap: 3px; overflow-x: auto; padding-bottom: 6px; }
+  .hm-week { display: flex; flex-direction: column; gap: 3px; }
+  .hm-cell { width: 11px; height: 11px; border-radius: 2px; background: var(--rail-2); }
+  .hm-legend { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); margin-top: 8px; }
+  .hm-legend .hm-cell { display: inline-block; }
+
+  .card-panel { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); padding: 18px 20px; margin-bottom: 24px; }
+
+  @media (max-width: 760px) {
+    .usage-grid { grid-template-columns: 1fr; }
+    .act-stats { gap: 24px; flex-wrap: wrap; }
+    .prof-head { flex-wrap: wrap; }
+    .prof-head-actions { width: 100%; }
+    .section-hd { flex-wrap: wrap; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar" id="sidebar-root"></aside>
+
+  <div class="main">
+    <div class="topbar" id="topbar-root"></div>
+
+    <div class="view-body-scroll">
+      <a class="back-link" href="Users.html">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>
+        Back to Users
+      </a>
+
+      <div class="prof-head">
+        <span class="prof-avatar" id="pAvatar"></span>
+        <div class="prof-head-meta">
+          <div class="prof-name" id="pName"></div>
+          <div class="prof-email" id="pEmail"></div>
+        </div>
+        <div class="prof-head-actions">
+          <button class="btn">Change plan</button>
+          <button class="btn danger">Suspend</button>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:10px; margin-bottom:28px; flex-wrap:wrap;">
+        <div class="stat-card" style="flex:1; min-width:150px;"><div class="stat-label">Plan</div><div id="pPlan" style="margin-top:4px;"></div></div>
+        <div class="stat-card" style="flex:1; min-width:150px;"><div class="stat-label">Status</div><div id="pStatus" style="margin-top:6px;"></div></div>
+        <div class="stat-card" style="flex:1; min-width:150px;"><div class="stat-label">Role</div><div class="stat-value" id="pRole" style="font-size:16px; margin-top:4px;"></div></div>
+        <div class="stat-card" style="flex:1; min-width:150px;"><div class="stat-label">Joined</div><div class="stat-value" id="pJoined" style="font-size:16px; margin-top:4px;"></div></div>
+      </div>
+
+      <!-- Usage summary -->
+      <div class="card-panel">
+        <div class="section-hd">
+          <span class="section-title">Usage summary</span>
+          <select class="set-select" style="font-size:12.5px;"><option>Last 7 Days</option><option>Last 30 Days</option><option>This Year</option></select>
+          <div class="section-spacer"></div>
+          <div class="seg">
+            <button>Tokens</button><button class="is-active">Spend</button><button>Requests</button>
+          </div>
+        </div>
+        <div class="usage-grid">
+          <div>
+            <div class="usage-big" id="pUsageBig">$0.00</div>
+            <div class="usage-sub" id="pUsageSub">No prior data</div>
+            <div class="usage-chart-hint">Daily · by model</div>
+            <div class="bars" id="usageBars" style="height:150px;"></div>
+          </div>
+          <div>
+            <div class="topmodels-hd">Top models <span>by spend</span></div>
+            <div id="topModels"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Activity -->
+      <div class="card-panel">
+        <div class="section-hd">
+          <span class="section-title">Activity</span>
+          <div class="section-spacer"></div>
+          <span style="font-size:12.5px; color:var(--muted);">Spend</span>
+        </div>
+        <div class="act-stats">
+          <div><div class="act-stat-label">Longest streak</div><div class="act-stat-val" id="pStreak"></div></div>
+          <div><div class="act-stat-label">Avg / day</div><div class="act-stat-val" id="pAvgDay"></div></div>
+          <div><div class="act-stat-label">Avg / week</div><div class="act-stat-val" id="pAvgWeek"></div></div>
+          <div><div class="act-stat-label">Total</div><div class="act-stat-val" id="pTotal"></div></div>
+        </div>
+        <div class="heatmap" id="heatmap"></div>
+        <div class="hm-legend">
+          Less
+          <span class="hm-cell" style="background:var(--rail-2)"></span>
+          <span class="hm-cell" style="background:#c7d2fe"></span>
+          <span class="hm-cell" style="background:#818cf8"></span>
+          <span class="hm-cell" style="background:#4f46e5"></span>
+          <span class="hm-cell" style="background:#3730a3"></span>
+          More
+        </div>
+      </div>
+
+      <!-- API keys -->
+      <div class="section-hd">
+        <span class="section-title">API keys</span>
+        <span style="color:var(--muted-2); font-family:var(--font-mono); font-size:12px;" id="pKeyCount"></span>
+      </div>
+      <div style="display:flex; gap:40px; margin-bottom:14px;">
+        <div><div class="act-stat-label">Active keys</div><div class="act-stat-val" id="pActiveKeys"></div></div>
+        <div><div class="act-stat-label">Disabled / expired</div><div class="act-stat-val" id="pDisabledKeys"></div></div>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Name</th><th>Key</th><th>Workspace</th><th class="num">Created</th></tr></thead>
+          <tbody id="keysTbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="shared/shell.js"></script>
+<script src="shared/users.js"></script>
+<script>
+  renderShell({ active: "users", crumb: "Users / Profile" });
+
+  const params = new URLSearchParams(location.search);
+  const idx = parseInt(params.get("u") || "0", 10);
+  const u = window.USERS[idx] || window.USERS[0];
+  const initials = (n) => n.split(" ").map(w => w[0]).slice(0,2).join("").toUpperCase();
+  const statusLabel = { active: "Active", trialing: "Trialing", past_due: "Past due", canceled: "Canceled" };
+
+  document.getElementById("topbar-root").querySelector(".crumbs").textContent = "Lattice Admin / Users / " + u.name;
+  document.getElementById("pAvatar").textContent = initials(u.name);
+  document.getElementById("pAvatar").style.background = u.color;
+  document.getElementById("pName").textContent = u.name;
+  document.getElementById("pEmail").textContent = u.email;
+  document.getElementById("pPlan").innerHTML = `<span class="badge plan-${u.plan.toLowerCase()}">${u.plan}</span>`;
+  document.getElementById("pStatus").innerHTML = `<span class="status-pill"><span class="status-dot ${u.status}"></span>${statusLabel[u.status]}</span>`;
+  document.getElementById("pRole").textContent = u.role;
+  document.getElementById("pJoined").textContent = u.joined;
+
+  document.getElementById("pUsageBig").textContent = "$" + u.total.toFixed(2);
+  document.getElementById("pUsageSub").textContent = u.total > 0 ? "across last 7 days" : "No prior data";
+
+  // usage bars (7 days)
+  const days = ["6/25","6/26","6/27","6/28","6/29","6/30","7/1"];
+  let usage = u.total > 0
+    ? [0.12,0.18,0.09,0.22,0.15,0.14,0.10].map(f => +(u.total * f).toFixed(2))
+    : [0,0,0,0,0,0,0];
+  const umax = Math.max(...usage, 1);
+  document.getElementById("usageBars").innerHTML = usage.map((v,i) => `
+    <div class="bar-col">
+      <div class="bar" style="height:${(v/umax*100).toFixed(0)}%; background:var(--accent);"></div>
+      <div class="bar-label">${days[i]}</div>
+    </div>`).join("");
+
+  // top models
+  const tm = document.getElementById("topModels");
+  if (u.topModels.length) {
+    tm.innerHTML = u.topModels.map(m => `
+      <div class="tm-row"><span class="tm-name">${m[0]}</span><span class="tm-val">$${m[1].toFixed(2)}</span></div>`).join("");
+  } else {
+    tm.innerHTML = `<div class="empty-note">No usage in this period</div>`;
+  }
+
+  // activity stats
+  document.getElementById("pStreak").innerHTML = `${u.streak} <small>days</small>`;
+  document.getElementById("pAvgDay").textContent = "$" + u.avgDay.toFixed(4);
+  document.getElementById("pAvgWeek").textContent = "$" + u.avgWeek.toFixed(4);
+  document.getElementById("pTotal").textContent = "$" + u.total.toFixed(2);
+
+  // heatmap (52 weeks x 7 days), density scaled by activity level
+  const levels = ["var(--rail-2)","#c7d2fe","#818cf8","#4f46e5","#3730a3"];
+  const density = u.total > 500 ? 0.55 : u.total > 100 ? 0.32 : u.total > 0 ? 0.15 : 0.03;
+  let seed = idx * 9973 + 7;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  let hm = "";
+  for (let w = 0; w < 52; w++) {
+    hm += '<div class="hm-week">';
+    for (let d = 0; d < 7; d++) {
+      const recent = w > 40 ? 1.8 : 1; // more activity recently
+      const r = rnd();
+      let lvl = 0;
+      if (r < density * recent) lvl = 1 + Math.floor(rnd() * 4);
+      hm += `<div class="hm-cell" style="background:${levels[Math.min(lvl,4)]}"></div>`;
+    }
+    hm += '</div>';
+  }
+  document.getElementById("heatmap").innerHTML = hm;
+
+  // api keys
+  const active = u.keys.filter(k => k[3]).length;
+  const disabled = u.keys.length - active;
+  document.getElementById("pKeyCount").textContent = u.keys.length;
+  document.getElementById("pActiveKeys").textContent = active;
+  document.getElementById("pDisabledKeys").textContent = disabled;
+  const kb = document.getElementById("keysTbody");
+  if (u.keys.length) {
+    kb.innerHTML = u.keys.map(k => `
+      <tr style="${k[3] ? "" : "opacity:.5;"}">
+        <td style="${k[3] ? "font-weight:500; color:var(--ink);" : "text-decoration:line-through;"}">${k[0]}</td>
+        <td><span style="font-family:var(--font-mono); font-size:12px;">${k[1]}</span></td>
+        <td>Default Workspace</td>
+        <td class="num">${k[2]}</td>
+      </tr>`).join("");
+  } else {
+    kb.innerHTML = `<tr><td colspan="4" style="text-align:center; color:var(--muted); padding:24px;">No API keys</td></tr>`;
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,814 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lattice — Create account</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Serif&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    --font-serif: 'Instrument Serif', Georgia, serif;
+
+    --accent:      #2563eb;
+    --accent-soft: color-mix(in oklab, #2563eb 12%, transparent);
+    --accent-ink:  #1d4ed8;
+
+    --bg:             #ffffff;
+    --surface:        #ffffff;
+    --border:         #e5e7eb;
+    --border-strong:  #d1d5db;
+    --ink:            #111827;
+    --ink-2:          #1f2937;
+    --muted:          #6b7280;
+    --muted-2:        #9ca3af;
+    --hover:          rgba(17,24,39,.045);
+
+    --ok:  #16a34a;
+    --err: #ef4444;
+
+    --r-md: 8px; --r-lg: 12px;
+  }
+
+  html[data-theme="dark"] {
+    --bg:             #09090b;
+    --surface:        #18181b;
+    --border:         #27272a;
+    --border-strong:  #3f3f46;
+    --ink:            #ffffff;
+    --ink-2:          #f4f4f5;
+    --muted:          #a1a1aa;
+    --muted-2:        #71717a;
+    --hover:          rgba(255,255,255,.055);
+    --accent-soft:    color-mix(in oklab, #2563eb 22%, transparent);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: var(--font-sans);
+    font-size: 14px;
+    color: var(--ink);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow: hidden; /* overridden on mobile */
+  }
+  ::selection { background: var(--accent-soft); color: var(--ink); }
+
+  /* ─── Shell ─────────────────────────────────────── */
+  .shell {
+    height: 100vh;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  /* ─── Brand panel (always dark) ─────────────────── */
+  .brand {
+    position: relative;
+    overflow: hidden;
+    background: #0e1117;
+    display: flex;
+    flex-direction: column;
+    padding: 36px 48px 36px;
+  }
+  html[data-theme="dark"] .brand {
+    background: #0a0a0e;
+    border-right: 1px solid #1c1c22;
+  }
+
+  .brand::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(circle, rgba(255,255,255,.06) 1px, transparent 1px);
+    background-size: 28px 28px;
+    pointer-events: none;
+  }
+  .brand::after {
+    content: "";
+    position: absolute;
+    width: 560px; height: 560px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(37,99,235,.18) 0%, transparent 65%);
+    top: -160px; left: -120px;
+    pointer-events: none;
+  }
+
+  .brand-top {
+    position: relative; z-index: 1;
+    display: flex; align-items: center; gap: 9px;
+  }
+  .brand-mark {
+    width: 26px; height: 26px;
+    border-radius: 7px;
+    background: rgba(255,255,255,.1);
+    border: 1px solid rgba(255,255,255,.12);
+    color: #fff;
+    display: grid; place-items: center;
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-size: 18px; line-height: 1;
+    padding-top: 1px;
+  }
+  .brand-name {
+    font-size: 14px; font-weight: 600;
+    color: rgba(255,255,255,.85);
+    letter-spacing: -.01em;
+  }
+
+  .brand-body {
+    flex: 1;
+    position: relative; z-index: 1;
+    display: flex; flex-direction: column;
+    justify-content: center; gap: 36px;
+  }
+
+  .burst-wrap { width: 48px; height: 48px; color: #60a5fa; }
+  .burst-wrap svg {
+    width: 100%; height: 100%;
+    animation: starSpin 22s linear infinite;
+    transform-origin: center;
+  }
+  @keyframes starSpin { to { transform: rotate(360deg); } }
+
+  .brand-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    align-self: flex-start;
+    padding: 4px 10px 4px 8px;
+    border-radius: 999px;
+    background: rgba(96,165,250,.1);
+    border: 1px solid rgba(96,165,250,.2);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: .02em;
+    color: rgba(147,197,253,.9);
+  }
+  .brand-eyebrow span.dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #60a5fa;
+    box-shadow: 0 0 0 3px rgba(96,165,250,.25);
+  }
+
+  .brand-tagline {
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-size: clamp(34px, 3.4vw, 48px);
+    line-height: 1.12;
+    letter-spacing: -.02em;
+    color: rgba(255,255,255,.94);
+    text-wrap: pretty;
+    max-width: 360px;
+  }
+
+  .brand-steps {
+    display: flex; flex-direction: column; gap: 14px;
+    max-width: 300px;
+  }
+  .brand-step {
+    display: flex; align-items: flex-start; gap: 12px;
+  }
+  .brand-intro {
+    display: flex; flex-direction: column; gap: 22px;
+  }
+  .step-dot {
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    background: rgba(96,165,250,.15);
+    border: 1px solid rgba(96,165,250,.3);
+    color: #60a5fa;
+    display: grid; place-items: center;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .step-dot svg { width: 10px; height: 10px; }
+  .step-text {
+    font-size: 13px;
+    color: rgba(255,255,255,.45);
+    line-height: 1.5;
+  }
+  .step-text strong {
+    font-weight: 500;
+    color: rgba(255,255,255,.7);
+    display: block;
+    margin-bottom: 1px;
+  }
+
+  /* testimonial card */
+  .brand-quote {
+    position: relative; z-index: 1;
+    max-width: 330px;
+    padding: 18px 20px;
+    border-radius: var(--r-lg);
+    background: rgba(255,255,255,.035);
+    border: 1px solid rgba(255,255,255,.07);
+    backdrop-filter: blur(2px);
+  }
+  .brand-quote p {
+    font-size: 14px;
+    line-height: 1.55;
+    color: rgba(255,255,255,.72);
+    letter-spacing: -.005em;
+  }
+  .brand-quote-meta {
+    display: flex; align-items: center; gap: 10px;
+    margin-top: 14px;
+  }
+  .brand-avatar {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #60a5fa, #2563eb);
+    color: #fff;
+    display: grid; place-items: center;
+    font-size: 11px; font-weight: 600;
+    flex-shrink: 0;
+  }
+  .brand-quote-name {
+    font-size: 12px; font-weight: 500;
+    color: rgba(255,255,255,.8);
+    line-height: 1.3;
+  }
+  .brand-quote-role {
+    font-size: 11px;
+    color: rgba(255,255,255,.4);
+  }
+
+  .brand-version {
+    position: relative; z-index: 1;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: rgba(255,255,255,.2);
+    letter-spacing: .04em;
+  }
+
+  /* ─── Form panel ─────────────────────────────────── */
+  .form-panel {
+    position: relative;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 48px;
+    overflow-y: auto;
+  }
+
+  .theme-btn {
+    position: absolute;
+    top: 18px; right: 18px;
+    appearance: none;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--muted);
+    width: 32px; height: 32px;
+    border-radius: var(--r-md);
+    display: grid; place-items: center;
+    cursor: pointer;
+    transition: background .12s, color .12s;
+  }
+  .theme-btn:hover { background: var(--hover); color: var(--ink); }
+  .theme-btn svg { width: 15px; height: 15px; display: block; }
+
+  .form {
+    width: 100%;
+    max-width: 360px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .form-heading {
+    font-size: 22px; font-weight: 600;
+    letter-spacing: -.02em;
+    color: var(--ink);
+    margin-bottom: 5px;
+  }
+  .form-sub {
+    font-size: 13.5px;
+    color: var(--muted);
+    line-height: 1.5;
+    margin-bottom: 24px;
+  }
+
+  /* ─── Social buttons ─────────────────────────────── */
+  .social-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 18px;
+  }
+  .btn-social {
+    appearance: none;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--ink-2);
+    padding: 8px 12px;
+    border-radius: var(--r-md);
+    font: inherit; font-size: 13px; font-weight: 500;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    transition: background .12s, border-color .12s;
+    white-space: nowrap;
+  }
+  .btn-social:hover { background: var(--hover); border-color: var(--border-strong); }
+  .btn-social svg { width: 15px; height: 15px; flex-shrink: 0; }
+
+  /* ─── Divider ────────────────────────────────────── */
+  .divider {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 18px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--muted-2);
+  }
+  .divider::before, .divider::after {
+    content: ""; flex: 1; height: 1px;
+    background: var(--border);
+  }
+
+  /* ─── Fields ─────────────────────────────────────── */
+  .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+  .field label {
+    font-size: 12px; font-weight: 500;
+    color: var(--ink-2); letter-spacing: .01em;
+  }
+
+  .field-wrap { position: relative; }
+  .field-icon {
+    position: absolute;
+    left: 11px; top: 50%;
+    transform: translateY(-50%);
+    width: 15px; height: 15px;
+    color: var(--muted-2);
+    pointer-events: none;
+    display: block;
+  }
+  .field-wrap input {
+    appearance: none;
+    width: 100%;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--ink);
+    padding: 9px 12px 9px 36px;
+    border-radius: var(--r-md);
+    font: inherit; font-size: 14px;
+    outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .field-wrap input::placeholder { color: var(--muted-2); }
+  .field-wrap input:focus {
+    border-color: color-mix(in oklab, var(--accent) 55%, var(--border-strong));
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .field-wrap input.err {
+    border-color: color-mix(in oklab, var(--err) 60%, var(--border));
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--err) 12%, transparent);
+  }
+  .field-wrap input.ok {
+    border-color: color-mix(in oklab, var(--ok) 55%, var(--border));
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--ok) 12%, transparent);
+  }
+
+  /* pw toggle */
+  .pw-toggle {
+    position: absolute;
+    right: 7px; top: 50%;
+    transform: translateY(-50%);
+    appearance: none; border: 0;
+    background: transparent;
+    color: var(--muted-2);
+    width: 28px; height: 28px;
+    border-radius: 5px;
+    display: grid; place-items: center;
+    cursor: pointer;
+    transition: background .1s, color .1s;
+  }
+  .pw-toggle:hover { background: var(--hover); color: var(--muted); }
+  .pw-toggle svg { width: 14px; height: 14px; display: block; }
+
+  /* password strength bar */
+  .pw-strength {
+    height: 3px;
+    border-radius: 2px;
+    background: var(--border);
+    margin-top: -4px;
+    overflow: hidden;
+  }
+  .pw-strength-fill {
+    height: 100%;
+    border-radius: 2px;
+    width: 0%;
+    transition: width .3s ease, background .3s ease;
+  }
+
+  /* field hint */
+  .field-hint {
+    font-size: 11.5px;
+    color: var(--muted-2);
+    margin-top: -4px;
+  }
+  .field-hint.good { color: var(--ok); }
+  .field-hint.bad  { color: var(--err); }
+
+  /* ─── Field error ────────────────────────────────── */
+  .field-error {
+    display: none;
+    align-items: center; gap: 5px;
+    font-size: 12px;
+    color: var(--err);
+    margin-top: -4px;
+  }
+  .field-error.visible { display: flex; }
+  .field-error svg { width: 12px; height: 12px; flex-shrink: 0; }
+
+  /* ─── Submit ─────────────────────────────────────── */
+  .btn-submit {
+    appearance: none; border: 0;
+    width: 100%;
+    background: #111827;
+    color: #fff;
+    padding: 10px 16px;
+    border-radius: var(--r-md);
+    font: inherit; font-size: 14px; font-weight: 500;
+    cursor: pointer;
+    margin-top: 6px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    transition: background .15s, transform .1s;
+    min-height: 40px;
+  }
+  .btn-submit:hover:not(:disabled) { background: var(--accent-ink); }
+  html[data-theme="dark"] .btn-submit { background: #e4e4e7; color: #09090b; }
+  html[data-theme="dark"] .btn-submit:hover:not(:disabled) { background: #d4d4d8; }
+  .btn-submit:active:not(:disabled) { transform: scale(.99); }
+  .btn-submit:disabled { opacity: .6; cursor: not-allowed; }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner {
+    width: 15px; height: 15px;
+    border: 2px solid rgba(255,255,255,.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin .65s linear infinite;
+    flex-shrink: 0;
+  }
+
+  /* ─── Footer ─────────────────────────────────────── */
+  .form-footer {
+    margin-top: 22px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .form-footer a {
+    color: var(--accent-ink);
+    text-decoration: none;
+    font-weight: 500;
+  }
+  .form-footer a:hover { text-decoration: underline; }
+
+  .form-legal {
+    margin-top: 16px;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--muted-2);
+    line-height: 1.7;
+  }
+  .form-legal a { color: var(--muted); text-decoration: none; }
+  .form-legal a:hover { color: var(--ink); }
+
+  /* ─── Name row ───────────────────────────────────── */
+  .name-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .name-row .field { margin-bottom: 12px; }
+
+  /* ─── Mobile top bar ────────────────────────────── */
+  .mobile-top {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: 52px;
+    z-index: 20;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+    gap: 9px;
+    padding: 0 20px;
+  }
+  .mobile-mark {
+    width: 24px; height: 24px;
+    border-radius: 6px;
+    background: var(--ink);
+    color: var(--bg);
+    display: grid; place-items: center;
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-size: 17px; line-height: 1;
+    padding-top: 1px; flex-shrink: 0;
+  }
+  .mobile-name {
+    font-size: 14px; font-weight: 600;
+    letter-spacing: -.01em;
+    color: var(--ink);
+  }
+
+  /* ─── Responsive ─────────────────────────────────── */
+  @media (max-width: 780px) {
+    html, body { height: auto; overflow: auto; }
+    .shell {
+      display: flex; flex-direction: column;
+      height: auto; min-height: 100dvh;
+    }
+    .brand { display: none; }
+    .mobile-top { display: flex; }
+    .form-panel {
+      flex: 1;
+      padding: 80px 32px 48px;
+      justify-content: flex-start;
+      overflow: visible;
+    }
+    .theme-btn { top: 62px; }
+  }
+  @media (max-width: 480px) {
+    .form-panel { padding: 74px 20px 40px; }
+    .form-heading { font-size: 20px; }
+    .social-row { grid-template-columns: 1fr; }
+    .btn-submit { font-size: 13.5px; }
+  }
+  @media (max-width: 400px) {
+    .form-panel { padding: 70px 16px 36px; }
+    .name-row { grid-template-columns: 1fr; gap: 0; }
+    .form-heading { font-size: 18px; }
+    .form-sub { font-size: 13px; }
+  }
+</style>
+<link id="gfont-Lato" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lato:wght@300;400;500;600;700&amp;display=swap">
+<link id="gfont-Poppins" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&amp;display=swap">
+</head>
+<body>
+<div class="shell">
+
+  <!-- Mobile top bar -->
+  <div class="mobile-top">
+    <div class="mobile-mark">L</div>
+    <span class="mobile-name">COPYXY/Z.</span>
+  </div>
+
+  <!-- ── Brand panel ─────────────────────────── -->
+  <div class="brand" style="background-color: rgb(255, 255, 255)">
+    <div class="brand-top">
+      <div class="brand-mark" style="background-color: rgba(255, 255, 255, 0); border-color: rgb(255, 255, 255)">//</div>
+      <span class="brand-name" style="font-size: 20px; color: rgba(0, 0, 0, 0.85); font-family: Poppins">CopyxyzLabs</span>
+    </div>
+
+    <div class="brand-body"></div>
+
+    <div class="brand-version">copyxyz-4.1 &nbsp;·&nbsp; © 2026</div>
+  </div>
+
+  <!-- ── Form panel ──────────────────────────── -->
+  <div class="form-panel">
+
+    <button class="theme-btn" id="themeBtn" type="button" title="Toggle theme" aria-label="Toggle dark mode">
+      <svg id="themeIcon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+        <circle cx="8" cy="8" r="3"/>
+        <path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3.22 3.22l1.06 1.06M11.72 11.72l1.06 1.06M11.72 4.28l-1.06 1.06M4.28 11.72l-1.06 1.06"/>
+      </svg>
+    </button>
+
+    <form class="form" id="signupForm" novalidate>
+      <h1 class="form-heading">Create account</h1>
+      <p class="form-sub">Join Lattice — it's free to start</p>
+
+      <!-- Social sign-up -->
+      <div class="social-row">
+        <button type="button" class="btn-social">
+          <svg viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+            <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615Z" fill="#4285F4"/>
+            <path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18Z" fill="#34A853"/>
+            <path d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332Z" fill="#FBBC05"/>
+            <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58Z" fill="#EA4335"/>
+          </svg>
+          Google
+        </button>
+        <button type="button" class="btn-social">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="1.5" y="1.5" width="13" height="13" rx="2"/>
+            <path d="M5.5 1.5v13M5.5 8h9"/>
+          </svg>
+          SSO
+        </button>
+      </div>
+
+      <div class="divider">or continue with email</div>
+
+      <!-- Name -->
+      <div class="name-row">
+        <div class="field">
+          <label for="fname">First name</label>
+          <div class="field-wrap">
+            <svg class="field-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <circle cx="8" cy="5" r="3"/>
+              <path d="M1.5 14c0-3.314 2.91-6 6.5-6s6.5 2.686 6.5 6"/>
+            </svg>
+            <input type="text" id="fname" name="fname" placeholder="Avery" autocomplete="given-name" />
+          </div>
+        </div>
+        <div class="field">
+          <label for="lname">Last name</label>
+          <div class="field-wrap">
+            <svg class="field-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <circle cx="8" cy="5" r="3"/>
+              <path d="M1.5 14c0-3.314 2.91-6 6.5-6s6.5 2.686 6.5 6"/>
+            </svg>
+            <input type="text" id="lname" name="lname" placeholder="Chen" autocomplete="family-name" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Email -->
+      <div class="field">
+        <label for="email">Work email</label>
+        <div class="field-wrap">
+          <svg class="field-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <rect x="1.5" y="3.5" width="13" height="9" rx="1.5"/>
+            <path d="M1.5 6.5l6.5 3.5 6.5-3.5"/>
+          </svg>
+          <input type="email" id="email" name="email" placeholder="you@company.com" autocomplete="email" />
+        </div>
+      </div>
+
+      <!-- Password -->
+      <div class="field">
+        <label for="password">Password</label>
+        <div class="field-wrap">
+          <svg class="field-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <rect x="3" y="7" width="10" height="7" rx="1.5"/>
+            <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>
+            <circle cx="8" cy="10.5" r=".6" fill="currentColor" stroke="none"/>
+          </svg>
+          <input type="password" id="password" name="password" placeholder="Min. 8 characters" autocomplete="new-password" />
+          <button type="button" class="pw-toggle" id="pwToggle" title="Show password">
+            <svg id="pwIcon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <path d="M1 8s2.8-5 7-5 7 5 7 5-2.8 5-7 5-7-5-7-5Z"/>
+              <circle cx="8" cy="8" r="2"/>
+            </svg>
+          </button>
+        </div>
+        <div class="pw-strength"><div class="pw-strength-fill" id="strengthFill"></div></div>
+        <span class="field-hint" id="strengthHint"></span>
+      </div>
+
+      <!-- Global error -->
+      <div class="field-error" id="errorMsg">
+        <svg viewBox="0 0 12 12" fill="currentColor"><path d="M6 1a5 5 0 1 0 0 10A5 5 0 0 0 6 1Zm0 3a.75.75 0 0 1 .75.75v2a.75.75 0 0 1-1.5 0v-2A.75.75 0 0 1 6 4Zm0 5a.75.75 0 1 1 0-1.5A.75.75 0 0 1 6 9Z"/></svg>
+        <span id="errorText">Please fill in all fields</span>
+      </div>
+
+      <!-- Submit -->
+      <button type="submit" class="btn-submit" id="submitBtn">
+        <span id="btnInner">Create account</span>
+      </button>
+
+      <p class="form-footer">
+        Already have an account? <a href="Login.html">Sign in</a>
+      </p>
+
+      <p class="form-legal">
+        By creating an account you agree to our
+        <a href="#">Terms of Service</a> and <a href="#">Privacy Policy</a>
+      </p>
+    </form>
+
+  </div>
+</div>
+
+<script>
+  // ── Theme ─────────────────────────────────────────
+  const html      = document.documentElement;
+  const themeBtn  = document.getElementById('themeBtn');
+  const themeIcon = document.getElementById('themeIcon');
+
+  const SUN_PATHS = `<circle cx="8" cy="8" r="3"/><path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3.22 3.22l1.06 1.06M11.72 11.72l1.06 1.06M11.72 4.28l-1.06 1.06M4.28 11.72l-1.06 1.06"/>`;
+  const MOON_PATH = `<path d="M13 8a5 5 0 1 1-5-5 3.5 3.5 0 0 0 5 5Z"/>`;
+
+  function applyTheme(t) {
+    html.setAttribute('data-theme', t);
+    localStorage.setItem('lattice-theme', t);
+    themeIcon.innerHTML = t === 'dark' ? MOON_PATH : SUN_PATHS;
+  }
+
+  const saved = localStorage.getItem('lattice-theme') ||
+                (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  applyTheme(saved);
+
+  themeBtn.addEventListener('click', () => {
+    applyTheme(html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+  });
+
+  // ── Password toggle ───────────────────────────────
+  const pwInput  = document.getElementById('password');
+  const pwToggle = document.getElementById('pwToggle');
+  const pwIcon   = document.getElementById('pwIcon');
+
+  const EYE_OPEN   = `<path d="M1 8s2.8-5 7-5 7 5 7 5-2.8 5-7 5-7-5-7-5Z"/><circle cx="8" cy="8" r="2"/>`;
+  const EYE_CLOSED = `<path d="M2 2l12 12M6.5 6.7A3 3 0 0 0 5 9s1.3 3 3 3c.88 0 1.67-.36 2.25-.95M9.7 6.2A3 3 0 0 1 11 9M1 8s1.5-2.6 4-4M14 5.5C14.9 6.5 15 8 15 8s-2.8 5-7 5"/>`;
+
+  pwToggle.addEventListener('click', () => {
+    const show = pwInput.type === 'password';
+    pwInput.type = show ? 'text' : 'password';
+    pwIcon.innerHTML = show ? EYE_CLOSED : EYE_OPEN;
+  });
+
+  // ── Password strength ─────────────────────────────
+  const strengthFill = document.getElementById('strengthFill');
+  const strengthHint = document.getElementById('strengthHint');
+
+  function checkStrength(pw) {
+    if (!pw) return { score: 0, label: '', color: '' };
+    let score = 0;
+    if (pw.length >= 8)  score++;
+    if (pw.length >= 12) score++;
+    if (/[A-Z]/.test(pw) && /[a-z]/.test(pw)) score++;
+    if (/[0-9]/.test(pw)) score++;
+    if (/[^A-Za-z0-9]/.test(pw)) score++;
+
+    const levels = [
+      { label: '',         color: '',         pct: '0%'   },
+      { label: 'Too weak', color: '#ef4444',  pct: '20%'  },
+      { label: 'Weak',     color: '#f97316',  pct: '40%'  },
+      { label: 'Fair',     color: '#eab308',  pct: '60%'  },
+      { label: 'Good',     color: '#22c55e',  pct: '80%'  },
+      { label: 'Strong',   color: '#16a34a',  pct: '100%' },
+    ];
+    return levels[Math.min(score, 5)];
+  }
+
+  pwInput.addEventListener('input', () => {
+    const { label, color, pct } = checkStrength(pwInput.value);
+    strengthFill.style.width = pct;
+    strengthFill.style.background = color;
+    strengthHint.textContent = label;
+    strengthHint.className = 'field-hint' + (
+      label === 'Good' || label === 'Strong' ? ' good' :
+      label === 'Too weak' || label === 'Weak' ? ' bad' : ''
+    );
+  });
+
+  // ── Form submit ───────────────────────────────────
+  const form      = document.getElementById('signupForm');
+  const submitBtn = document.getElementById('submitBtn');
+  const btnInner  = document.getElementById('btnInner');
+  const errorMsg  = document.getElementById('errorMsg');
+  const errorText = document.getElementById('errorText');
+
+  function showError(msg) {
+    errorText.textContent = msg;
+    errorMsg.classList.add('visible');
+  }
+  function clearError() {
+    errorMsg.classList.remove('visible');
+    ['fname','lname','email','password'].forEach(id => {
+      document.getElementById(id).classList.remove('err');
+    });
+  }
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    clearError();
+
+    const fname = document.getElementById('fname').value.trim();
+    const lname = document.getElementById('lname').value.trim();
+    const email = document.getElementById('email').value.trim();
+    const pass  = document.getElementById('password').value;
+
+    if (!fname) { document.getElementById('fname').classList.add('err'); showError('Please enter your first name.'); return; }
+    if (!lname) { document.getElementById('lname').classList.add('err'); showError('Please enter your last name.'); return; }
+    if (!email) { document.getElementById('email').classList.add('err'); showError('Please enter your email.'); return; }
+    if (pass.length < 8) { document.getElementById('password').classList.add('err'); showError('Password must be at least 8 characters.'); return; }
+
+    submitBtn.disabled = true;
+    btnInner.innerHTML = '<span class="spinner"></span>Creating account…';
+
+    setTimeout(() => {
+      submitBtn.disabled = false;
+      btnInner.textContent = 'Create account';
+      // success state — in real app would redirect
+      btnInner.textContent = '✓ Account created!';
+      submitBtn.style.background = '#16a34a';
+    }, 1600);
+  });
+
+  ['fname','lname','email','password'].forEach(id => {
+    document.getElementById(id).addEventListener('input', clearError);
+  });
+</script>
+</body>
+</html>

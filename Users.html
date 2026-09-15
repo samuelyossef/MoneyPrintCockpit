@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lattice Admin — Users</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Serif&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared/shell.css" />
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar" id="sidebar-root"></aside>
+
+  <div class="main">
+    <div class="topbar" id="topbar-root"></div>
+
+    <div class="view-body-scroll">
+      <div class="view-hd-main">
+        <div>
+          <div class="view-hd-title">Users</div>
+          <div class="view-hd-sub">Manage workspace members and subscription accounts.</div>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12"/><path d="m7 12 5 5 5-5"/><path d="M5 21h14"/></svg>
+            Export
+          </button>
+          <button class="btn primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            Invite user
+          </button>
+        </div>
+      </div>
+
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-label">Total users</div>
+          <div class="stat-value">1,284</div>
+          <div class="stat-delta up">↑ 6.2% <span class="prior">vs last month</span></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Active subscribers</div>
+          <div class="stat-value">412</div>
+          <div class="stat-delta up">↑ 3.4% <span class="prior">vs last month</span></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">MRR</div>
+          <div class="stat-value">$18,940</div>
+          <div class="stat-delta up">↑ 8.1% <span class="prior">vs last month</span></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Churn rate</div>
+          <div class="stat-value">2.1%</div>
+          <div class="stat-delta down">↓ 0.4% <span class="prior">vs last month</span></div>
+        </div>
+      </div>
+
+      <div class="view-tabs">
+        <button class="view-tab is-active" data-tab="all">All Users <span class="view-tab-count">1,284</span></button>
+        <button class="view-tab" data-tab="subscribers">Subscribers <span class="view-tab-count">412</span></button>
+        <button class="view-tab" data-tab="admins">Admins <span class="view-tab-count">6</span></button>
+      </div>
+
+      <div class="view-filters">
+        <div class="view-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          <input id="searchInput" type="text" placeholder="Search by name or email…" />
+        </div>
+        <select class="set-select" id="planFilter">
+          <option value="">All plans</option>
+          <option value="Free">Free</option>
+          <option value="Pro">Pro</option>
+          <option value="Team">Team</option>
+          <option value="Enterprise">Enterprise</option>
+        </select>
+        <select class="set-select" id="statusFilter">
+          <option value="">All statuses</option>
+          <option value="active">Active</option>
+          <option value="trialing">Trialing</option>
+          <option value="past_due">Past due</option>
+          <option value="canceled">Canceled</option>
+        </select>
+        <div class="view-filters-spacer"></div>
+        <span class="rows-count" id="rowsCount"></span>
+      </div>
+
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr>
+              <th>User</th>
+              <th>Role</th>
+              <th>Plan</th>
+              <th>Status</th>
+              <th>Joined</th>
+              <th>Last active</th>
+              <th class="num">Spend (MTD)</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+        <div class="foot-pag">
+          <span id="pagInfo">Showing 1–10 of 1,284</span>
+          <div class="pg-btns">
+            <button class="pg-btn" aria-label="Previous"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></button>
+            <button class="pg-btn" aria-label="Next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="shared/shell.js"></script>
+<script src="shared/users.js"></script>
+<script>
+  renderShell({ active: "users", crumb: "Users" });
+
+  const USERS = window.USERS;
+
+  const initials = (n) => n.split(" ").map(w => w[0]).slice(0,2).join("").toUpperCase();
+  const planClass = (p) => "plan-" + p.toLowerCase();
+  const statusLabel = { active: "Active", trialing: "Trialing", past_due: "Past due", canceled: "Canceled" };
+
+  function render() {
+    const q = document.getElementById("searchInput").value.trim().toLowerCase();
+    const plan = document.getElementById("planFilter").value;
+    const status = document.getElementById("statusFilter").value;
+    const activeTab = document.querySelector(".view-tab.is-active").dataset.tab;
+
+    let rows = USERS.map((u, gi) => ({ u, gi })).filter(({ u }) => {
+      if (activeTab === "subscribers" && u.plan === "Free") return false;
+      if (activeTab === "admins" && !(u.role === "Admin" || u.role === "Owner")) return false;
+      if (plan && u.plan !== plan) return false;
+      if (status && u.status !== status) return false;
+      if (q && !(u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q))) return false;
+      return true;
+    });
+
+    document.getElementById("rowsCount").textContent = rows.length + " rows";
+    document.getElementById("pagInfo").textContent = `Showing 1–${rows.length} of ${rows.length}`;
+
+    const tbody = document.getElementById("tbody");
+    tbody.innerHTML = rows.map(({ u, gi }, i) => `
+      <tr class="user-row" data-href="Profile.html?u=${gi}">
+        <td>
+          <div class="user-cell">
+            <span class="u-avatar" style="background:${u.color}">${initials(u.name)}</span>
+            <div class="u-meta">
+              <span class="u-name">${u.name}</span>
+              <span class="u-email">${u.email}</span>
+            </div>
+          </div>
+        </td>
+        <td><span class="role-tag">${u.role}</span></td>
+        <td><span class="badge ${planClass(u.plan)}">${u.plan}</span></td>
+        <td><span class="status-pill"><span class="status-dot ${u.status}"></span>${statusLabel[u.status]}</span></td>
+        <td>${u.joined}</td>
+        <td>${u.last}</td>
+        <td class="num">${u.spend > 0 ? "$" + u.spend.toFixed(2) : "—"}</td>
+        <td>
+          <div class="row-actions">
+            <button class="kebab" data-idx="${i}" aria-label="Actions">
+              <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+            </button>
+            <div class="menu" id="menu-${i}">
+              <button class="menu-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                Edit user
+              </button>
+              <button class="menu-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>
+                Change plan
+              </button>
+              <button class="menu-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/></svg>
+                Reset password
+              </button>
+              <div class="menu-divider"></div>
+              <button class="menu-item is-danger">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6"/></svg>
+                Remove user
+              </button>
+            </div>
+          </div>
+        </td>
+      </tr>
+    `).join("");
+
+    tbody.querySelectorAll(".kebab").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const menu = document.getElementById("menu-" + btn.dataset.idx);
+        document.querySelectorAll(".menu.is-open").forEach(m => { if (m !== menu) m.classList.remove("is-open"); });
+        menu.classList.toggle("is-open");
+      });
+    });
+
+    tbody.querySelectorAll(".user-row").forEach(row => {
+      row.addEventListener("click", (e) => {
+        if (e.target.closest(".row-actions")) return;
+        location.href = row.dataset.href;
+      });
+    });
+  }
+
+  document.addEventListener("click", () => {
+    document.querySelectorAll(".menu.is-open").forEach(m => m.classList.remove("is-open"));
+  });
+
+  document.querySelectorAll(".view-tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll(".view-tab").forEach(t => t.classList.remove("is-active"));
+      tab.classList.add("is-active");
+      render();
+    });
+  });
+
+  document.getElementById("searchInput").addEventListener("input", render);
+  document.getElementById("planFilter").addEventListener("change", render);
+  document.getElementById("statusFilter").addEventListener("change", render);
+
+  render();
+</script>
+</body>
+</html>

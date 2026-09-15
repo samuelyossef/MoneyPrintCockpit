@@ -1,0 +1,164 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - button "Recolher menu" [ref=e5]
+      - generic [ref=e8]:
+        - generic [ref=e9]: Plataforma
+        - generic [ref=e10]:
+          - button "Visão geral" [ref=e11]
+          - button "Canais 4" [ref=e18]:
+            - generic [ref=e21]: Canais
+            - generic [ref=e22]: "4"
+        - generic [ref=e23]: Pessoas
+        - button "Notificações 3" [ref=e25]:
+          - generic [ref=e29]: Notificações
+          - generic [ref=e30]: "3"
+        - generic [ref=e31]: Studio
+        - generic [ref=e32]:
+          - button "Gerador de Vídeo" [ref=e33]
+          - button "YouTube Shorts" [ref=e37]
+          - button "Agentes 42" [ref=e42]:
+            - generic [ref=e45]: Agentes
+            - generic [ref=e46]: "42"
+          - button "Analytics" [ref=e47]
+        - generic [ref=e51]: Observabilidade
+        - generic [ref=e52]:
+          - button "Logs e traces" [ref=e53]
+          - button "Jobs e workers 2" [ref=e58]:
+            - generic [ref=e61]: Jobs e workers
+            - generic [ref=e62]: "2"
+        - generic [ref=e63]: Conta
+        - generic [ref=e64]:
+          - button "Integrações" [ref=e65]
+          - button "Configurações" [ref=e72]
+      - generic [ref=e77]:
+        - generic [ref=e78]: AC
+        - generic [ref=e79]:
+          - generic [ref=e80]: Avery Chen
+          - generic [ref=e81]: Super Admin · Plataforma
+    - generic [ref=e82]:
+      - generic [ref=e84]:
+        - generic [ref=e85]: produção
+        - generic [ref=e87]:
+          - text: "LLM:"
+          - generic [ref=e88]: Claude Sonnet 4
+        - generic [ref=e89]: "Tarefa: Concluída"
+        - button "Alternar tema" [ref=e91]
+        - button "Notificações" [ref=e95]
+      - generic [ref=e99]:
+        - generic [ref=e101]:
+          - generic [ref=e102]: Visão geral
+          - generic [ref=e103]: Sexta, 4 de setembro · estado da plataforma em tempo real
+        - generic [ref=e105]:
+          - generic [ref=e106]:
+            - generic [ref=e107]: Vídeos recentes
+            - button "Filtro avançado" [ref=e108]
+            - generic [ref=e111]:
+              - button "Todos" [ref=e112] [cursor=pointer]
+              - button "Verticais" [ref=e113] [cursor=pointer]
+              - button "Horizontais" [ref=e114] [cursor=pointer]
+            - generic [ref=e115]:
+              - button "Ver em grade" [ref=e116] [cursor=pointer]
+              - button "Ver em lista" [ref=e122] [cursor=pointer]
+          - generic [ref=e125]:
+            - generic [ref=e126]:
+              - generic [ref=e127]:
+                - checkbox [ref=e129] [cursor=pointer]
+                - generic [ref=e130]:
+                  - generic [ref=e131]:
+                    - generic [ref=e132]: Miniatura do vídeo
+                    - generic:
+                      - button "Replace"
+                      - button "Edit"
+                  - generic [ref=e139]: TikTok
+                - generic [ref=e140]:
+                  - generic [ref=e141]:
+                    - generic [ref=e142]: "Curiosidades do espaço #12"
+                    - generic [ref=e143]: Clipes Virais
+                  - button "Mais ações" [ref=e145]
+              - generic [ref=e150]:
+                - checkbox [ref=e152] [cursor=pointer]
+                - generic [ref=e153]:
+                  - generic [ref=e154]:
+                    - generic [ref=e155]: Miniatura do vídeo
+                    - generic:
+                      - button "Replace"
+                      - button "Edit"
+                  - generic [ref=e162]: Shorts
+                - generic [ref=e163]:
+                  - generic [ref=e164]:
+                    - generic [ref=e165]: 3 fatos de psicologia
+                    - generic [ref=e166]: Canal Principal
+                  - button "Mais ações" [ref=e168]
+              - generic [ref=e173]:
+                - checkbox [ref=e175] [cursor=pointer]
+                - generic [ref=e176]:
+                  - generic [ref=e177]:
+                    - generic [ref=e178]: Miniatura do vídeo
+                    - generic:
+                      - button "Replace"
+                      - button "Edit"
+                  - generic [ref=e185]: TikTok
+                - generic [ref=e186]:
+                  - generic [ref=e187]:
+                    - generic [ref=e188]: "História oculta: piratas"
+                    - generic [ref=e189]: Histórias Rápidas
+                  - button "Mais ações" [ref=e191]
+              - generic [ref=e196]:
+                - checkbox [ref=e198] [cursor=pointer]
+                - generic [ref=e199]:
+                  - generic [ref=e200]:
+                    - generic [ref=e201]: Miniatura do vídeo
+                    - generic:
+                      - button "Replace"
+                      - button "Edit"
+                  - generic [ref=e208]: Shorts
+                - generic [ref=e209]:
+                  - generic [ref=e210]:
+                    - generic [ref=e211]: Finanças em 60 segundos
+                    - generic [ref=e212]: Shorts Diários
+                  - button "Mais ações" [ref=e214]
+              - generic [ref=e219]:
+                - checkbox [ref=e221] [cursor=pointer]
+                - generic [ref=e222]:
+                  - generic [ref=e223]:
+                    - generic [ref=e224]: Miniatura do vídeo
+                    - generic:
+                      - button "Replace"
+                      - button "Edit"
+                  - generic [ref=e231]: TikTok
+                - generic [ref=e232]:
+                  - generic [ref=e233]:
+                    - generic [ref=e234]: Mitos da nutrição
+                    - generic [ref=e235]: Clipes Virais
+                  - button "Mais ações" [ref=e237]
+            - generic [ref=e242]:
+              - generic [ref=e243]:
+                - checkbox [ref=e245] [cursor=pointer]
+                - generic [ref=e246]:
+                  - generic [ref=e247]:
+                    - generic [ref=e248]: Miniatura do vídeo
+                    - generic:
+                      - button "Replace"
+                      - button "Edit"
+                  - generic [ref=e255]: YouTube
+                - generic [ref=e256]:
+                  - generic [ref=e257]:
+                    - generic [ref=e258]: Como a IA muda o trabalho
+                    - generic [ref=e259]: Canal Principal
+                  - button "Mais ações" [ref=e261]
+              - generic [ref=e266]:
+                - checkbox [ref=e268] [cursor=pointer]
+                - generic [ref=e269]:
+                  - generic [ref=e270]:
+                    - generic [ref=e271]: Miniatura do vídeo
+                    - generic:
+                      - button "Replace"
+                      - button "Edit"
+                  - generic [ref=e278]: YouTube
+                - generic [ref=e279]:
+                  - generic [ref=e280]:
+                    - generic [ref=e281]: Resumo semanal de notícias
+                    - generic [ref=e282]: Canal Principal
+                  - button "Mais ações" [ref=e284]
+  - complementary "Inspeção rápida" [ref=e289]

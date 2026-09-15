@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lattice Admin — Invitations</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Serif&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared/shell.css" />
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar" id="sidebar-root"></aside>
+
+  <div class="main">
+    <div class="topbar" id="topbar-root"></div>
+
+    <div class="view-body-scroll">
+      <div class="view-hd-main">
+        <div>
+          <div class="view-hd-title">Invitations</div>
+          <div class="view-hd-sub">Pending invites to join the workspace.</div>
+        </div>
+        <button class="btn primary">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          Invite user
+        </button>
+      </div>
+
+      <div class="view-filters">
+        <div class="view-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          <input placeholder="Search pending invites…" />
+        </div>
+        <div class="view-filters-spacer"></div>
+        <span class="rows-count">5 rows</span>
+      </div>
+
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr><th>Email</th><th>Role</th><th>Invited by</th><th>Sent</th><th>Status</th><th></th></tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="shared/shell.js"></script>
+<script>
+  renderShell({ active: "invitations", crumb: "Invitations" });
+
+  const INVITES = [
+    { email: "jordan.mills@brightfield.io", role: "Member", by: "Avery Chen", sent: "2d ago", status: "pending" },
+    { email: "wei.zhang@northwind.io",      role: "Admin",  by: "Maya Reyes", sent: "4d ago", status: "pending" },
+    { email: "amara.osei@studioflux.com",   role: "Member", by: "Avery Chen", sent: "6d ago", status: "expired" },
+    { email: "tomas.kowalski@orbitlabs.ai", role: "Member", by: "Noah Kim",   sent: "1d ago", status: "pending" },
+    { email: "leila.haddad@duvalgroup.fr",  role: "Member", by: "Camille Laurent", sent: "9d ago", status: "expired" },
+  ];
+
+  const statusLabel = { pending: "Pending", expired: "Expired" };
+  const statusDot = { pending: "trialing", expired: "canceled" };
+
+  document.getElementById("tbody").innerHTML = INVITES.map(i => `
+    <tr>
+      <td>${i.email}</td>
+      <td><span class="role-tag">${i.role}</span></td>
+      <td>${i.by}</td>
+      <td>${i.sent}</td>
+      <td><span class="status-pill"><span class="status-dot ${statusDot[i.status]}"></span>${statusLabel[i.status]}</span></td>
+      <td>
+        <div class="row-actions">
+          <button class="btn" style="padding:5px 10px; font-size:12.5px;">Resend</button>
+          <button class="kebab" aria-label="Actions">
+            <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+          </button>
+        </div>
+      </td>
+    </tr>
+  `).join("");
+</script>
+</body>
+</html>

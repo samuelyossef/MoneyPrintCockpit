@@ -1,0 +1,2199 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Lattice — Elements &amp; Functions Reference</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    --font-serif: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
+
+    --accent: #2563eb;
+    --accent-soft: color-mix(in oklab, var(--accent) 12%, transparent);
+    --accent-ink: #1d4ed8;
+
+    --bg:        #ffffff;
+    --surface:   #ffffff;
+    --rail:      #fbfbfc;
+    --rail-2:    #f3f4f6;
+    --border:    #e5e7eb;
+    --border-strong: #d1d5db;
+    --ink:       #111827;
+    --ink-2:     #1f2937;
+    --muted:     #6b7280;
+    --muted-2:   #9ca3af;
+    --hover:     rgba(17,24,39,.045);
+    --active:    rgba(17,24,39,.075);
+
+    --ok:   #16a34a;
+    --warn: #d97706;
+    --err:  #ef4444;
+
+    --kind-comp: #2563eb;
+    --kind-fn:   #d97706;
+    --kind-hook: #16a34a;
+    --kind-data: #7c3aed;
+    --kind-css:  #db2777;
+
+    --sidebar-w: 290px;
+    --content-max: 820px;
+  }
+  html[data-theme="dark"] {
+    --bg:        #09090b;
+    --surface:   #131316;
+    --rail:      #0d0d0f;
+    --rail-2:    #1f1f23;
+    --border:    #27272a;
+    --border-strong: #3f3f46;
+    --ink:       #fafafa;
+    --ink-2:     #e4e4e7;
+    --muted:     #a1a1aa;
+    --muted-2:   #71717a;
+    --hover:     rgba(255,255,255,.05);
+    --active:    rgba(255,255,255,.08);
+    --accent-soft: color-mix(in oklab, var(--accent) 24%, transparent);
+    --kind-comp: #60a5fa;
+    --kind-fn:   #fbbf24;
+    --kind-hook: #4ade80;
+    --kind-data: #c084fc;
+    --kind-css:  #f472b6;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+  body {
+    margin: 0;
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.65;
+    color: var(--ink);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection { background: var(--accent-soft); color: var(--ink); }
+
+  .layout {
+    display: grid;
+    grid-template-columns: var(--sidebar-w) 1fr;
+    align-items: start;
+    max-width: 1320px;
+    margin: 0 auto;
+  }
+
+  /* ── Sidebar / TOC ─────────────────────────────── */
+  .toc {
+    position: sticky; top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 30px 22px 40px 30px;
+    border-right: 1px solid var(--border);
+    background: var(--rail);
+  }
+  .toc::-webkit-scrollbar { width: 9px; }
+  .toc::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+
+  .brand {
+    display: flex; align-items: center; gap: 11px;
+    margin-bottom: 4px;
+  }
+  .brand-mark {
+    width: 30px; height: 30px; border-radius: 8px;
+    background: var(--ink); color: var(--bg);
+    display: grid; place-items: center;
+    font-family: var(--font-serif); font-style: italic;
+    font-size: 21px; line-height: 1; padding-top: 2px;
+  }
+  .brand-name { font-weight: 600; letter-spacing: -.01em; font-size: 15px; }
+  .brand-sub  { font-size: 11.5px; color: var(--muted); font-family: var(--font-mono); margin-top: 1px; }
+
+  .toc-head {
+    margin: 26px 0 8px;
+    font-size: 10.5px; font-weight: 700; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--muted-2);
+  }
+  .toc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+  .toc-list a {
+    display: flex; align-items: baseline; gap: 9px;
+    text-decoration: none; color: var(--ink-2);
+    font-size: 13.5px;
+    padding: 5px 10px; border-radius: 7px;
+    border: 1px solid transparent;
+  }
+  .toc-list a:hover { background: var(--hover); color: var(--ink); }
+  .toc-list a.is-active { background: var(--accent-soft); color: var(--accent-ink); border-color: color-mix(in oklab, var(--accent) 22%, transparent); }
+  .toc-num { font-family: var(--font-mono); font-size: 11px; color: var(--muted-2); min-width: 16px; }
+  .toc-list a.is-active .toc-num { color: var(--accent-ink); }
+  .toc-file { font-family: var(--font-mono); }
+
+  .theme-toggle {
+    margin-top: 26px;
+    appearance: none; border: 1px solid var(--border);
+    background: var(--surface); color: var(--ink-2);
+    font: inherit; font-size: 12.5px;
+    padding: 7px 12px; border-radius: 8px;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .theme-toggle:hover { background: var(--rail-2); border-color: var(--border-strong); }
+  .theme-toggle svg { width: 14px; height: 14px; }
+
+  /* ── Content ───────────────────────────────────── */
+  .content {
+    padding: 56px 56px 120px;
+    min-width: 0;
+  }
+  .doc { max-width: var(--content-max); }
+
+  .doc-title {
+    font-family: var(--font-serif);
+    font-weight: 400;
+    font-size: 46px; line-height: 1.08;
+    letter-spacing: -.015em;
+    margin: 0 0 14px;
+  }
+  .doc-lede {
+    font-size: 16.5px; color: var(--ink-2); line-height: 1.6;
+    margin: 0 0 22px; max-width: 64ch;
+    text-wrap: pretty;
+  }
+  .doc-lede code { font-size: .9em; }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    margin: 0 0 18px;
+    padding: 14px 16px;
+    background: var(--rail);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+  .legend-item { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink-2); }
+  .legend-item .kbadge { flex: 0 0 auto; }
+
+  hr.rule { border: 0; border-top: 1px solid var(--border); margin: 40px 0; }
+
+  /* File-section anchors */
+  .filesec { scroll-margin-top: 20px; padding-top: 18px; }
+  .filesec-hd {
+    display: flex; align-items: center; gap: 12px;
+    margin: 0 0 6px;
+  }
+  .filesec-hd h2 {
+    font-family: var(--font-mono);
+    font-size: 23px; font-weight: 600; letter-spacing: -.01em;
+    margin: 0; color: var(--ink);
+  }
+  .filesec-hd .num {
+    font-family: var(--font-mono); font-size: 13px;
+    color: var(--surface); background: var(--ink);
+    width: 26px; height: 26px; border-radius: 7px;
+    display: grid; place-items: center; flex: 0 0 auto;
+  }
+  .filesec-blurb { color: var(--muted); font-size: 14px; margin: 0 0 18px; max-width: 70ch; }
+
+  .entry { margin: 0 0 22px; }
+  .entry-hd {
+    display: flex; align-items: center; gap: 10px;
+    margin: 0 0 7px;
+    flex-wrap: wrap;
+  }
+  .entry-hd h3 {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 15px; font-weight: 600;
+    color: var(--ink);
+    letter-spacing: -.01em;
+  }
+  .entry-hd h3 .arg { color: var(--muted); font-weight: 400; }
+
+  .kbadge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--font-mono);
+    font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .05em;
+    padding: 2px 8px; border-radius: 999px;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .kbadge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .kbadge.comp { color: var(--kind-comp); background: color-mix(in oklab, var(--kind-comp) 12%, transparent); border-color: color-mix(in oklab, var(--kind-comp) 28%, transparent); }
+  .kbadge.fn   { color: var(--kind-fn);   background: color-mix(in oklab, var(--kind-fn) 14%, transparent);   border-color: color-mix(in oklab, var(--kind-fn) 30%, transparent); }
+  .kbadge.hook { color: var(--kind-hook); background: color-mix(in oklab, var(--kind-hook) 12%, transparent); border-color: color-mix(in oklab, var(--kind-hook) 28%, transparent); }
+  .kbadge.data { color: var(--kind-data); background: color-mix(in oklab, var(--kind-data) 12%, transparent); border-color: color-mix(in oklab, var(--kind-data) 28%, transparent); }
+  .kbadge.css  { color: var(--kind-css);  background: color-mix(in oklab, var(--kind-css) 12%, transparent);  border-color: color-mix(in oklab, var(--kind-css) 28%, transparent); }
+
+  .entry p { margin: 0 0 10px; color: var(--ink-2); text-wrap: pretty; }
+  .entry ul { margin: 0 0 10px; padding-left: 22px; color: var(--ink-2); }
+  .entry li { margin: 3px 0; }
+  .entry li::marker { color: var(--muted-2); }
+
+  code, .mono { font-family: var(--font-mono); }
+  p code, li code, td code, .entry-hd code {
+    font-size: .855em;
+    background: var(--rail-2);
+    border: 1px solid var(--border);
+    padding: 1px 5px; border-radius: 5px;
+    color: var(--ink);
+    word-break: break-word;
+  }
+  pre {
+    margin: 0 0 12px;
+    background: var(--rail);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 12.5px; line-height: 1.6;
+    color: var(--ink-2);
+  }
+  pre::-webkit-scrollbar { height: 9px; }
+  pre::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 5px; }
+  pre code { background: none; border: 0; padding: 0; font-size: inherit; color: inherit; }
+
+  blockquote {
+    margin: 0 0 16px;
+    padding: 12px 16px;
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 10px 10px 0;
+    color: var(--ink-2);
+    font-size: 14px;
+  }
+  blockquote p { margin: 0; color: inherit; }
+  blockquote code { background: color-mix(in oklab, var(--accent) 16%, var(--surface)); }
+
+  table.tbl {
+    width: 100%;
+    border-collapse: separate; border-spacing: 0;
+    margin: 0 0 14px;
+    font-size: 13.5px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  table.tbl th {
+    text-align: left;
+    font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+    color: var(--muted);
+    background: var(--rail);
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  table.tbl td {
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--border);
+    color: var(--ink-2);
+    vertical-align: top;
+  }
+  table.tbl tr:last-child td { border-bottom: 0; }
+  table.tbl tbody tr:hover td, table.tbl tr:hover td { background: var(--hover); }
+  table.tbl td:first-child { white-space: nowrap; }
+
+  .doc-foot {
+    margin-top: 48px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 12px; color: var(--muted-2);
+    font-style: normal;
+  }
+
+  /* ── Live element demos (real Lattice markup) ──── */
+  .demo {
+    margin: 4px 0 16px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .demo-label {
+    display: flex; align-items: center; gap: 7px;
+    font-family: var(--font-mono);
+    font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted-2);
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--rail);
+  }
+  .demo-label::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--ok) 22%, transparent);
+  }
+  .demo-stage {
+    padding: 22px;
+    background: repeating-linear-gradient(45deg, var(--rail-2) 0 1px, transparent 1px 11px);
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .demo-stage.col-right { align-items: flex-end; }
+  .demo .msg-actions { opacity: 1; }
+
+  /* Real Lattice chat-output element styles (copied from Lattice.html) */
+  .msg-user {
+    align-self: flex-end;
+    max-width: 78%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--ink);
+    padding: 11px 14px;
+    border-radius: 16px 16px 4px 16px;
+    line-height: 1.5;
+    font-size: 14px;
+    white-space: pre-wrap;
+    box-shadow: 0 1px 0 rgba(15,23,42,.02);
+  }
+  .msg-assist { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+  .msg-text { line-height: 1.62; font-size: 14.5px; color: var(--ink); }
+  .msg-text p { margin: 0 0 .8em; }
+  .msg-text p:last-child { margin-bottom: 0; }
+  .msg-text code {
+    font-family: var(--font-mono); font-size: 12.5px;
+    background: var(--rail-2); border: 1px solid var(--border);
+    padding: 1px 5px; border-radius: 4px;
+  }
+  .msg-text strong { font-weight: 600; }
+  .msg-text em { font-style: italic; color: var(--ink-2); }
+
+  .tool {
+    border: 1px solid var(--border); background: var(--surface);
+    border-radius: 10px; overflow: hidden; font-size: 13px;
+  }
+  .tool-hd { display: flex; align-items: center; gap: 9px; padding: 9px 12px; cursor: default; }
+  .tool-hd:hover { background: var(--hover); }
+  .tool-tag {
+    font-family: var(--font-mono); font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .05em;
+    padding: 2px 6px; border-radius: 4px;
+    color: var(--ink-2); background: var(--rail-2); border: 1px solid var(--border);
+  }
+  .tool-tag.bash { color: var(--accent-ink); background: var(--accent-soft); border-color: transparent; }
+  .tool-title { color: var(--ink); font-weight: 500; flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tool-meta { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+  .tool-chev { color: var(--muted-2); display: grid; place-items: center; transition: transform .2s; }
+  .tool-chev svg { width: 13px; height: 13px; }
+  .tool.open .tool-chev { transform: rotate(90deg); }
+  .tool-body {
+    border-top: 1px solid var(--border); background: var(--rail);
+    font-family: var(--font-mono); font-size: 11.5px; line-height: 1.55;
+    color: var(--ink-2); padding: 10px 12px;
+    white-space: pre; overflow-x: auto; max-height: 220px; overflow-y: auto;
+  }
+  .caret {
+    display: inline-block; width: 7px; height: 14px;
+    background: var(--accent); vertical-align: -2px; margin-left: 1px;
+    animation: blink 1s steps(2) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .artifact-card {
+    appearance: none; width: 100%;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 10px 12px;
+    display: flex; align-items: center; gap: 12px;
+    cursor: default; font: inherit; color: var(--ink); text-align: left;
+    transition: border-color .12s, background .12s, transform .15s;
+  }
+  .artifact-card:hover { border-color: var(--border-strong); background: var(--rail-2); }
+  .artifact-card:active { transform: scale(.995); }
+  .artifact-thumb {
+    width: 42px; height: 42px; border-radius: 8px;
+    display: grid; place-items: center;
+    background: var(--rail-2); border: 1px solid var(--border);
+    color: var(--ink-2); flex: 0 0 auto;
+  }
+  .artifact-thumb[data-kind="html"]     { background: color-mix(in oklab, var(--accent) 10%, var(--surface)); color: var(--accent); border-color: color-mix(in oklab, var(--accent) 25%, var(--border)); }
+  .artifact-thumb[data-kind="markdown"] { background: color-mix(in oklab, #2EA47A 10%, var(--surface)); color: #2EA47A; border-color: color-mix(in oklab, #2EA47A 25%, var(--border)); }
+  .artifact-thumb[data-kind="code"]     { background: color-mix(in oklab, #8B5CF6 10%, var(--surface)); color: #8B5CF6; border-color: color-mix(in oklab, #8B5CF6 25%, var(--border)); }
+  .artifact-thumb[data-kind="table"]    { background: color-mix(in oklab, var(--warn) 10%, var(--surface)); color: var(--warn); border-color: color-mix(in oklab, var(--warn) 25%, var(--border)); }
+  .artifact-thumb svg { width: 20px; height: 20px; }
+  .artifact-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .artifact-title { font-size: 14px; font-weight: 500; color: var(--ink); }
+  .artifact-sub { font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .artifact-kind { color: var(--ink-2); }
+  .artifact-sep { color: var(--muted-2); }
+  .artifact-open { color: var(--muted-2); display: grid; place-items: center; width: 22px; height: 22px; transition: color .12s, transform .12s; }
+  .artifact-card:hover .artifact-open { color: var(--accent); transform: translateX(2px); }
+  .artifact-open svg { width: 14px; height: 14px; }
+
+  .msg-actions { display: flex; gap: 2px; margin-top: 6px; }
+  .msg-act {
+    appearance: none; border: 0; background: transparent;
+    width: 26px; height: 26px; border-radius: 6px;
+    color: var(--muted); cursor: default;
+    display: grid; place-items: center;
+  }
+  .msg-act:hover { background: var(--hover); color: var(--ink); }
+  .msg-act svg { width: 14px; height: 14px; }
+
+  /* Preview / HTML toggle inside each demo */
+  .demo-tabs {
+    margin-left: auto;
+    display: flex; gap: 2px;
+    background: var(--rail-2);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 2px;
+  }
+  .demo-seg {
+    appearance: none; border: 0; background: transparent;
+    font-family: var(--font-mono);
+    font-size: 10px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
+    color: var(--muted);
+    padding: 3px 10px; border-radius: 5px;
+    cursor: pointer;
+  }
+  .demo-seg:hover { color: var(--ink); }
+  .demo-seg.is-active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.07); }
+  html[data-theme="dark"] .demo-seg.is-active { box-shadow: none; border: 1px solid var(--border-strong); padding: 2px 9px; }
+  .demo-code {
+    margin: 0; display: none;
+    background: var(--rail);
+    color: var(--ink-2);
+    font-family: var(--font-mono);
+    font-size: 12px; line-height: 1.6;
+    padding: 16px;
+    white-space: pre;
+    overflow: auto;
+    max-height: 440px;
+  }
+  .demo-code::-webkit-scrollbar { width: 9px; height: 9px; }
+  .demo-code::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+  .demo[data-view="code"] .demo-stage { display: none; }
+  .demo[data-view="code"] .demo-code { display: block; }
+
+  /* Make demo elements feel interactive */
+  .demo .tool-hd, .demo .convo, .demo .task-head, .demo .view-tab,
+  .demo .switch, .demo .btn, .demo .msg-act, .demo .send,
+  .demo .comp-chip, .demo .artifact-card, .demo .quick-chip { cursor: pointer; }
+  .tool:not(.open) .tool-body { display: none; }
+  .msg-act.is-on { color: var(--accent-ink); background: var(--accent-soft); }
+
+  /* containers that mimic the sidebar / panel surfaces */
+  .demo-rail {
+    width: 100%; max-width: 300px;
+    background: var(--rail);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 6px;
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  .demo-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+
+  /* Composer (composer.jsx) */
+  .composer {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    box-shadow: 0 1px 0 rgba(15,23,42,.02), 0 10px 30px -14px rgba(15,23,42,.12);
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .composer:focus-within { border-color: color-mix(in oklab, var(--accent) 55%, var(--border-strong)); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .composer textarea {
+    width: 100%; background: transparent; border: 0; outline: 0; resize: none;
+    color: var(--ink); font: inherit;
+    padding: 12px 14px 6px; min-height: 44px; max-height: 200px; line-height: 1.5;
+  }
+  .composer textarea::placeholder { color: var(--muted-2); }
+  .comp-foot { display: flex; align-items: center; gap: 6px; padding: 6px 8px 8px 10px; }
+  .comp-chip {
+    appearance: none; border: 1px solid var(--border); background: transparent;
+    color: var(--ink-2); font: inherit; font-size: 12px;
+    padding: 4px 9px; border-radius: 999px;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .comp-chip:hover { background: var(--hover); }
+  .comp-chip svg { width: 12px; height: 12px; color: var(--muted); }
+  .comp-chip.model { font-family: var(--font-mono); font-size: 11.5px; }
+  .comp-spacer { flex: 1; }
+  .comp-tokens { font-family: var(--font-mono); font-size: 11px; color: var(--muted-2); margin-right: 4px; }
+  .send {
+    appearance: none; border: 0; width: 30px; height: 30px; border-radius: 50%;
+    background: var(--ink); color: var(--surface);
+    display: grid; place-items: center; transition: background .15s, transform .1s; margin-left: 4px;
+  }
+  .send:hover { background: var(--accent-ink); }
+  .send:active { transform: scale(.95); }
+  .send.disabled { background: var(--border-strong); color: var(--muted); }
+  .send svg { width: 14px; height: 14px; }
+
+  /* ConvoRow (app.jsx sidebar) */
+  .convo {
+    display: flex; align-items: center; gap: 9px;
+    padding: 6px 9px; border-radius: 6px; color: var(--ink-2);
+    min-width: 0; position: relative;
+  }
+  .convo:hover { background: var(--hover); }
+  .convo.active { background: var(--active); color: var(--ink); }
+  .convo.active::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px; background: var(--accent); border-radius: 1px; }
+  .convo-title { flex: 1; min-width: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .convo-meta { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted-2); flex: 0 0 auto; }
+  .convo.pinned .convo-title::before { content: "▸"; color: var(--muted-2); margin-right: 6px; }
+
+  /* TasksPanel task (app.jsx) */
+  .task { padding: 0; border-radius: 7px; border: 1px solid transparent; }
+  .task-head { padding: 8px 10px; display: grid; grid-template-columns: 12px 1fr 14px; column-gap: 9px; align-items: start; border-radius: 7px; }
+  .task-main { min-width: 0; }
+  .task-chev { width: 14px; height: 14px; color: var(--muted-2); margin-top: 3px; transition: transform .15s ease; }
+  .task.is-open > .task-head .task-chev { transform: rotate(90deg); }
+  .task:hover { background: var(--hover); }
+  .task.is-open { background: var(--hover); border-color: var(--border); }
+  .task-detail { padding: 2px 10px 10px 31px; }
+  .task:not(.is-open) .task-detail { display: none; }
+  .task-desc { margin: 0 0 8px; font-size: 12px; line-height: 1.5; color: var(--ink-2); text-wrap: pretty; }
+  .task-meta { margin: 0; display: grid; grid-template-columns: auto 1fr; column-gap: 12px; row-gap: 4px; }
+  .task-meta > div { display: contents; }
+  .task-meta dt { font-size: 11px; color: var(--muted-2); }
+  .task-meta dd { margin: 0; font-size: 11.5px; color: var(--ink-2); }
+  .task-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; background: var(--muted-2); box-shadow: 0 0 0 2px color-mix(in oklab, var(--muted-2) 25%, transparent); }
+  .task[data-status="done"] .task-dot { background: var(--ok); box-shadow: 0 0 0 2px color-mix(in oklab, var(--ok) 22%, transparent); }
+  .task[data-status="running"] .task-dot { background: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); animation: pulse 1.4s ease-in-out infinite; }
+  .task[data-status="queued"] .task-dot { background: transparent; border: 1.5px dashed var(--muted-2); margin-top: 4px; box-shadow: none; }
+  .task[data-status="error"] .task-dot { background: var(--err); box-shadow: 0 0 0 2px color-mix(in oklab, var(--err) 25%, transparent); }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 5px var(--accent-soft); } }
+  .task-name { font-size: 12.5px; color: var(--ink); line-height: 1.35; }
+  .task-sub { margin-top: 2px; display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); }
+  .task-tool { color: var(--ink-2); background: var(--surface); border: 1px solid var(--border); padding: 0 5px; border-radius: 3px; font-size: 10px; }
+
+  /* ViewTabs (views.jsx) */
+  .view-tabs { display: flex; gap: 4px; margin-top: 2px; flex-wrap: wrap; }
+  .view-tab {
+    appearance: none; border: 0; background: transparent;
+    font: inherit; font-size: 13.5px; color: var(--muted);
+    padding: 8px 12px 11px; border-bottom: 2px solid transparent;
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .view-tab:hover { color: var(--ink); }
+  .view-tab.is-active { color: var(--ink); border-bottom-color: var(--accent); }
+  .view-tab-count { font-size: 11px; color: var(--muted-2); background: var(--rail-2); border: 1px solid var(--border); padding: 0 6px; border-radius: 999px; }
+
+  /* Switch + Buttons + Badge (primitives / modals) */
+  .switch { appearance: none; border: 0; width: 32px; height: 18px; background: var(--border-strong); border-radius: 999px; position: relative; transition: background .2s; flex: 0 0 auto; }
+  .switch.on { background: var(--accent); }
+  .switch .thumb { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; background: var(--surface); border-radius: 50%; transition: left .18s cubic-bezier(.4,1.4,.6,1); box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+  .switch.on .thumb { left: 16px; }
+  .btn { appearance: none; border: 1px solid var(--border); background: var(--surface); color: var(--ink); padding: 7px 14px; border-radius: 8px; font: inherit; font-size: 13px; }
+  .btn:hover { background: var(--rail-2); }
+  .btn.danger { color: var(--err); border-color: color-mix(in oklab, var(--err) 30%, var(--border)); }
+  .btn.danger:hover { background: color-mix(in oklab, var(--err) 10%, transparent); }
+  .btn.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+  .btn.primary:hover { background: var(--accent-ink); border-color: var(--accent-ink); }
+  .badge { font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--accent-ink); background: var(--accent-soft); padding: 2px 7px; border-radius: 999px; }
+
+  /* Quick chip (EmptyHome) */
+  .quick-chip {
+    appearance: none; border: 1px solid var(--border); background: var(--surface);
+    color: var(--ink); padding: 6px 12px 6px 10px; border-radius: 999px;
+    display: inline-flex; align-items: center; gap: 7px; font: inherit; font-size: 13px;
+    transition: background .12s, border-color .12s;
+  }
+  .quick-chip:hover { background: var(--rail-2); border-color: var(--border-strong); }
+
+  /* Artifact inline preview (functional demonstration) */
+  .artifact-card.is-open { border-color: color-mix(in oklab, var(--accent) 45%, var(--border)); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .artifact-preview { display: none; border: 1px solid var(--border); border-radius: 10px; background: var(--rail); padding: 12px 14px; font-size: 12.5px; color: var(--ink-2); }
+  .artifact-card.is-open + .artifact-preview { display: block; }
+  .artifact-preview pre { margin: 0; border: 0; background: transparent; padding: 0; font-size: 12px; color: var(--ink-2); white-space: pre-wrap; }
+  .pv-table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 11.5px; }
+  .pv-table td, .pv-table th { border: 1px solid var(--border); padding: 3px 8px; text-align: left; }
+  .pv-table th { color: var(--muted); font-weight: 600; background: var(--surface); }
+
+  /* In-chat table (new chat element) */
+  .msg-table {
+    width: 100%; border-collapse: separate; border-spacing: 0;
+    font-size: 13px;
+    border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+    background: var(--surface);
+  }
+  .msg-table th {
+    text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--muted); background: var(--rail);
+    padding: 7px 12px; border-bottom: 1px solid var(--border);
+  }
+  .msg-table td { padding: 7px 12px; border-bottom: 1px solid var(--border); color: var(--ink-2); vertical-align: top; }
+  .msg-table tr:last-child td { border-bottom: 0; }
+  .msg-table td code { font-size: 11.5px; }
+  .msg-table .num { text-align: right; font-family: var(--font-mono); }
+
+  /* Structured-output rule callout */
+  .rule-callout {
+    display: flex; gap: 12px; align-items: flex-start;
+    padding: 14px 16px;
+    border: 1px solid color-mix(in oklab, var(--accent) 30%, var(--border));
+    background: var(--accent-soft);
+    border-radius: 12px;
+    margin: 6px 0 16px;
+  }
+  .rule-callout .rule-tag {
+    font-family: var(--font-mono);
+    font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--accent-ink);
+    border: 1px solid color-mix(in oklab, var(--accent) 35%, transparent);
+    border-radius: 6px; padding: 3px 8px;
+    white-space: nowrap; flex: 0 0 auto; margin-top: 1px;
+  }
+  .rule-callout div { min-width: 0; }
+  .rule-callout p { margin: 0; color: var(--ink-2); font-size: 14px; line-height: 1.6; text-wrap: pretty; }
+  .rule-callout p + p { margin-top: 6px; }
+
+  /* ── Right-side panels (real Lattice markup) ───── */
+  .icon-btn { appearance: none; border: 0; background: transparent; width: 26px; height: 26px; border-radius: 6px; color: var(--muted); display: grid; place-items: center; cursor: pointer; }
+  .icon-btn:hover { background: var(--hover); color: var(--ink); }
+  .icon-btn svg { width: 15px; height: 15px; }
+
+  /* wrapper that frames a full-height side panel inside the doc */
+  .demo-panel { height: 460px; border: 1px solid var(--border); border-radius: 14px; overflow: hidden; display: flex; background: var(--surface); }
+  .demo-panel .art-panel, .demo-panel .tasks { border-left: 0; flex: 1; height: 100%; min-width: 0; animation: none; }
+  .demo.panelhost .demo-stage { padding: 0; background: none; display: block; }
+  .demo.panelhost .demo-panel { height: 480px; border: 0; border-radius: 0; }
+
+  /* ArtifactPanel */
+  .art-panel { background: var(--surface); display: flex; flex-direction: column; min-width: 0; position: relative; }
+  .art-hd { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--border); min-height: 44px; }
+  .art-hd-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .art-hd-title { font-size: 13.5px; font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .art-hd-sub { font-size: 11px; color: var(--muted); font-family: var(--font-mono); }
+  .art-hd-actions { display: flex; align-items: center; gap: 2px; }
+  .art-tabs { display: inline-flex; background: var(--rail-2); border: 1px solid var(--border); border-radius: 7px; padding: 2px; margin-right: 6px; }
+  .art-tab { appearance: none; border: 0; background: transparent; font: inherit; font-size: 12px; padding: 3px 9px; border-radius: 5px; color: var(--muted); cursor: pointer; }
+  .art-tab:hover { color: var(--ink); }
+  .art-tab.is-active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+  html[data-theme="dark"] .art-tab.is-active { box-shadow: none; border: 1px solid var(--border-strong); padding: 2px 8px; }
+  .art-body { flex: 1; min-height: 0; overflow: auto; background: var(--rail); }
+  .art-iframe { width: 100%; height: 100%; border: 0; background: white; display: block; }
+  .art-md { padding: 26px 30px; max-width: 720px; margin: 0 auto; color: var(--ink); line-height: 1.6; }
+  .art-md h1, .art-md h2, .art-md h3 { letter-spacing: -.01em; margin: 1.2em 0 .5em; }
+  .art-md h1 { font-size: 24px; }
+  .art-md h1:first-child { margin-top: 0; }
+  .art-md h2 { font-size: 18px; }
+  .art-md h3 { font-size: 15px; color: var(--ink-2); }
+  .art-md p { margin: 0 0 .9em; }
+  .art-md blockquote { margin: .6em 0; padding: 8px 14px; border-left: 3px solid var(--accent); background: var(--rail-2); border-radius: 0 6px 6px 0; color: var(--ink-2); font-style: italic; }
+  .art-md code { background: var(--rail-2); padding: 1px 6px; border: 1px solid var(--border); border-radius: 4px; font-family: var(--font-mono); font-size: .92em; }
+  .art-code { margin: 0; padding: 18px 20px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.6; color: var(--ink-2); background: var(--rail); overflow: auto; min-height: 100%; white-space: pre; tab-size: 2; }
+  .art-code .tk-comment { color: var(--muted); font-style: italic; }
+  .art-code .tk-string  { color: #2EA47A; }
+  .art-code .tk-kw      { color: #8B5CF6; font-weight: 500; }
+  .art-code .tk-num     { color: #C28A2A; }
+  .art-tableview { display: flex; flex-direction: column; min-height: 100%; background: var(--surface); }
+  .art-table-toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 1; background: var(--surface); }
+  .art-table-spacer { flex: 1; }
+  .art-table-count { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+  .art-table-scroll { overflow: auto; flex: 1; }
+  .art-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .art-table th, .art-table td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .art-table thead th { position: sticky; top: 0; background: var(--rail); color: var(--ink); font-weight: 600; font-size: 11.5px; letter-spacing: .02em; text-transform: uppercase; border-bottom: 1px solid var(--border-strong); }
+  .art-table tbody tr:hover { background: var(--hover); }
+  .art-table td { color: var(--ink-2); }
+  .art-table th.num, .art-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .art-table .art-table-rownum { width: 1%; text-align: right; color: var(--muted-2); font-size: 11px; background: var(--surface); border-right: 1px solid var(--border); user-select: none; }
+  .art-table thead .art-table-rownum { background: var(--rail); }
+  .art-foot { border-top: 1px solid var(--border); padding: 6px 14px; font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; font-family: var(--font-mono); }
+  .btn-sm { padding: 4px 10px; font-size: 12px; border-radius: 7px; }
+
+  /* TasksPanel (Background tasks) */
+  .tasks { background: var(--rail); display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+  .tasks-hd { height: 44px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px 0 16px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+  .tasks-hd h3 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -.005em; }
+  .tasks-hd .clear { appearance: none; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; padding: 4px 6px; border-radius: 4px; }
+  .tasks-hd .clear:hover { background: var(--hover); color: var(--ink); }
+  .tasks-section { padding: 12px 16px 6px; font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted-2); display: flex; align-items: center; gap: 8px; }
+  .tasks-section .line { flex: 1; height: 1px; background: var(--border); }
+  .tasks-section .count { font-family: var(--font-mono); font-weight: 500; letter-spacing: 0; color: var(--muted-2); }
+  .tasks-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 14px; display: flex; flex-direction: column; gap: 2px; }
+  .task .retry { appearance: none; border: 0; background: transparent; color: var(--err); font-family: var(--font-mono); font-size: 10.5px; padding: 0 4px; border-radius: 3px; cursor: pointer; margin-left: 4px; }
+  .task .retry:hover { background: color-mix(in oklab, var(--err) 12%, transparent); }
+  .task-stop { appearance: none; border: 0; background: transparent; color: var(--muted); font-family: var(--font-mono); font-size: 10.5px; padding: 1px 5px; border-radius: 3px; cursor: pointer; margin-left: 4px; display: inline-flex; align-items: center; gap: 4px; }
+  .task-stop svg { width: 9px; height: 9px; }
+  .task-stop:hover { background: color-mix(in oklab, var(--err) 12%, transparent); color: var(--err); }
+  .task-cancel { appearance: none; border: 0; background: transparent; color: var(--muted); font-family: var(--font-mono); font-size: 10.5px; padding: 1px 5px; border-radius: 3px; cursor: pointer; margin-left: 4px; }
+  .task-cancel:hover { background: var(--hover); color: var(--ink); }
+
+  /* ── Responsive ────────────────────────────────── */
+  @media (max-width: 940px) {
+    .layout { grid-template-columns: 1fr; }
+    .toc {
+      position: static; height: auto;
+      border-right: 0; border-bottom: 1px solid var(--border);
+      padding: 18px 18px 14px;
+    }
+    /* TOC becomes a horizontal scroll strip to save vertical space */
+    .toc-list { flex-direction: row; flex-wrap: nowrap; overflow-x: auto; gap: 4px; padding-bottom: 4px; -webkit-overflow-scrolling: touch; }
+    .toc-list::-webkit-scrollbar { height: 6px; }
+    .toc-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    .toc-list a { white-space: nowrap; }
+    .theme-toggle { margin-top: 16px; }
+    .content { padding: 30px 22px 90px; }
+    .doc-title { font-size: 36px; }
+  }
+  @media (max-width: 640px) {
+    body { font-size: 14.5px; }
+    .content { padding: 22px 16px 72px; }
+    .doc-title { font-size: 29px; }
+    .doc-lede { font-size: 15px; }
+    .filesec-hd h2 { font-size: 20px; }
+    .demo-stage { padding: 16px; }
+    .demo.panelhost .demo-panel { height: 420px; }
+    /* tables: shrink + let the label column wrap, keep code from overflowing */
+    .tbl, .pv-table, .msg-table { font-size: 12px; }
+    .tbl td:first-child, .msg-table td:first-child { white-space: normal; }
+    .tbl td, .tbl th, .msg-table td, .msg-table th { padding: 7px 9px; }
+    .tbl td code, .msg-table td code { white-space: normal; word-break: break-word; }
+    .art-md { padding: 20px 18px; }
+    .art-md h1 { font-size: 21px; }
+    .art-md h2 { font-size: 16px; }
+    .entry pre { font-size: 11.5px; }
+    .msg-user { max-width: 92%; }
+  }
+  @media (max-width: 480px) {
+    .doc-title { font-size: 25px; }
+    .demo-stage { padding: 12px; }
+    .demo.panelhost .demo-panel { height: 380px; }
+    /* artifact panel header: let tabs + actions wrap instead of overflowing */
+    .art-hd { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+    .art-hd-meta { flex-basis: 100%; }
+    .art-tabs { margin-right: 2px; }
+    .art-tab { padding: 3px 7px; }
+    .icon-btn { width: 24px; height: 24px; }
+    .filesec-hd .num { width: 24px; height: 24px; }
+    .legend { padding: 12px; gap: 6px; }
+    .legend-item { font-size: 12px; }
+    /* wrap the long entry-hd component signatures */
+    .entry-hd h3 { font-size: 14px; word-break: break-word; }
+    .tasks-hd, .art-foot { padding-left: 12px; padding-right: 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <!-- ── TOC ─────────────────────────────────────── -->
+  <aside class="toc">
+    <div class="brand">
+      <div class="brand-mark">L</div>
+      <div>
+        <div class="brand-name">COPYXYZ</div>
+        <div class="brand-sub">refs · v0.5.0</div>
+      </div>
+    </div>
+
+    <div class="toc-head">Contents</div>
+    <ul class="toc-list" id="tocList">
+      <li><a href="#primitives"><span class="toc-num">01</span><span class="toc-file">primitives.jsx</span></a></li>
+      <li><a href="#i18n"><span class="toc-num">02</span><span class="toc-file">i18n.jsx</span></a></li>
+      <li><a href="#app"><span class="toc-num">03</span><span class="toc-file">app.jsx</span></a></li>
+      <li><a href="#composer"><span class="toc-num">04</span><span class="toc-file">composer.jsx</span></a></li>
+      <li><a href="#views"><span class="toc-num">05</span><span class="toc-file">views.jsx</span></a></li>
+      <li><a href="#modals"><span class="toc-num">06</span><span class="toc-file">modals.jsx</span></a></li>
+      <li><a href="#artifact"><span class="toc-num">07</span><span class="toc-file">artifact-panel.jsx</span></a></li>
+      <li><a href="#extras"><span class="toc-num">08</span><span class="toc-file">extras.jsx</span></a></li>
+      <li><a href="#connectors"><span class="toc-num">09</span><span class="toc-file">connectors.jsx</span></a></li>
+      <li><a href="#skills"><span class="toc-num">10</span><span class="toc-file">skills.jsx</span></a></li>
+      <li><a href="#estado"><span class="toc-num">11</span><span>Root state map</span></a></li>
+      <li><a href="#fluxos"><span class="toc-num">12</span><span>User flows</span></a></li>
+    </ul>
+
+    <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="3.2"/><path d="M8 1v1.8M8 13.2V15M1 8h1.8M13.2 8H15M3 3l1.3 1.3M11.7 11.7L13 13M13 3l-1.3 1.3M4.3 11.7L3 13"/></svg>
+      <span id="themeLabel">Dark mode</span>
+    </button>
+  </aside>
+
+  <!-- ── Content ─────────────────────────────────── -->
+  <main class="content">
+    <article class="doc">
+      <h1 class="doc-title">Elements &amp; Functions Reference</h1>
+      <p class="doc-lede">Complete glossary of every component, function, hook and prop in the Lattice prototype. Use it alongside <code>Documentation.md</code> (which covers architecture and the big picture); this document focuses on <strong>the detail of each piece</strong>.</p>
+
+      <div class="legend">
+        <span class="legend-item"><span class="kbadge comp">Component</span></span>
+        <span class="legend-item"><span class="kbadge fn">Function / helper</span></span>
+        <span class="legend-item"><span class="kbadge hook">Hook</span></span>
+        <span class="legend-item"><span class="kbadge data">Data / constant</span></span>
+        <span class="legend-item"><span class="kbadge css">CSS group</span></span>
+      </div>
+
+      <hr class="rule" />
+
+      <!-- 01 primitives -->
+      <section class="filesec" id="primitives">
+        <div class="filesec-hd"><span class="num">01</span><h2>primitives.jsx</h2></div>
+        <p class="filesec-blurb">Reusable building blocks exposed on <code>window</code> for the other Babel files.</p>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge fn">fn</span><h3>cn(<span class="arg">...args</span>)</h3></div>
+          <p>Conditionally joins class names. Accepts strings and falsy values (which are ignored).</p>
+          <pre><code>cn("btn", isActive &amp;&amp; "is-active", danger &amp;&amp; "danger")</code></pre>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>Tooltip(<span class="arg">{ label, side, delay, children }</span>)</h3></div>
+          <p>Hover/focus tooltip.</p>
+          <ul>
+            <li><code>label</code> — text shown</li>
+            <li><code>side</code> — <code>"top" | "bottom" | "left" | "right"</code> (position)</li>
+            <li><code>delay</code> — ms before it appears (e.g. 250 collapsed, 600 expanded)</li>
+            <li><code>children</code> — the element that triggers the tooltip</li>
+          </ul>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>Action(<span class="arg">{ icon, label, onClick, ... }</span>)</h3></div>
+          <p>Accessible icon button with a built-in <code>sr-only</code> label. The base of every icon button.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>Modal(<span class="arg">{ open, onClose, title, children, width }</span>)</h3></div>
+          <p>Modal shell with backdrop, close on <code>Esc</code>, initial focus and centering.</p>
+          <ul>
+            <li><code>open</code> — boolean controlling visibility</li>
+            <li><code>onClose</code> — called on backdrop, Esc or the close button</li>
+            <li><code>title</code> — header</li>
+            <li><code>width</code> — width in px (default 560)</li>
+            <li><code>children</code> — body; use <code>.modal-foot</code> for the button bar</li>
+          </ul>
+          <div class="demo">
+            <div class="demo-label">Buttons &amp; badge · .modal-foot</div>
+            <div class="demo-stage">
+              <div class="demo-row">
+                <button class="btn" type="button">Cancel</button>
+                <button class="btn primary" type="button">Save changes</button>
+                <button class="btn danger" type="button">Delete</button>
+                <span class="badge">Pro</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>InlineEditable(<span class="arg">{ value, onChange, placeholder, type }</span>)</h3></div>
+          <p>Text that becomes an input on click; saves on blur or Enter, cancels on Esc.</p>
+          <ul>
+            <li><code>value</code> — current value</li>
+            <li><code>onChange(newValue)</code> — called only if it changed</li>
+            <li><code>placeholder</code> — shown when empty</li>
+            <li>Used in the project title/description and the My account fields</li>
+          </ul>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge data">data</span><span class="kbadge hook">hook</span><h3>ConfirmContext + useConfirm()</h3></div>
+          <p><strong>Global</strong> destructive-confirmation system. Replaces the native <code>confirm()</code>.</p>
+          <ul>
+            <li><code>useConfirm()</code> returns an <code>openConfirm(opts)</code> function</li>
+            <li><code>opts</code>: <code>{ title, body, danger, confirmLabel, cancelLabel, onConfirm }</code>
+              <ul>
+                <li><code>body</code> can be a string <strong>or</strong> JSX (e.g. a highlighted name)</li>
+                <li><code>danger: true</code> → the confirm button turns red</li>
+                <li><code>onConfirm()</code> → runs on confirm; the modal closes itself</li>
+              </ul>
+            </li>
+            <li>The provider lives in <code>App</code>; a single <code>&lt;Modal&gt;</code> renders the active dialog</li>
+          </ul>
+          <pre><code>const confirm = useConfirm();
+confirm({
+  title: "Delete file",
+  body: &lt;&gt;Delete &lt;span className="confirm-target"&gt;"{name}"&lt;/span&gt;?&lt;/&gt;,
+  danger: true,
+  confirmLabel: "Delete",
+  onConfirm: () =&gt; removeFile(id),
+});</code></pre>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge hook">hook</span><h3>useMediaQuery(<span class="arg">query</span>)</h3></div>
+          <p>Returns a reactive boolean for a media query (e.g. <code>useMediaQuery("(max-width: 900px)")</code> to detect mobile).</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge hook">hook</span><h3>useClickOutside(<span class="arg">ref, handler</span>)</h3></div>
+          <p>Calls <code>handler</code> on a click outside the <code>ref</code> element. Used in menus and dropdowns.</p>
+        </div>
+      </section>
+
+      <hr class="rule" />
+
+      <!-- 02 i18n -->
+      <section class="filesec" id="i18n">
+        <div class="filesec-hd"><span class="num">02</span><h2>i18n.jsx</h2></div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge data">data</span><h3>STRINGS</h3></div>
+          <p>Dictionary nested by language: <code>STRINGS[lang][key]</code>. Languages: <code>en</code>, <code>pt</code>, <code>es</code>, <code>fr</code>. <code>en</code> is the fallback.</p>
+          <p>Keys grouped by prefix:</p>
+          <table class="tbl">
+            <thead><tr><th>Prefix</th><th>Coverage</th></tr></thead>
+            <tbody>
+              <tr><td><code>sb.*</code></td><td>Sidebar (newChat, search, projects, history, expand, collapse)</td></tr>
+              <tr><td><code>menu.*</code></td><td>Account dropdown (account, settings, language, archive, …)</td></tr>
+              <tr><td><code>recent.*</code></td><td>Conversation groups (pinned, today, earlier, archived)</td></tr>
+              <tr><td><code>convo.*</code></td><td>Context menu (rename, pin, unpin, unarchive)</td></tr>
+              <tr><td><code>common.*</code></td><td>Generic buttons (cancel, delete, archive, save, …)</td></tr>
+              <tr><td><code>tasks.*</code></td><td>Tasks panel (title, clear, running, queued, errors, done)</td></tr>
+              <tr><td><code>top.*</code></td><td>Breadcrumb (connected)</td></tr>
+              <tr><td><code>composer.*</code></td><td>Composer placeholder</td></tr>
+              <tr><td><code>confirm.*</code></td><td>Chat deletion modal</td></tr>
+              <tr><td><code>np.*</code></td><td>New project modal (title, subtitle, name, desc, create)</td></tr>
+              <tr><td><code>proj.*</code></td><td>Project detail (newChatIn, back, delete.title, delete.body)</td></tr>
+              <tr><td><code>set.* / view.*</code></td><td>Settings and view headers</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge hook">hook</span><h3>useT()</h3></div>
+          <p>Reads the language from <code>LangContext</code> and returns <code>t(key)</code>. Missing key → en fallback → the key itself.</p>
+          <pre><code>const t = useT();
+&lt;button&gt;{t('sb.newChat')}&lt;/button&gt;</code></pre>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge data">data</span><h3>LangContext</h3></div>
+          <p>Context carrying the current language code. <code>App</code> provides it with <code>appSettings.language</code>.</p>
+        </div>
+      </section>
+
+      <hr class="rule" />
+
+      <!-- 03 app -->
+      <section class="filesec" id="app">
+        <div class="filesec-hd"><span class="num">03</span><h2>app.jsx</h2></div>
+        <p class="filesec-blurb">Root file: global state, layout, routing and the chat components.</p>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>App()</h3></div>
+          <p>Root component. Holds <strong>all</strong> high-level state and builds the grid layout (<code>sidebar | main | tasks/artifact</code>). Wraps the tree in <code>LangContext.Provider</code> and <code>ConfirmContext.Provider</code>.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>Sidebar(<span class="arg">{ ... }</span>)</h3></div>
+          <p>Collapsible sidebar.</p>
+          <ul>
+            <li>Toggle aligned right (open) / centered (collapsed)</li>
+            <li>Actions: New chat, Search, Projects, History (with tooltips and shortcuts that appear on hover)</li>
+            <li>Conversation list grouped by <code>RECENT_GROUPS</code></li>
+            <li>Footer with the account → opens the dropdown</li>
+          </ul>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge data">data</span><h3>RECENT_GROUPS</h3></div>
+          <p>Defines the sidebar groups and their filters:</p>
+          <pre><code>[
+  { key: "pinned",   match: c =&gt; c.pinned &amp;&amp; !c.archived },
+  { key: "today",    match: c =&gt; !c.pinned &amp;&amp; !c.archived &amp;&amp; c.updatedAt &gt; hr(20) },
+  { key: "earlier",  match: c =&gt; !c.pinned &amp;&amp; !c.archived &amp;&amp; c.updatedAt &lt;= hr(20) },
+  { key: "archived", match: c =&gt; c.archived },
+]</code></pre>
+          <p>The label is translated by <code>t('recent.' + key)</code>.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>ConvoRow(<span class="arg">{ c, active, editing, onSelect, onMenu, ... }</span>)</h3></div>
+          <p>A conversation row. Click selects; double-click renames; <code>⋯</code>/right-click opens the context menu.</p>
+          <div class="demo">
+            <div class="demo-label">ConvoRow · click to select</div>
+            <div class="demo-stage">
+              <div class="demo-rail">
+                <div class="convo pinned"><span class="convo-title">Verification gate rollout</span><span class="convo-meta">2h</span></div>
+                <div class="convo active"><span class="convo-title">Embedded PG harness migrations</span><span class="convo-meta">now</span></div>
+                <div class="convo"><span class="convo-title">Q3 OKR draft</span><span class="convo-meta">1d</span></div>
+                <div class="convo"><span class="convo-title">TypeBox codegen migration</span><span class="convo-meta">3d</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>Breadcrumb(<span class="arg">{ convo, onToggleSidebar, onToggleTasks, ... }</span>)</h3></div>
+          <p>Topbar: hamburger (mobile), project/chat trail, "connected" pill and the tasks-panel toggle.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge data">data</span><h3>Structured chat output — overview</h3></div>
+          <p>The central conversation area (<code>.thread</code> → <code>.thread-inner</code>) is where information reaches the user in a <strong>structured</strong> way: instead of a single text block, each assistant turn is an <strong>ordered sequence of typed blocks</strong> that <code>Message</code> walks in order. Each element has a specific role in the "reading flow":</p>
+          <table class="tbl">
+            <thead><tr><th>Element (role)</th><th>Role in the output</th></tr></thead>
+            <tbody>
+              <tr><td><code>.thread</code> / <code>.thread-inner</code></td><td><strong>Reading container.</strong> Scrolls vertically, centers the column (<code>max-width: 760px</code>) and sets the rhythm between turns (<code>gap</code>). Layout only — it doesn't decide content.</td></tr>
+              <tr><td><code>Message</code></td><td><strong>Turn conductor.</strong> Decides the format by <code>role</code> and, for the assistant, dispatches each <code>block</code> to the right renderer. The single point that turns <em>data</em> (<code>blocks</code>) into <em>UI</em>.</td></tr>
+              <tr><td><code>blocks[]</code></td><td><strong>Turn script.</strong> Ordered array describing the response as data (<code>{ kind: "text" | "tool" | "artifact", … }</code>). Array order = screen order: the assistant interleaves prose, actions and deliverables.</td></tr>
+              <tr><td><code>TextBlock</code></td><td><strong>Voice/reasoning.</strong> Renders the prose (paragraphs, breaks, inline markdown). The "narrator" that explains what happens between actions.</td></tr>
+              <tr><td><code>ToolCard</code></td><td><strong>Work/evidence.</strong> Shows a tool call as a collapsible card — tag, title, metric and body (output/diff). Role: give <em>proof</em> and detail on demand, without cluttering the read.</td></tr>
+              <tr><td><code>ArtifactCard</code></td><td><strong>Deliverable.</strong> Represents the browsable result (HTML, Markdown, table, code); clicking opens the side <code>ArtifactPanel</code>. Role: separate the "product" from the conversation.</td></tr>
+              <tr><td><code>.caret</code></td><td><strong>Sign of life.</strong> Blinking cursor at the end of the last <code>TextBlock</code> while <code>streaming</code> — signals "still generating".</td></tr>
+              <tr><td><code>MsgActions</code></td><td><strong>Post-turn.</strong> Copy/Regenerate/Like/Dislike bar that appears on hover, after the turn ends (<code>!streaming</code>). Role: act <em>on</em> the whole response.</td></tr>
+              <tr><td><code>.msg-table</code></td><td><strong>Comparable data.</strong> Table rendered <em>directly</em> in the turn (not in an artifact) when the response needs to align values side by side. Role: structure short comparisons inline, without pulling the user out of the conversation thread.</td></tr>
+            </tbody>
+          </table>
+          <blockquote><p>Contract in one line: <strong><code>blocks</code> is the script, <code>Message</code> is the conductor, and each <code>*Block</code>/<code>*Card</code> is an instrument with a single role.</strong> To change what appears in the chat, edit the <code>blocks</code> (data); to change <em>how</em> a type appears, edit its renderer.</p></blockquote>
+
+          <div class="demo">
+            <div class="demo-label">real elements · one full turn</div>
+            <div class="demo-stage">
+              <div class="msg-user">Confirm the embedded PG harness applies our migrations. I need the issue_work_products columns visible to the gate.</div>
+              <div class="msg-assist">
+                <div class="msg-text"><p>Looking at the harness setup — it boots Postgres through <code>applyPendingMigrations</code>, which runs the <strong>full</strong> migration list. That means <code>work_products</code> and <code>issue_approvals</code> are <em>already</em> visible to the gate.</p></div>
+                <div class="tool open">
+                  <div class="tool-hd">
+                    <span class="tool-tag bash">Bash</span>
+                    <span class="tool-title">Run shared verification-gate tests</span>
+                    <span class="tool-meta">0.8s · 19/19 ✓</span>
+                    <span class="tool-chev"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg></span>
+                  </div>
+                  <div class="tool-body">$ pnpm test packages/server/verification-gate
+
+  ✓ blocks low-confidence advisory (84ms)
+  ✓ allows passthrough on bypass-by-board (61ms)
+  ✓ rejects mismatched actor on update (44ms)
+
+  19 passed (19)</div>
+                </div>
+                <button class="artifact-card" type="button">
+                  <span class="artifact-thumb" data-kind="table">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 14h18M9 4v16M15 4v16"/></svg>
+                  </span>
+                  <span class="artifact-meta">
+                    <span class="artifact-title">Verification matrix</span>
+                    <span class="artifact-sub"><span class="artifact-kind">Table</span><span class="artifact-sep">·</span><span class="mono">7 lines</span></span>
+                  </span>
+                  <span class="artifact-open">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>
+                  </span>
+                </button>
+                <div class="artifact-preview">
+                  <table class="pv-table">
+                    <thead><tr><th>case</th><th>total</th><th>pass</th><th>cov</th></tr></thead>
+                    <tbody>
+                      <tr><td>advisory_block</td><td>64</td><td>64</td><td>93%</td></tr>
+                      <tr><td>bypass_board</td><td>48</td><td>48</td><td>88%</td></tr>
+                      <tr><td>permission_gate</td><td>64</td><td>64</td><td>93%</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="msg-text"><p>Stage 21 is closed. Moving to stage 12 — the envelope is declared in the prompt but the real enforcement lives in <code>toolGovernanceService.evaluate</code><span class="caret"></span></p></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge" style="color:var(--accent-ink);background:var(--accent-soft);border-color:color-mix(in oklab,var(--accent) 28%,transparent)">rule</span><h3>Structured-output rule</h3></div>
+          <div class="rule-callout">
+            <span class="rule-tag">rule</span>
+            <div>
+              <p><strong>Every assistant response is an ordered sequence of typed blocks — never a dump of running text.</strong> Use prose (<code>TextBlock</code>) only for reasoning and transitions; comparable data goes in an inline <code>.msg-table</code>; verifiable work becomes a <code>ToolCard</code>; and any browsable deliverable becomes an <code>ArtifactCard</code>.</p>
+              <p>Quick test: if the information <em>compares across rows and columns</em> → table; if it's a <em>product</em> (doc, code, spreadsheet) → artifact; if it's <em>how you got there</em> → tool card; everything else is prose.</p>
+            </div>
+          </div>
+          <p>Below, a turn that <strong>follows the rule</strong>: a sentence of context, the inline table with the data, and the deliverable split into an artifact — whose Preview details each function and its elements.</p>
+          <div class="demo">
+            <div class="demo-label">Message that follows the rule · text → table → artifact</div>
+            <div class="demo-stage">
+              <div class="msg-user">Give me an inventory of the chat output elements and who renders each one.</div>
+              <div class="msg-assist">
+                <div class="msg-text"><p>Following the rule: the short comparison goes in the inline table; the full, function-by-function breakdown lives in the artifact below.</p></div>
+                <table class="msg-table">
+                  <thead><tr><th>Element</th><th>Role</th><th class="num">blocks</th></tr></thead>
+                  <tbody>
+                    <tr><td><code>TextBlock</code></td><td>Prose / reasoning</td><td class="num">text</td></tr>
+                    <tr><td><code>.msg-table</code></td><td>Inline comparable data</td><td class="num">table</td></tr>
+                    <tr><td><code>ToolCard</code></td><td>Evidence on demand</td><td class="num">tool</td></tr>
+                    <tr><td><code>ArtifactCard</code></td><td>Browsable deliverable</td><td class="num">artifact</td></tr>
+                  </tbody>
+                </table>
+                <button class="artifact-card" type="button">
+                  <span class="artifact-thumb" data-kind="markdown">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M5 4h11l3 3v13a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z"/><path d="M16 4v3h3M8 12h2l1 2 1-2h2v5M8 12v5"/></svg>
+                  </span>
+                  <span class="artifact-meta">
+                    <span class="artifact-title">Functions &amp; elements — detail</span>
+                    <span class="artifact-sub"><span class="artifact-kind">Markdown</span><span class="artifact-sep">·</span><span class="mono">6 functions</span></span>
+                  </span>
+                  <span class="artifact-open"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg></span>
+                </button>
+                <div class="artifact-preview">
+                  <table class="pv-table">
+                    <thead><tr><th>Function</th><th>Detail</th><th>Elements</th></tr></thead>
+                    <tbody>
+                      <tr><td>Message</td><td>Turn conductor — dispatches each block by <code>kind</code></td><td><code>TextBlock</code> · <code>ToolCard</code> · <code>ArtifactCard</code> · <code>MsgActions</code></td></tr>
+                      <tr><td>TextBlock</td><td>Prose: paragraphs, breaks and inline markdown</td><td><code>renderInline</code> · <code>.caret</code></td></tr>
+                      <tr><td>renderInline</td><td>Mini-markdown via a single regex</td><td><code>strong</code> · <code>em</code> · <code>code</code></td></tr>
+                      <tr><td>ToolCard</td><td>Collapsible tool call, body on demand</td><td><code>.tool-hd</code> · <code>.tool-tag</code> · <code>.tool-body</code></td></tr>
+                      <tr><td>ArtifactCard</td><td>Deliverable — opens the ArtifactPanel</td><td><code>.artifact-thumb</code> · <code>.artifact-meta</code> · <code>.artifact-open</code></td></tr>
+                      <tr><td>.msg-table</td><td>Inline table for comparable data</td><td><code>thead/th</code> · <code>tbody/td</code></td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="msg-actions">
+                  <button class="msg-act" type="button" aria-label="Copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5a1 1 0 00-1-1H3.5a1 1 0 00-1 1V10a1 1 0 001 1H5"/></svg></button>
+                  <button class="msg-act" type="button" aria-label="Regenerate"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 11-1.5-3.5"/><path d="M13 2v3h-3"/></svg></button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>Message(<span class="arg">{ m, streaming, onCopy, onRegen, onOpenArtifact }</span>)</h3></div>
+          <p>Renders <strong>one</strong> turn and is the single place mapping block type → component.</p>
+          <ul>
+            <li><code>m.role === "user"</code> → a simple right-aligned bubble (<code>.msg-user</code>), text only.</li>
+            <li><code>m.role === "assistant"</code> → <code>.msg-assist</code> that runs <code>m.blocks.map(...)</code> dispatching by <code>kind</code>:
+              <ul>
+                <li><code>text</code> → <code>TextBlock</code> (the last block gets <code>streaming</code> to show the caret)</li>
+                <li><code>artifact</code> → resolves <code>ARTIFACTS_SAMPLE[block.artifactId]</code> and builds an <code>ArtifactCard</code> (returns <code>null</code> if the id doesn't exist)</li>
+                <li>any other (<code>tool</code>) → <code>ToolCard</code></li>
+              </ul>
+            </li>
+            <li>When the turn ends (<code>!streaming</code>) and there are blocks, it appends <code>MsgActions</code>; <code>onCopy</code> serializes every block to text (prose + the tools' <code>[tag] title / body</code>).</li>
+          </ul>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>TextBlock(<span class="arg">{ text, streaming }</span>)</h3></div>
+          <p>The assistant's "voice". Splits <code>text</code> into paragraphs on blank lines (<code>\n\n+</code>), then into lines on <code>\n</code> (becomes <code>&lt;br&gt;</code>), and runs each line through <code>renderInline</code>. If <code>streaming</code>, it pins the <code>.caret</code> at the end of the <strong>last</strong> paragraph.</p>
+          <div class="demo">
+            <div class="demo-label">TextBlock · markdown inline + caret</div>
+            <div class="demo-stage">
+              <div class="msg-assist">
+                <div class="msg-text"><p>Three-phase plan. The hard constraint: <code>@lattice/types</code> must stay <strong>structurally identical</strong> at the type level, <em>even as the generator changes underneath</em>.<span class="caret"></span></p></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge fn">fn</span><h3>renderInline(<span class="arg">text</span>)</h3></div>
+          <p>Inline mini-markdown for chat output: recognizes <code>**bold**</code>, <code>*italic*</code> and <code>`code`</code> via a single regex and returns an array of React nodes. Keeps text readable without a full parser.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>ToolCard(<span class="arg">{ block }</span>)</h3></div>
+          <p>The turn's "evidence" — a collapsible tool-call card.</p>
+          <ul>
+            <li>Header: <code>tag</code> (Bash/Read/Edit/Grep…, becomes a lowercase CSS class), <code>title</code>, <code>meta</code> (e.g. <code>0.8s · 19/19 ✓</code>) and a rotating chevron.</li>
+            <li>Local <code>open</code> state (starts from <code>block.open</code>); clicking the header toggles it.</li>
+            <li>Body (<code>.tool-body</code>) only mounts when open: renders <code>block.body</code> in monospace with scrolling — terminal output or a diff (<code>added</code>/<code>removed</code> lines).</li>
+            <li>Role: offer verifiable detail <strong>on demand</strong>, without interrupting the reading of the prose.</li>
+          </ul>
+          <div class="demo">
+            <div class="demo-label">ToolCard · collapsed and open</div>
+            <div class="demo-stage">
+              <div class="tool">
+                <div class="tool-hd">
+                  <span class="tool-tag">Read</span>
+                  <span class="tool-title">issue_work_products.ts</span>
+                  <span class="tool-meta">143 lines · 1 file</span>
+                  <span class="tool-chev"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg></span>
+                </div>
+              </div>
+              <div class="tool open">
+                <div class="tool-hd">
+                  <span class="tool-tag">Edit</span>
+                  <span class="tool-title">verification-gate.integration.test.ts</span>
+                  <span class="tool-meta">+84 −0</span>
+                  <span class="tool-chev"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg></span>
+                </div>
+                <div class="tool-body"> 1  + import { describe, it, expect } from 'vitest';
+ 2  + import { applyPendingMigrations } from '../harness/pg';
+ 3  + import { evaluateGate } from '../verification-gate';
+ 4  +
+ 5  + describe('verification-gate enforcement', () =&gt; {</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>ArtifactCard(<span class="arg">{ artifact, onOpen }</span>)</h3></div>
+          <p>The "deliverable" embedded in the turn. A clickable card that calls <code>onOpen(artifact)</code> to open the side <code>ArtifactPanel</code> (Preview/Table/Code). Separates the final product (document, table, code, HTML) from the conversation thread — see details in <a href="#artifact">artifact-panel.jsx</a>.</p>
+          <div class="demo">
+            <div class="demo-label">ArtifactCard · by type (html / markdown / code)</div>
+            <div class="demo-stage">
+              <button class="artifact-card" type="button">
+                <span class="artifact-thumb" data-kind="html">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 6.5h.5M9.5 6.5h.5M12 6.5h.5"/></svg>
+                </span>
+                <span class="artifact-meta">
+                  <span class="artifact-title">Landing hero</span>
+                  <span class="artifact-sub"><span class="artifact-kind">Web preview</span><span class="artifact-sep">·</span><span class="mono">38 lines</span></span>
+                </span>
+                <span class="artifact-open"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg></span>
+              </button>
+              <div class="artifact-preview"><pre>&lt;section class="hero"&gt;
+  &lt;h1&gt;Ship the work, not just the chat.&lt;/h1&gt;
+  &lt;a class="cta"&gt;Start free&lt;/a&gt;
+&lt;/section&gt;</pre></div>
+              <button class="artifact-card" type="button">
+                <span class="artifact-thumb" data-kind="markdown">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M5 4h11l3 3v13a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z"/><path d="M16 4v3h3M8 12h2l1 2 1-2h2v5M8 12v5"/></svg>
+                </span>
+                <span class="artifact-meta">
+                  <span class="artifact-title">Q3 OKR draft</span>
+                  <span class="artifact-sub"><span class="artifact-kind">Markdown</span><span class="artifact-sep">·</span><span class="mono">24 lines</span></span>
+                </span>
+                <span class="artifact-open"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg></span>
+              </button>
+              <div class="artifact-preview"><pre># Q3 OKRs
+
+**O1.** Cut time-to-value for new teams
+- KR1 · median TTV &lt; 2 days
+- KR2 · W2 retention &ge; 60%</pre></div>
+              <button class="artifact-card" type="button">
+                <span class="artifact-thumb" data-kind="code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 8l-4 4 4 4M17 8l4 4-4 4M14 5l-4 14"/></svg>
+                </span>
+                <span class="artifact-meta">
+                  <span class="artifact-title">Throttled counter</span>
+                  <span class="artifact-sub"><span class="artifact-kind">Code</span><span class="artifact-sep">·</span><span class="mono">12 lines</span></span>
+                </span>
+                <span class="artifact-open"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg></span>
+              </button>
+              <div class="artifact-preview"><pre>let n = 0;
+const log = throttle(console.log, 40);
+setInterval(() =&gt; log(++n), 40);</pre></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>TasksPanel(<span class="arg">{ tasks, onClear, onRetry, onStop, tasksOpen }</span>)</h3></div>
+          <p>Background tasks drawer. Groups by status (running/queued/errors/done), with inline actions and a resize handle that persists the width.</p>
+          <ul>
+            <li><strong>Clicking a task</strong> toggles a detail block (description + Tool/Status/Duration/Error); the chevron rotates; Enter/Space toggle too</li>
+            <li><code>describeTask(t)</code> — uses <code>t.detail</code> or generates a description from tool + status</li>
+            <li>The inline buttons (stop/cancel/retry) call <code>stopPropagation</code> so they don't trigger the expansion</li>
+          </ul>
+          <div class="demo">
+            <div class="demo-label">TasksPanel · click a task to expand</div>
+            <div class="demo-stage">
+              <div class="demo-rail" style="max-width:320px">
+                <div class="task" data-status="done">
+                  <div class="task-head">
+                    <span class="task-dot"></span>
+                    <span class="task-main">
+                      <span class="task-name">Run shared verification-gate tests</span>
+                      <span class="task-sub"><span class="task-tool">Bash</span><span>0.8s</span></span>
+                    </span>
+                    <svg class="task-chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>
+                  </div>
+                  <div class="task-detail">
+                    <p class="task-desc">19/19 tests passed in the verification-gate package.</p>
+                    <div class="task-meta"><div><dt>Tool</dt><dd>Bash</dd></div><div><dt>Status</dt><dd>done</dd></div><div><dt>Duration</dt><dd>0.8s</dd></div></div>
+                  </div>
+                </div>
+                <div class="task" data-status="running">
+                  <div class="task-head">
+                    <span class="task-dot"></span>
+                    <span class="task-main">
+                      <span class="task-name">Run intake classifier and model tests</span>
+                      <span class="task-sub"><span class="task-tool">Bash</span><span>—</span></span>
+                    </span>
+                    <svg class="task-chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>
+                  </div>
+                  <div class="task-detail"><p class="task-desc">Running…</p></div>
+                </div>
+                <div class="task" data-status="error">
+                  <div class="task-head">
+                    <span class="task-dot"></span>
+                    <span class="task-main">
+                      <span class="task-name">Typecheck server package</span>
+                      <span class="task-sub"><span class="task-tool">Bash</span><span>exit 2</span></span>
+                    </span>
+                    <svg class="task-chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>
+                  </div>
+                  <div class="task-detail"><p class="task-desc">tsc failed with exit 2 — divergent types in <code>issue.ts</code>.</p></div>
+                </div>
+                <div class="task" data-status="queued">
+                  <div class="task-head">
+                    <span class="task-dot"></span>
+                    <span class="task-main">
+                      <span class="task-name">Run planner unit tests</span>
+                      <span class="task-sub"><span class="task-tool">Bash</span><span>queued</span></span>
+                    </span>
+                    <svg class="task-chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>
+                  </div>
+                  <div class="task-detail"><p class="task-desc">Waiting for the previous jobs to finish.</p></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="demo panelhost">
+            <div class="demo-label">Background tasks · full panel (click a task)</div>
+            <div class="demo-stage">
+              <div class="demo-panel">
+                <div class="tasks">
+                  <div class="tasks-hd"><h3>Background tasks</h3><button class="clear" type="button">Clear</button></div>
+                  <div class="tasks-list">
+                    <div class="tasks-section"><span>Running</span><span class="line"></span><span class="count">01</span></div>
+                    <div class="task" data-status="running">
+                      <div class="task-head">
+                        <span class="task-dot"></span>
+                        <span class="task-main">
+                          <span class="task-name">Run intake classifier and model tests</span>
+                          <span class="task-sub"><span class="task-tool">Bash</span><span>running…</span><button class="task-stop" type="button"><svg viewBox="0 0 16 16" fill="currentColor"><rect x="3" y="3" width="10" height="10" rx="1.5"/></svg>stop</button></span>
+                        </span>
+                        <svg class="task-chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>
+                      </div>
+                      <div class="task-detail"><p class="task-desc">Intake classifier + model tests running.</p><div class="task-meta"><div><dt>Tool</dt><dd>Bash</dd></div><div><dt>Status</dt><dd>Running</dd></div></div></div>
+                    </div>
+
+                    <div class="tasks-section"><span>Queued</span><span class="line"></span><span class="count">01</span></div>
+                    <div class="task" data-status="queued">
+                      <div class="task-head">
+                        <span class="task-dot"></span>
+                        <span class="task-main">
+                          <span class="task-name">Run planner unit tests</span>
+                          <span class="task-sub"><span class="task-tool">Bash</span><span>queued</span><button class="task-cancel" type="button">cancel</button></span>
+                        </span>
+                        <svg class="task-chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>
+                      </div>
+                      <div class="task-detail"><p class="task-desc">Waiting for the previous jobs to finish.</p></div>
+                    </div>
+
+                    <div class="tasks-section"><span>Errors</span><span class="line"></span><span class="count">01</span></div>
+                    <div class="task" data-status="error">
+                      <div class="task-head">
+                        <span class="task-dot"></span>
+                        <span class="task-main">
+                          <span class="task-name">Typecheck server package</span>
+                          <span class="task-sub"><span class="task-tool">Bash</span><span>error · exit 2</span><button class="retry" type="button">retry</button></span>
+                        </span>
+                        <svg class="task-chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>
+                      </div>
+                      <div class="task-detail"><p class="task-desc">tsc failed with exit 2 — divergent types in <code>issue.ts</code>.</p><div class="task-meta"><div><dt>Tool</dt><dd>Bash</dd></div><div><dt>Status</dt><dd>Error</dd></div><div><dt>Error</dt><dd>exit 2</dd></div></div></div>
+                    </div>
+
+                    <div class="tasks-section"><span>Done</span><span class="line"></span><span class="count">05</span></div>
+                    <div class="task" data-status="done">
+                      <div class="task-head">
+                        <span class="task-dot"></span>
+                        <span class="task-main"><span class="task-name">Run enforcement test from server dir</span><span class="task-sub"><span class="task-tool">Bash</span><span>done · 0.6s</span></span></span>
+                        <svg class="task-chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>
+                      </div>
+                      <div class="task-detail"><p class="task-desc">Shell command completed in 0.6s.</p><div class="task-meta"><div><dt>Tool</dt><dd>Bash</dd></div><div><dt>Status</dt><dd>Done</dd></div><div><dt>Duration</dt><dd>0.6s</dd></div></div></div>
+                    </div>
+                    <div class="task" data-status="done">
+                      <div class="task-head">
+                        <span class="task-dot"></span>
+                        <span class="task-main"><span class="task-name">Run verification-gate enforcement integration</span><span class="task-sub"><span class="task-tool">Bash</span><span>done · 1.2s</span></span></span>
+                        <svg class="task-chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>
+                      </div>
+                      <div class="task-detail"><p class="task-desc">Shell command — "Run verification-gate enforcement integration" completed in 1.2s.</p><div class="task-meta"><div><dt>Tool</dt><dd>Bash</dd></div><div><dt>Status</dt><dd>Done</dd></div><div><dt>Duration</dt><dd>1.2s</dd></div></div></div>
+                    </div>
+                    <div class="task" data-status="done">
+                      <div class="task-head">
+                        <span class="task-dot"></span>
+                        <span class="task-main"><span class="task-name">Run issues-service integration (embedded PG)</span><span class="task-sub"><span class="task-tool">Bash</span><span>done · 2.8s</span></span></span>
+                        <svg class="task-chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>
+                      </div>
+                      <div class="task-detail"><p class="task-desc">issues-service integration with embedded Postgres, 2.8s.</p></div>
+                    </div>
+                    <div class="task" data-status="done">
+                      <div class="task-head">
+                        <span class="task-dot"></span>
+                        <span class="task-main"><span class="task-name">Run shared verification-gate tests</span><span class="task-sub"><span class="task-tool">Bash</span><span>done · 0.8s</span></span></span>
+                        <svg class="task-chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>
+                      </div>
+                      <div class="task-detail"><p class="task-desc">19/19 tests passed, 0.8s.</p></div>
+                    </div>
+                    <div class="task" data-status="done">
+                      <div class="task-head">
+                        <span class="task-dot"></span>
+                        <span class="task-main"><span class="task-name">Check skills / global existence and references</span><span class="task-sub"><span class="task-tool">Grep</span><span>done · 0.2s</span></span></span>
+                        <svg class="task-chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>
+                      </div>
+                      <div class="task-detail"><p class="task-desc">Skills and global-reference sweep, 0.2s.</p></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>EmptyHome(<span class="arg">...</span>)</h3></div>
+          <p>Initial state when there's no active conversation: greeting + centered composer + suggestion chips.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>NewProjectModal(<span class="arg">{ open, onClose, onCreate, t }</span>)</h3></div>
+          <p>Project creation modal.</p>
+          <ul>
+            <li>Title <code>np.title</code>, subtitle <code>np.subtitle</code></li>
+            <li>Fields: <strong>Name</strong> (required) and <strong>Description</strong></li>
+            <li><code>Enter</code> in any field submits; the Create button is disabled without a name</li>
+            <li><code>onCreate({ name, desc })</code> → creates it in <code>PROJECT_META</code></li>
+          </ul>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge fn">fn</span><h3>Project functions <span class="arg">(inside App)</span></h3></div>
+          <table class="tbl">
+            <thead><tr><th>Function</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>createProject({name,desc})</code></td><td>Generates a unique slug id, writes to <code>PROJECT_META</code>, navigates to the detail</td></tr>
+              <tr><td><code>renameProject(id, name)</code></td><td>Updates <code>PROJECT_META[id].name</code></td></tr>
+              <tr><td><code>updateProjectDesc(id, desc)</code></td><td>Updates the description</td></tr>
+              <tr><td><code>saveProjectInstructions(id, val)</code></td><td>Persists the project's system prompt</td></tr>
+              <tr><td><code>updateProjectSettings(id, patch)</code></td><td>Merges settings (model, auto-archive, share)</td></tr>
+              <tr><td><code>newChatInProject(id)</code></td><td>Creates a chat scoped to the project and opens it</td></tr>
+              <tr><td><code>requestDeleteProject(id)</code></td><td>Opens the confirm; on confirm calls <code>deleteProjectConfirmed</code></td></tr>
+              <tr><td><code>deleteProjectConfirmed(id)</code></td><td>Removes the project + all its chats</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge fn">fn</span><h3>Conversation functions <span class="arg">(inside App)</span></h3></div>
+          <table class="tbl">
+            <thead><tr><th>Function</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>togglePin(id)</code></td><td>Pin/unpin (and unarchive)</td></tr>
+              <tr><td><code>archiveConvo(id)</code></td><td>Archive/unarchive</td></tr>
+              <tr><td><code>deleteConvo(id)</code></td><td>Removes; if it was active, selects the next one</td></tr>
+              <tr><td><code>requestDeleteConvo(id)</code></td><td>Opens the chat-deletion confirm</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge data">data</span><h3>INITIAL_APP_SETTINGS</h3></div>
+          <p>Defaults: <code>language</code>, <code>soundEnabled</code>, <code>notificationsEnabled</code>, <code>autoSave</code>, <code>model</code>, <code>creativity</code>, <code>maxTokens</code>, <code>showTools</code>, <code>dark</code>, <code>compact</code>, <code>accent</code>.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge data">data</span><h3>initialConvos</h3></div>
+          <p>Seed conversations that populate the sidebar and the projects.</p>
+        </div>
+      </section>
+
+      <hr class="rule" />
+
+      <!-- 04 composer -->
+      <section class="filesec" id="composer">
+        <div class="filesec-hd"><span class="num">04</span><h2>composer.jsx</h2></div>
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>Composer(<span class="arg">{ value, onChange, onSend, disabled, tokens, model, onPickModel, rotatePlaceholder, staticPlaceholder }</span>)</h3></div>
+          <p>Main input box.</p>
+          <ul>
+            <li><strong>Autosize</strong> — grows from 44px to 220px with the text</li>
+            <li><strong>Placeholder</strong> — <code>staticPlaceholder</code> (default = <code>t('composer.placeholder.reply')</code>); <code>rotatePlaceholder</code> enables rotating suggestions in the empty state</li>
+            <li><strong>Mic</strong> — uses <code>webkitSpeechRecognition</code>, preserving the already-typed text; degrades gracefully if the API is missing</li>
+            <li><strong>Attachments</strong> — file picker with per-type preview (image/pdf/doc/file) and blob-URL cleanup</li>
+            <li><strong>Toggles</strong> — Think and Deep Search (independent)</li>
+            <li><strong>Model picker</strong> + token counter</li>
+            <li><code>onSend()</code> on Enter; Shift+Enter adds a newline</li>
+          </ul>
+          <div class="demo">
+            <div class="demo-label">Composer · type to enable send</div>
+            <div class="demo-stage">
+              <div class="composer">
+                <textarea rows="1" placeholder="Ask Lattice anything…"></textarea>
+                <div class="comp-foot">
+                  <button class="comp-chip" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v10M3 8h10"/></svg> Attach</button>
+                  <button class="comp-chip" type="button">Think</button>
+                  <span class="comp-spacer"></span>
+                  <span class="comp-tokens">0 tok</span>
+                  <button class="comp-chip model" type="button">lattice-4.1</button>
+                  <button class="send disabled" type="button" aria-label="Send"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V3M4 7l4-4 4 4"/></svg></button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <hr class="rule" />
+
+      <!-- 05 views -->
+      <section class="filesec" id="views">
+        <div class="filesec-hd"><span class="num">05</span><h2>views.jsx</h2></div>
+        <p class="filesec-blurb">Full-screen views mounted in <code>&lt;main&gt;</code> based on <code>view.kind</code>.</p>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>ViewHeader(<span class="arg">{ icon, title, subtitle, actions, children }</span>)</h3></div>
+          <p>Standard view header. <code>actions</code> is pinned to the right (e.g. a Back button). <code>children</code> is usually <code>ViewTabs</code>.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>ViewTabs(<span class="arg">{ tabs, active, onChange }</span>)</h3></div>
+          <p>Horizontal tabs with an optional counter (<code>tab.count</code>). They scroll on narrow screens.</p>
+          <div class="demo">
+            <div class="demo-label">ViewTabs · click to switch</div>
+            <div class="demo-stage">
+              <div class="view-tabs">
+                <button class="view-tab is-active" type="button">Chats <span class="view-tab-count">12</span></button>
+                <button class="view-tab" type="button">Knowledge <span class="view-tab-count">5</span></button>
+                <button class="view-tab" type="button">Instructions</button>
+                <button class="view-tab" type="button">Settings</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>ProjectsView(<span class="arg">{ convos, onOpenProject, onNewProject }</span>)</h3></div>
+          <p>Grid of project cards (name + description + stats). "New project" button in the header.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>ProjectDetailView(<span class="arg">{ projectId, convos, onBack, onOpenChat, onOpenFile, onRename, onUpdateDesc, onNewChat, onSaveInstructions, onUpdateSettings, onDelete }</span>)</h3></div>
+          <p>Project detail with tabs:</p>
+          <ul>
+            <li><strong>Chats</strong> — list filtered by <code>project.root</code>; empty state with "+ New chat in {name}"</li>
+            <li><strong>Knowledge</strong> — renders <code>KnowledgeInline</code></li>
+            <li><strong>Instructions</strong> — textarea with auto-save (reads <code>PROJECT_META[id].instructions</code> or default)</li>
+            <li><strong>Settings</strong> — model/auto-archive selects, a share switch, <strong>Delete project</strong></li>
+            <li>Title and description use <code>InlineEditable</code></li>
+          </ul>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>KnowledgeInline(<span class="arg">{ projectId, onOpenFile, allowUpload }</span>)</h3></div>
+          <p>Project file management.</p>
+          <ul>
+            <li><strong>Upload</strong>: drag-drop onto the dashed zone or the "browse" button (file picker)</li>
+            <li>Each file enters as <code>indexing</code> → <code>indexed</code> (simulated timeout)</li>
+            <li><strong>Re-sync</strong> per file (goes back to <code>indexing</code> and re-indexes)</li>
+            <li><strong>Delete</strong> per file via <code>useConfirm()</code> (unified modal)</li>
+            <li>helpers: <code>knKindFromName(name)</code> (maps extension → type), <code>knFormatSize(bytes)</code> (B/KB/MB)</li>
+          </ul>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>KnowledgeView(<span class="arg">{ onOpenFile }</span>)</h3></div>
+          <p>Global view: every file across all projects, with search and per-row delete (also via <code>useConfirm()</code>).</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>HistoryView(<span class="arg">{ convos, onOpenChat, onArchive, onDelete, archivedOnly }</span>)</h3></div>
+          <p>History/archive table.</p>
+          <ul>
+            <li>Filters: search, project, time range</li>
+            <li>Multi-select with <strong>bulk archive/delete</strong> (delete goes through confirm)</li>
+            <li>Per-row actions: Archive/Restore + Delete (confirm)</li>
+            <li><code>archivedOnly</code> switches between History and Archive</li>
+          </ul>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>FileViewerPanel(<span class="arg">{ file, onClose }</span>)</h3></div>
+          <p>Side panel for file preview.</p>
+          <ul>
+            <li>Header with name, size, date and inline status (indexed/indexing)</li>
+            <li><strong>Download</strong> — generates a real file (blob) with the metadata</li>
+            <li><strong>Re-sync</strong> — re-indexes the file</li>
+            <li><strong>Close</strong> — button or <code>Esc</code></li>
+            <li><strong>Resize handle</strong> on the left edge (380–1100px, double-click resets to 580px; persisted in <code>localStorage</code>)</li>
+          </ul>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge data">data</span><h3>PROJECT_META</h3></div>
+          <p>Map <code>id → { name, desc, color, icon, instructions?, defaultModel?, autoArchive?, shared? }</code>. Source of truth for projects.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge data">data</span><h3>PROJECT_KNOWLEDGE</h3></div>
+          <p>Map <code>projectId → [ { id, name, kind, size, updated, status } ]</code>. Files per project.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge fn">fn</span><h3>fileIcon(<span class="arg">kind</span>)</h3></div>
+          <p>Returns the icon SVG for the given type (<code>pdf</code>, <code>docx</code>, <code>md</code>, <code>txt</code>, <code>csv</code>, <code>img</code>).</p>
+        </div>
+      </section>
+
+      <hr class="rule" />
+
+      <!-- 06 modals -->
+      <section class="filesec" id="modals">
+        <div class="filesec-hd"><span class="num">06</span><h2>modals.jsx</h2></div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>MyAccountView / MyAccountModal</h3></div>
+          <p>Account: avatar, editable name, plan badge, inline fields (email, workspace, timezone, model), usage meter, billing and sign out. View and Modal share <code>MyAccountBody</code>.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>SettingsView / SettingsModal</h3></div>
+          <p>Settings with a side nav + pane. Both use <code>SettingsBody</code>.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>SettingsBody(<span class="arg">{ settings, onChange, tab, setTab }</span>)</h3></div>
+          <p>Settings content, split by <code>SETTINGS_TABS</code>:</p>
+          <table class="tbl">
+            <thead><tr><th>Tab</th><th>Controls</th></tr></thead>
+            <tbody>
+              <tr><td>General</td><td><strong>Language</strong> (en/pt/es/fr), sounds, notifications, auto-save</td></tr>
+              <tr><td>Model</td><td>default model, creativity, max tokens, show tool calls</td></tr>
+              <tr><td>Appearance</td><td>dark mode, compact density, accent</td></tr>
+              <tr><td>Audit log</td><td>event table</td></tr>
+              <tr><td>Shortcuts</td><td>shortcut list</td></tr>
+              <tr><td>About</td><td>version/info</td></tr>
+            </tbody>
+          </table>
+          <p>Changing <strong>Language</strong> calls <code>onChange({ language })</code>, which updates <code>appSettings</code> and re-renders the whole app translated.</p>
+          <div class="demo">
+            <div class="demo-label">Switch · click to toggle</div>
+            <div class="demo-stage">
+              <div class="demo-row" style="justify-content:space-between;max-width:320px;width:100%"><span>Notifications</span><button class="switch on" type="button" aria-label="toggle"><span class="thumb"></span></button></div>
+              <div class="demo-row" style="justify-content:space-between;max-width:320px;width:100%"><span>Compact mode</span><button class="switch" type="button" aria-label="toggle"><span class="thumb"></span></button></div>
+              <div class="demo-row" style="justify-content:space-between;max-width:320px;width:100%"><span>Show tool calls</span><button class="switch on" type="button" aria-label="toggle"><span class="thumb"></span></button></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge data">data</span><h3>SETTINGS_TABS</h3></div>
+          <p>List of <code>{ id, tk }</code> where <code>tk</code> is the label's i18n key.</p>
+        </div>
+      </section>
+
+      <hr class="rule" />
+
+      <!-- 07 artifact-panel -->
+      <section class="filesec" id="artifact">
+        <div class="filesec-hd"><span class="num">07</span><h2>artifact-panel.jsx</h2></div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>ArtifactCard(<span class="arg">{ artifact, onOpen }</span>)</h3></div>
+          <p>Clickable card inside a message; opens the panel.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>ArtifactPanel(<span class="arg">{ artifact, onClose }</span>)</h3></div>
+          <p>Side panel with <strong>Preview / Table / Code</strong> tabs (dynamic):</p>
+          <ul>
+            <li>HTML → iframe sandbox</li>
+            <li>Markdown → render rico (<code>renderMarkdown</code>)</li>
+            <li>Code → basic highlight (<code>highlightCode</code>)</li>
+            <li><strong>Table</strong> → appears when there's tabular data; renders <code>TableView</code></li>
+            <li>Copy (with check), Download, Close (Esc), persistent resize handle</li>
+            <li>Footer with char/line count</li>
+            <li>The initial tab is chosen by <code>kind</code>: <code>table</code>/<code>csv</code> → Table; HTML/MD → Preview; otherwise Table (if any) or Code</li>
+          </ul>
+
+          <div class="rule-callout">
+            <span class="rule-tag">rule</span>
+            <div>
+              <p><strong>Structured data output goes to the right-hand panel, not the chat body.</strong> Browsable results open in a dedicated <code>ArtifactPanel</code> — pick the tab by format: <strong>Web preview</strong> for renderable HTML, <strong>Markdown</strong> for documents, <strong>Table</strong> for CSV/tabular data (with Copy/Download CSV), <strong>Code</strong> for source. The process (tasks, commands) goes to <strong>Background tasks</strong>.</p>
+            </div>
+          </div>
+
+          <div class="demo panelhost">
+            <div class="demo-label">ArtifactPanel · Web preview (html)</div>
+            <div class="demo-stage">
+              <div class="demo-panel">
+                <div class="art-panel">
+                  <div class="art-hd">
+                    <div class="art-hd-meta"><span class="art-hd-title">Landing hero</span><span class="art-hd-sub">html</span></div>
+                    <div class="art-hd-actions">
+                      <div class="art-tabs"><button class="art-tab is-active" type="button">Preview</button><button class="art-tab" type="button">Code</button></div>
+                      <button class="icon-btn" type="button" aria-label="Copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5a1 1 0 00-1-1H3.5a1 1 0 00-1 1V10a1 1 0 001 1H5"/></svg></button>
+                      <button class="icon-btn" type="button" aria-label="Download"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8M5 7l3 3 3-3"/><path d="M3 13h10"/></svg></button>
+                      <button class="icon-btn" type="button" aria-label="Close"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+                    </div>
+                  </div>
+                  <div class="art-body">
+                    <iframe class="art-iframe" title="Landing hero" srcdoc="&lt;!doctype html&gt;&lt;html&gt;&lt;head&gt;&lt;style&gt;html,body{height:100%;margin:0}body{font-family:system-ui,-apple-system,sans-serif;display:grid;place-items:center;text-align:center;background:#fff;color:#0f1115;padding:24px}.eyebrow{font:600 12px/1 ui-monospace,monospace;letter-spacing:.12em;color:#2563eb;margin-bottom:18px}h1{font-size:44px;line-height:1.05;letter-spacing:-.02em;margin:0 0 16px}p{font-size:17px;color:#4b5563;max-width:34ch;margin:0 auto 26px}.row{display:flex;gap:10px;justify-content:center}.cta{padding:11px 18px;border-radius:9px;font-weight:600;font-size:14px}.cta.primary{background:#0f1115;color:#fff}.cta.ghost{border:1px solid #d1d5db;color:#0f1115}&lt;/style&gt;&lt;/head&gt;&lt;body&gt;&lt;div&gt;&lt;div class='eyebrow'&gt;LATTICE · V0.4&lt;/div&gt;&lt;h1&gt;Ship the work,&lt;br&gt;not just the chat.&lt;/h1&gt;&lt;p&gt;A quiet workspace where careful thought meets keyboard speed.&lt;/p&gt;&lt;div class='row'&gt;&lt;span class='cta primary'&gt;Start free trial&lt;/span&gt;&lt;span class='cta ghost'&gt;Watch demo&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;&lt;/body&gt;&lt;/html&gt;"></iframe>
+                  </div>
+                  <div class="art-foot"><span>612 chars · 26 lines</span><span>html</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="demo panelhost">
+            <div class="demo-label">ArtifactPanel · Markdown</div>
+            <div class="demo-stage">
+              <div class="demo-panel">
+                <div class="art-panel">
+                  <div class="art-hd">
+                    <div class="art-hd-meta"><span class="art-hd-title">Q3 OKR draft</span><span class="art-hd-sub">markdown</span></div>
+                    <div class="art-hd-actions">
+                      <div class="art-tabs"><button class="art-tab is-active" type="button">Preview</button><button class="art-tab" type="button">Code</button></div>
+                      <button class="icon-btn" type="button" aria-label="Copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5a1 1 0 00-1-1H3.5a1 1 0 00-1 1V10a1 1 0 001 1H5"/></svg></button>
+                      <button class="icon-btn" type="button" aria-label="Download"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8M5 7l3 3 3-3"/><path d="M3 13h10"/></svg></button>
+                      <button class="icon-btn" type="button" aria-label="Close"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+                    </div>
+                  </div>
+                  <div class="art-body">
+                    <div class="art-md">
+                      <h1>Q3 Objectives</h1>
+                      <p>Three objectives focused on reducing time-to-value for new teams.</p>
+                      <h2>O1 — Halve median time-to-first-output</h2>
+                      <p><strong>KR1.</strong> New signups produce a useful agent output within 8 minutes (p50).</p>
+                      <p><strong>KR2.</strong> First-session completion rate above <strong>62%</strong> (currently 41%).</p>
+                      <p><strong>KR3.</strong> Onboarding drop-off below <strong>15%</strong> at the "first prompt" step.</p>
+                      <h2>O2 — Day-30 power-user parity</h2>
+                      <p><strong>KR1.</strong> Day-30 actives use <em>Projects</em> and <em>Background tasks</em> at parity with 90-day actives.</p>
+                      <p><strong>KR2.</strong> Median tasks-per-session ≥ 3 by day 14.</p>
+                      <blockquote>Notes: assume TTV measured in days from signup to first useful output.</blockquote>
+                    </div>
+                  </div>
+                  <div class="art-foot"><span>968 chars · 21 lines</span><span>markdown</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="demo panelhost">
+            <div class="demo-label">ArtifactPanel · Table (csv)</div>
+            <div class="demo-stage">
+              <div class="demo-panel">
+                <div class="art-panel">
+                  <div class="art-hd">
+                    <div class="art-hd-meta"><span class="art-hd-title">Verification matrix</span><span class="art-hd-sub">csv</span></div>
+                    <div class="art-hd-actions">
+                      <div class="art-tabs"><button class="art-tab is-active" type="button">Table</button><button class="art-tab" type="button">Raw</button></div>
+                      <button class="icon-btn" type="button" aria-label="Copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5a1 1 0 00-1-1H3.5a1 1 0 00-1 1V10a1 1 0 001 1H5"/></svg></button>
+                      <button class="icon-btn" type="button" aria-label="Close"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+                    </div>
+                  </div>
+                  <div class="art-body">
+                    <div class="art-tableview">
+                      <div class="art-table-toolbar">
+                        <span class="art-table-count">5 rows · 6 cols</span>
+                        <span class="art-table-spacer"></span>
+                        <button class="btn btn-sm" type="button">Copy CSV</button>
+                        <button class="btn btn-sm" type="button">Download CSV</button>
+                      </div>
+                      <div class="art-table-scroll">
+                        <table class="art-table">
+                          <thead><tr><th class="art-table-rownum"></th><th>suite</th><th class="num">cases</th><th class="num">passing</th><th class="num">failing</th><th class="num">coverage</th><th>duration</th></tr></thead>
+                          <tbody>
+                            <tr><td class="art-table-rownum">1</td><td>work_products</td><td class="num">42</td><td class="num">42</td><td class="num">0</td><td class="num">94%</td><td>0.8s</td></tr>
+                            <tr><td class="art-table-rownum">2</td><td>issue_approvals</td><td class="num">31</td><td class="num">31</td><td class="num">0</td><td class="num">91%</td><td>0.6s</td></tr>
+                            <tr><td class="art-table-rownum">3</td><td>tool_governance</td><td class="num">57</td><td class="num">55</td><td class="num">2</td><td class="num">88%</td><td>1.2s</td></tr>
+                            <tr><td class="art-table-rownum">4</td><td>audit_trail</td><td class="num">19</td><td class="num">19</td><td class="num">0</td><td class="num">97%</td><td>0.3s</td></tr>
+                            <tr><td class="art-table-rownum">5</td><td>permission_gate</td><td class="num">64</td><td class="num">64</td><td class="num">0</td><td class="num">93%</td><td>1.1s</td></tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="art-foot"><span>5 rows · 6 cols</span><span>csv</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="demo panelhost">
+            <div class="demo-label">ArtifactPanel · Code (javascript)</div>
+            <div class="demo-stage">
+              <div class="demo-panel">
+                <div class="art-panel">
+                  <div class="art-hd">
+                    <div class="art-hd-meta"><span class="art-hd-title">Throttled counter</span><span class="art-hd-sub">javascript</span></div>
+                    <div class="art-hd-actions">
+                      <button class="icon-btn" type="button" aria-label="Copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5a1 1 0 00-1-1H3.5a1 1 0 00-1 1V10a1 1 0 001 1H5"/></svg></button>
+                      <button class="icon-btn" type="button" aria-label="Download"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8M5 7l3 3 3-3"/><path d="M3 13h10"/></svg></button>
+                      <button class="icon-btn" type="button" aria-label="Close"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+                    </div>
+                  </div>
+                  <div class="art-body">
+<pre class="art-code"><span class="tk-comment">// Tiny throttled counter — leading + trailing edge.</span>
+<span class="tk-kw">function</span> throttle(fn, wait) {
+  <span class="tk-kw">let</span> last = <span class="tk-num">0</span>, t = <span class="tk-kw">null</span>, lastArgs;
+  <span class="tk-kw">return</span> <span class="tk-kw">function</span> (...args) {
+    <span class="tk-kw">const</span> now = Date.now();
+    <span class="tk-kw">const</span> remaining = wait - (now - last);
+    lastArgs = args;
+    <span class="tk-kw">if</span> (remaining &lt;= <span class="tk-num">0</span>) {
+      <span class="tk-kw">if</span> (t) { clearTimeout(t); t = <span class="tk-kw">null</span>; }
+      last = now;
+      fn.apply(<span class="tk-kw">this</span>, args);
+    } <span class="tk-kw">else</span> <span class="tk-kw">if</span> (!t) {
+      t = setTimeout(() =&gt; {
+        last = Date.now();
+        t = <span class="tk-kw">null</span>;
+        fn.apply(<span class="tk-kw">this</span>, lastArgs);
+      }, remaining);
+    }
+  };
+}
+
+<span class="tk-kw">const</span> log = throttle((n) =&gt; console.log(<span class="tk-string">'tick'</span>, n), <span class="tk-num">250</span>);
+<span class="tk-kw">let</span> n = <span class="tk-num">0</span>; setInterval(() =&gt; log(++n), <span class="tk-num">40</span>);</pre>
+                  </div>
+                  <div class="art-foot"><span>622 chars · 23 lines</span><span>javascript</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>TableView(<span class="arg">{ tables }</span>)</h3></div>
+          <p>Renders extracted tables + export.</p>
+          <ul>
+            <li><code>tables</code> — array of <code>{ name, headers, rows }</code></li>
+            <li>Row numbering, sticky header, numeric columns right-aligned</li>
+            <li><strong>Copy CSV</strong> / <strong>Download CSV</strong> in the toolbar</li>
+            <li>Multiple tables become selectable chips</li>
+          </ul>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge fn">fn</span><h3>extractTables(<span class="arg">content, kind, language</span>)</h3></div>
+          <p>Detects and extracts tables from three sources:</p>
+          <ul>
+            <li><strong>HTML</strong> → <code>DOMParser</code> reads each <code>&lt;table&gt;</code> (uses <code>&lt;thead&gt;</code>/<code>&lt;th&gt;</code> or the 1st row as header)</li>
+            <li><strong>Markdown</strong> → <code>| a | b |</code> blocks with a <code>|---|---|</code> separator</li>
+            <li><strong>CSV / <code>kind: "table"</code></strong> → parse with escaped quotes and commas</li>
+          </ul>
+          <p>Returns <code>[{ name, headers, rows }]</code>.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge fn">fn</span><h3>isNumericColumn / tableToCsv / splitCsvLine / splitMdRow</h3></div>
+          <p>Table helpers: numeric-column detection, CSV serialization (escapes <code>, " \n</code>) and CSV/Markdown row parsers.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge fn">fn</span><h3>renderMarkdown(<span class="arg">text</span>) / highlightCode(<span class="arg">code, lang</span>)</h3></div>
+          <p>Rendering helpers. <code>renderMarkdown</code> covers headings, lists, code, bold/italic, links. <code>highlightCode</code> applies simple token highlighting.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge data">data</span><h3>ARTIFACTS_SAMPLE</h3></div>
+          <p>Sample artifacts, referenced by <code>{ kind: "artifact", artifactId }</code> in messages. Includes table demos: <strong>art-testmatrix</strong> (CSV) and <strong>art-adoption</strong> (Markdown with a table).</p>
+        </div>
+      </section>
+
+      <hr class="rule" />
+
+      <!-- 08 extras -->
+      <section class="filesec" id="extras">
+        <div class="filesec-hd"><span class="num">08</span><h2>extras.jsx</h2></div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>Menu(<span class="arg">{ open, onClose, anchorRect, items }</span>)</h3></div>
+          <p>Context dropdown positioned by <code>anchorRect</code>. <code>items</code> accepts <code>{ label, icon, kbd, onClick, danger, divider, section }</code>. Auto-flips upward when it doesn't fit below.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>SearchPalette(<span class="arg">{ open, onClose, ... }</span>)</h3></div>
+          <p>Search overlay (⌘K) over conversations and commands, with backdrop blur.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>MsgActions(<span class="arg">...</span>)</h3></div>
+          <p>Action bar that appears on hover of an assistant message: Copy, Regenerate, Like, Dislike.</p>
+          <div class="demo">
+            <div class="demo-label">MsgActions · post-turn bar</div>
+            <div class="demo-stage">
+              <div class="msg-assist">
+                <div class="msg-actions">
+                  <button class="msg-act" type="button" aria-label="Copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5a1 1 0 00-1-1H3.5a1 1 0 00-1 1V10a1 1 0 001 1H5"/></svg></button>
+                  <button class="msg-act" type="button" aria-label="Regenerate"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 11-1.5-3.5"/><path d="M13 2v3h-3"/></svg></button>
+                  <button class="msg-act" type="button" aria-label="Good response"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M6 7l2.5-4c.4 0 1 .4 1 1.5L9 7h3.5a1 1 0 011 1.2l-.8 4a1.5 1.5 0 01-1.5 1.3H6"/><rect x="3" y="7" width="3" height="6.5" rx=".5"/></svg></button>
+                  <button class="msg-act" type="button" aria-label="Bad response"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M10 9l-2.5 4c-.4 0-1-.4-1-1.5L7 9H3.5a1 1 0 01-1-1.2l.8-4a1.5 1.5 0 011.5-1.3H10"/><rect x="10" y="2.5" width="3" height="6.5" rx=".5"/></svg></button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <blockquote><p><code>ProjectsModal</code> / <code>KnowledgeModal</code> here are <strong>legacy</strong> — the app uses the versions in <code>views.jsx</code>.</p></blockquote>
+      </section>
+
+      <hr class="rule" />
+
+      <!-- 09 connectors -->
+      <section class="filesec" id="connectors">
+        <div class="filesec-hd"><span class="num">09</span><h2>connectors.jsx</h2></div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>ConnectorsView</h3></div>
+          <p>Grid of 14 connectors with logo, status pill, account and last sync.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>ConnectorModal</h3></div>
+          <p>OAuth mock: <code>idle → consent → connecting (spinner) → success</code>. When connected, shows permissions (checkboxes) + Disconnect.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge data">data</span><h3>CONNECTORS / ConnLogo / INITIAL_CONNECTOR_STATE</h3></div>
+          <p>All three must stay consistent (id present in all three). <code>CONNECTORS</code> = metadata, <code>ConnLogo</code> = SVGs, <code>INITIAL_CONNECTOR_STATE</code> = initial state.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge data">data</span><h3>AUDIT_LOG</h3></div>
+          <p>Events shown in the Audit log tab of Settings.</p>
+        </div>
+      </section>
+
+      <hr class="rule" />
+
+      <!-- 10 skills -->
+      <section class="filesec" id="skills">
+        <div class="filesec-hd"><span class="num">10</span><h2>skills.jsx</h2></div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge comp">comp</span><h3>SkillsView</h3></div>
+          <p>12 skills with icon, badge (<code>core</code>/<code>beta</code>), switch, description, Configure + Docs. Filters by search and category; header with <code>X of N enabled</code>.</p>
+        </div>
+
+        <div class="entry">
+          <div class="entry-hd"><span class="kbadge data">data</span><h3>SKILL_LIST / SkillIcon</h3></div>
+          <p>Skill registry and icon map (SVG path by id).</p>
+        </div>
+      </section>
+
+      <hr class="rule" />
+
+      <!-- 11 estado -->
+      <section class="filesec" id="estado">
+        <div class="filesec-hd"><span class="num">11</span><h2 style="font-family:var(--font-sans)">Root state map</h2></div>
+        <p class="filesec-blurb">Main <code>useState</code> in <code>App</code>:</p>
+        <table class="tbl">
+          <thead><tr><th>State</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><code>convos</code> / <code>activeId</code></td><td>Conversation list and the active one</td></tr>
+            <tr><td><code>view</code></td><td>Current view (<code>{ kind, projectId? }</code>)</td></tr>
+            <tr><td><code>draft</code></td><td>Composer text</td></tr>
+            <tr><td><code>streaming</code></td><td>Response in progress</td></tr>
+            <tr><td><code>appSettings</code></td><td>Global settings (includes <code>language</code>, <code>accent</code>, <code>dark</code>, …)</td></tr>
+            <tr><td><code>sidebarOpen</code> / <code>tasksOpen</code></td><td>Panel visibility</td></tr>
+            <tr><td><code>artifactId</code> / <code>filePreview</code></td><td>Side panel (artifact or file)</td></tr>
+            <tr><td><code>confirmDialog</code></td><td>Active confirmation dialog (via ConfirmContext)</td></tr>
+            <tr><td><code>newProjectOpen</code></td><td>New project modal</td></tr>
+            <tr><td><code>settingsOpen</code> / <code>accountOpen</code> / <code>searchOpen</code></td><td>Modals/overlays</td></tr>
+            <tr><td><code>convoMenu</code> / <code>accountMenuRect</code> / <code>modelMenuRect</code></td><td>Context-menu positions</td></tr>
+            <tr><td><code>editingId</code></td><td>Conversation being renamed inline</td></tr>
+            <tr><td><code>projectsVersion</code></td><td>Counter to force a re-render when <code>PROJECT_META</code>/<code>PROJECT_KNOWLEDGE</code> change</td></tr>
+          </tbody>
+        </table>
+        <blockquote><p><code>PROJECT_META</code> and <code>PROJECT_KNOWLEDGE</code> are <strong>mutable objects</strong> outside React. To reflect changes, mutate them and increment <code>projectsVersion</code> (or a local <code>version</code> in the component).</p></blockquote>
+      </section>
+
+      <hr class="rule" />
+
+      <!-- 12 fluxos -->
+      <section class="filesec" id="fluxos">
+        <div class="filesec-hd"><span class="num">12</span><h2 style="font-family:var(--font-sans)">User flows</h2></div>
+
+        <div class="entry">
+          <div class="entry-hd"><h3 style="font-family:var(--font-sans);font-size:16px">Create a project</h3></div>
+          <p>Projects → <strong>New project</strong> → fill in Name/Description → Create → writes to <code>PROJECT_META</code>, navigates to the detail.</p>
+        </div>
+        <div class="entry">
+          <div class="entry-hd"><h3 style="font-family:var(--font-sans);font-size:16px">Add knowledge</h3></div>
+          <p>Project detail → <strong>Knowledge</strong> → drag files or "browse" → they enter as <code>indexing</code> → <code>indexed</code>. Re-sync and Delete per row.</p>
+        </div>
+        <div class="entry">
+          <div class="entry-hd"><h3 style="font-family:var(--font-sans);font-size:16px">Chat inside the project</h3></div>
+          <p>Project detail → <strong>Chats</strong> → <strong>+ New chat in {name}</strong> → creates a scoped chat and opens it.</p>
+        </div>
+        <div class="entry">
+          <div class="entry-hd"><h3 style="font-family:var(--font-sans);font-size:16px">Switch language</h3></div>
+          <p>Settings → General → <strong>Language</strong> → the whole UI re-renders translated instantly.</p>
+        </div>
+        <div class="entry">
+          <div class="entry-hd"><h3 style="font-family:var(--font-sans);font-size:16px">Delete anything (any Delete)</h3></div>
+          <p>Triggers <code>useConfirm()</code> → the same modal (title + body + red Cancel/Delete) → <code>onConfirm</code> runs.</p>
+        </div>
+        <div class="entry">
+          <div class="entry-hd"><h3 style="font-family:var(--font-sans);font-size:16px">Preview a file</h3></div>
+          <p>Click a file (Knowledge) → side <code>FileViewerPanel</code> → Download / Re-sync / resize / Close (Esc).</p>
+        </div>
+        <div class="entry">
+          <div class="entry-hd"><h3 style="font-family:var(--font-sans);font-size:16px">Extract / view a table</h3></div>
+          <p>Open an artifact with tabular data (HTML <code>&lt;table&gt;</code>, Markdown or CSV) → <strong>Table</strong> tab → rendered table → <strong>Copy CSV</strong> or <strong>Download CSV</strong>.</p>
+        </div>
+      </section>
+
+      <p class="doc-foot">Companion to Documentation.md · May 2026 · v0.5.0</p>
+    </article>
+  </main>
+</div>
+
+<script>
+  // Theme toggle
+  const root = document.documentElement;
+  const tBtn = document.getElementById('themeToggle');
+  const tLabel = document.getElementById('themeLabel');
+  const setTheme = (theme) => {
+    root.setAttribute('data-theme', theme);
+    tLabel.textContent = theme === 'dark' ? 'Light mode' : 'Dark mode';
+    try { localStorage.setItem('lattice-refs-theme', theme); } catch (e) {}
+  };
+  try {
+    const saved = localStorage.getItem('lattice-refs-theme');
+    if (saved) setTheme(saved);
+  } catch (e) {}
+  tBtn.addEventListener('click', () => {
+    setTheme(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+  });
+
+  // Scrollspy — highlight active TOC entry
+  const links = [...document.querySelectorAll('#tocList a')];
+  const byId = Object.fromEntries(links.map(a => [a.getAttribute('href').slice(1), a]));
+  const sections = [...document.querySelectorAll('.filesec')];
+  const spy = new IntersectionObserver((entries) => {
+    entries.forEach((e) => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('is-active'));
+        const a = byId[e.target.id];
+        if (a) a.classList.add('is-active');
+      }
+    });
+  }, { rootMargin: '-10% 0px -75% 0px', threshold: 0 });
+  sections.forEach(s => spy.observe(s));
+
+  // Preview / HTML toggle for each live demo — code is generated
+  // from the rendered element so it always matches the preview.
+  function serialize(node, depth) {
+    let out = '';
+    const pad = '  '.repeat(depth);
+    node.childNodes.forEach((ch) => {
+      if (ch.nodeType === 3) {
+        const t = ch.textContent.replace(/\s+/g, ' ').trim();
+        if (t) out += pad + t + '\n';
+      } else if (ch.nodeType === 1) {
+        const tag = ch.tagName.toLowerCase();
+        const attrs = [...ch.attributes].map(a => `${a.name}="${a.value}"`).join(' ');
+        const open = `<${tag}${attrs ? ' ' + attrs : ''}>`;
+        if (tag === 'svg') { out += pad + '<svg>…</svg>\n'; return; }
+        if (ch.classList.contains('tool-body')) {
+          out += pad + open + '\n';
+          ch.textContent.replace(/\n+$/,'').split('\n').forEach((l) => {
+            out += '  '.repeat(depth + 1) + l + '\n';
+          });
+          out += pad + `</${tag}>\n`;
+          return;
+        }
+        const elKids = [...ch.childNodes].filter(n => n.nodeType === 1);
+        const txt = ch.textContent.trim();
+        if (ch.childNodes.length === 0) {
+          out += pad + open + `</${tag}>\n`;
+        } else if (elKids.length === 0 && txt.length <= 70 && !txt.includes('\n')) {
+          out += pad + open + txt + `</${tag}>\n`;
+        } else {
+          out += pad + open + '\n' + serialize(ch, depth + 1) + pad + `</${tag}>\n`;
+        }
+      }
+    });
+    return out;
+  }
+
+  document.querySelectorAll('.demo').forEach((demo) => {
+    const label = demo.querySelector('.demo-label');
+    const stage = demo.querySelector('.demo-stage');
+    if (!label || !stage) return;
+    demo.setAttribute('data-view', 'preview');
+
+    const code = document.createElement('pre');
+    code.className = 'demo-code';
+    code.textContent = serialize(stage, 0).replace(/\n+$/, '');
+    stage.after(code);
+
+    const tabs = document.createElement('div');
+    tabs.className = 'demo-tabs';
+    [['preview', 'Preview'], ['code', 'HTML']].forEach(([view, txt]) => {
+      const b = document.createElement('button');
+      b.className = 'demo-seg' + (view === 'preview' ? ' is-active' : '');
+      b.type = 'button';
+      b.textContent = txt;
+      b.addEventListener('click', () => {
+        demo.setAttribute('data-view', view);
+        tabs.querySelectorAll('.demo-seg').forEach(s => s.classList.remove('is-active'));
+        b.classList.add('is-active');
+      });
+      tabs.appendChild(b);
+    });
+    label.appendChild(tabs);
+  });
+
+  // ── Functional interactions for the demos ──
+  document.addEventListener('click', (e) => {
+    const toolHd = e.target.closest('.demo .tool-hd');
+    if (toolHd) { toolHd.closest('.tool').classList.toggle('open'); return; }
+
+    const taskHd = e.target.closest('.demo .task-head');
+    if (taskHd) {
+      if (e.target.closest('.retry, .task-stop, .task-cancel')) return;
+      taskHd.closest('.task').classList.toggle('is-open');
+      return;
+    }
+
+    const artTab = e.target.closest('.demo .art-tab');
+    if (artTab) {
+      artTab.parentElement.querySelectorAll('.art-tab').forEach(t => t.classList.remove('is-active'));
+      artTab.classList.add('is-active');
+      return;
+    }
+
+    const convo = e.target.closest('.demo .convo');
+    if (convo) {
+      convo.parentElement.querySelectorAll('.convo').forEach(c => c.classList.remove('active'));
+      convo.classList.add('active');
+      return;
+    }
+
+    const tab = e.target.closest('.demo .view-tab');
+    if (tab) {
+      tab.parentElement.querySelectorAll('.view-tab').forEach(t => t.classList.remove('is-active'));
+      tab.classList.add('is-active');
+      return;
+    }
+
+    const sw = e.target.closest('.demo .switch');
+    if (sw) { sw.classList.toggle('on'); return; }
+
+    const art = e.target.closest('.demo .artifact-card');
+    if (art) { art.classList.toggle('is-open'); return; }
+
+    const act = e.target.closest('.demo .msg-act');
+    if (act) {
+      const label = (act.getAttribute('aria-label') || '').toLowerCase();
+      if (label.includes('response')) {
+        const wasOn = act.classList.contains('is-on');
+        act.parentElement.querySelectorAll('.msg-act').forEach(b => {
+          if ((b.getAttribute('aria-label') || '').toLowerCase().includes('response')) b.classList.remove('is-on');
+        });
+        if (!wasOn) act.classList.add('is-on');
+      } else {
+        act.classList.add('is-on');
+        setTimeout(() => act.classList.remove('is-on'), 650);
+      }
+      return;
+    }
+  });
+
+  // Composer: enable send on input, autosize, token count, clear on send
+  document.querySelectorAll('.demo .composer').forEach((comp) => {
+    const ta = comp.querySelector('textarea');
+    const send = comp.querySelector('.send');
+    const tok = comp.querySelector('.comp-tokens');
+    if (!ta || !send) return;
+    const sync = () => {
+      const v = ta.value.trim();
+      send.classList.toggle('disabled', v.length === 0);
+      if (tok) tok.textContent = Math.max(0, Math.round(ta.value.length / 4)) + ' tok';
+      ta.style.height = 'auto';
+      ta.style.height = Math.min(200, ta.scrollHeight) + 'px';
+    };
+    const fire = () => { if (ta.value.trim()) { ta.value = ''; sync(); } };
+    ta.addEventListener('input', sync);
+    send.addEventListener('click', fire);
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); fire(); }
+    });
+  });
+</script>
+</body>
+</html>
