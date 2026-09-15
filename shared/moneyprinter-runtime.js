@@ -163,8 +163,45 @@
     const picker = $("#genChannelSelect") || $("#genChannelList");
     if (picker) picker.onchange = () => setTimeout(states); // after the one-per-platform listener adjusts the boxes
     if (publishAt) publishAt.oninput = states;
+    const renderReview = () => {
+      const result = $("#genReviewResult");
+      if (!result) return;
+      const review = job.review;
+      if (!review) { result.textContent = ""; return; }
+      const mismatches = (review.frames || []).filter(frame => !frame.matches);
+      result.innerHTML = `<div class="card-note" style="font-family:inherit">${esc(review.summary || "")}</div>`
+        + (mismatches.length ? `<ul style="margin:6px 0 0 18px;display:flex;flex-direction:column;gap:4px">${mismatches.map(frame =>
+            `<li>Quadro ${frame.index + 1}: ${esc(frame.reason || "não combina com o roteiro")}</li>`).join("")}</ul>`
+          : `<div class="card-note" style="font-family:inherit;color:var(--ok)">Todos os quadros combinam com o roteiro.</div>`);
+    };
+    const reviewBtn = $("#genReviewBtn");
+    if (reviewBtn) reviewBtn.onclick = async () => {
+      reviewBtn.disabled = true;
+      const label = reviewBtn.textContent;
+      reviewBtn.textContent = "Revisando…";
+      try { job = await request(`/jobs/${job.id}/review`, { method: "POST" }); renderReview(); }
+      catch (error) { window.alert(error.message); }
+      finally { reviewBtn.disabled = false; reviewBtn.textContent = label; }
+    };
+    const renderThumb = () => {
+      const img = $("#genThumbImg");
+      if (!img) return;
+      if (job.thumbnail_updated_at) { img.src = `${API}/jobs/${job.id}/thumbnail?t=${job.thumbnail_updated_at}`; img.hidden = false; }
+      else { img.hidden = true; img.src = ""; }
+    };
+    const thumbBtn = $("#genThumbBtn");
+    if (thumbBtn) thumbBtn.onclick = async () => {
+      thumbBtn.disabled = true;
+      const label = thumbBtn.textContent;
+      thumbBtn.textContent = "Gerando…";
+      try { job = await request(`/jobs/${job.id}/thumbnail`, { method: "POST" }); renderThumb(); }
+      catch (error) { window.alert(error.message); }
+      finally { thumbBtn.disabled = false; thumbBtn.textContent = label; }
+    };
     fill();
     states();
+    renderReview();
+    renderThumb();
   }
 
   // One project per screen, created on first use - the picker is gone, so there is nothing left to name.
@@ -352,6 +389,11 @@
     set("#genSubtitlePosition", defaults.subtitle_position);
     const subtitle = body.querySelector("#genSubtitleEnabled");
     if (subtitle && defaults.subtitle_enabled !== undefined) subtitle.checked = !!defaults.subtitle_enabled;
+    // Only fill these two if the field is still empty - an in-progress edit on screen (not yet
+    // saved) must not be overwritten by a default that finishes loading a moment later.
+    const setIfEmpty = (selector, val) => { const el = body.querySelector(selector); if (el && val !== undefined && !el.value) el.value = val; };
+    setIfEmpty("#genScriptRequirements", defaults.video_script_prompt);
+    setIfEmpty("#genSystemPrompt", defaults.custom_system_prompt);
   }
 
   /* Re-applies cachedDefaults every bind, not just the first: window.CK.__refresh()
@@ -360,27 +402,31 @@
      to the hardcoded HTML defaults. A "loaded once" guard would leave that reset
      value on screen forever after the first background refresh (#found in QA). */
   async function bindGenerationDefaults(body, notify) {
-    const saveBtn = body.querySelector("#genSaveDefaultsBtn");
-    if (!saveBtn) return;
+    // Three "Salvar padrão" buttons share this one save action (Parâmetros de vídeo, Prompt do
+    // sistema, and next to Requisitos personalizados) - wherever the user happens to be editing,
+    // not just the tab that owns the rest of the fields.
+    const saveButtons = [...body.querySelectorAll(".gen-save-defaults")];
+    if (!saveButtons.length) return;
     const format = screenFormat(body);
     const url = `/settings/generation-defaults?format=${format}`;
-    if (!saveBtn.dataset.bound) {
-      saveBtn.dataset.bound = "true";
-      saveBtn.addEventListener("click", async () => {
-        try {
-          cachedDefaults[format] = await request(url, { method: "PUT", body: JSON.stringify({ value: {
-            video_language: value(body, "#genLanguageSelect", "pt-BR"), voice_name: value(body, "#genVoiceSelect", "pt-BR-FranciscaNeural"),
-            ...(body.querySelector("#genParagraphInput") ? { paragraph_number: integer(value(body, "#genParagraphInput", 5), 5) } : {}),
-            video_clip_duration: integer(value(body, "#genDurationInput", 5), 5),
-            font_size: integer(value(body, "#genFontSizeInput", 56), 56), text_fore_color: value(body, "#genTextColorInput", "#FFFFFF"),
-            stroke_color: value(body, "#genStrokeColorInput", "#000000"), bgm_type: value(body, "#genBgmSelect", ""),
-            subtitle_position: value(body, "#genSubtitlePosition", "bottom"),
-            subtitle_enabled: !body.querySelector("#genSubtitleEnabled") || body.querySelector("#genSubtitleEnabled").checked,
-          } }) });
-          notify(`Padrões de ${format === "long" ? "vídeo longo" : "Shorts"} salvos.`);
-        } catch (error) { notify(error.message); }
-      });
-    }
+    const save = async () => {
+      cachedDefaults[format] = await request(url, { method: "PUT", body: JSON.stringify({ value: {
+        video_language: value(body, "#genLanguageSelect", "pt-BR"), voice_name: value(body, "#genVoiceSelect", "pt-BR-FranciscaNeural"),
+        ...(body.querySelector("#genParagraphInput") ? { paragraph_number: integer(value(body, "#genParagraphInput", 5), 5) } : {}),
+        video_clip_duration: integer(value(body, "#genDurationInput", 5), 5),
+        font_size: integer(value(body, "#genFontSizeInput", 56), 56), text_fore_color: value(body, "#genTextColorInput", "#FFFFFF"),
+        stroke_color: value(body, "#genStrokeColorInput", "#000000"), bgm_type: value(body, "#genBgmSelect", ""),
+        subtitle_position: value(body, "#genSubtitlePosition", "bottom"),
+        subtitle_enabled: !body.querySelector("#genSubtitleEnabled") || body.querySelector("#genSubtitleEnabled").checked,
+        video_script_prompt: value(body, "#genScriptRequirements", "").trim(), custom_system_prompt: value(body, "#genSystemPrompt", "").trim(),
+      } }) });
+      notify(`Padrões de ${format === "long" ? "vídeo longo" : "Shorts"} salvos.`);
+    };
+    saveButtons.forEach(btn => {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = "true";
+      btn.addEventListener("click", async () => { try { await save(); } catch (error) { notify(error.message); } });
+    });
     if (cachedDefaults[format]) { applyDefaults(body, cachedDefaults[format]); return; }
     try {
       cachedDefaults[format] = await request(url);
@@ -397,7 +443,7 @@
     const subtitle = body.querySelector("#cfgSubtitleEnabled"); if (subtitle && defaults.subtitle_enabled !== undefined) subtitle.checked = defaults.subtitle_enabled;
   }
 
-  const KEY_FIELDS = [["#cfgMoonshotKey", "moonshot_api_key", "moonshot"], ["#cfgPexelsKey", "pexels_api_key", "pexels"], ["#cfgPixabayKey", "pixabay_api_key", "pixabay"], ["#cfgCoverrKey", "coverr_api_key", "coverr"], ["#cfgUploadPostKey", "upload_post_api_key", "upload_post"]];
+  const KEY_FIELDS = [["#cfgMoonshotKey", "moonshot_api_key", "moonshot"], ["#cfgNvidiaKey", "nvidia_api_key", "nvidia"], ["#cfgPexelsKey", "pexels_api_key", "pexels"], ["#cfgPixabayKey", "pixabay_api_key", "pixabay"], ["#cfgCoverrKey", "coverr_api_key", "coverr"], ["#cfgUploadPostKey", "upload_post_api_key", "upload_post"]];
   const lastValidation = {}; // selector -> {key, valid} for the value that was actually checked
 
   /* Validates against the real provider API on blur, as soon as the user fills the
@@ -454,6 +500,13 @@
         });
         const uploadUser = body.querySelector("#cfgUploadPostUser"); if (uploadUser && uploadUser.value) credentials.upload_post_username = uploadUser.value;
         const moonshotModel = body.querySelector("#cfgMoonshotModel"); if (moonshotModel && moonshotModel.value) credentials.moonshot_model_name = moonshotModel.value;
+        const nvidiaTextModel = body.querySelector("#cfgNvidiaTextModel"); if (nvidiaTextModel && nvidiaTextModel.value) credentials.nvidia_text_model = nvidiaTextModel.value;
+        const nvidiaVisionModel = body.querySelector("#cfgNvidiaVisionModel"); if (nvidiaVisionModel && nvidiaVisionModel.value) credentials.nvidia_vision_model = nvidiaVisionModel.value;
+        const nvidiaImageModel = body.querySelector("#cfgNvidiaImageModel"); if (nvidiaImageModel && nvidiaImageModel.value) credentials.nvidia_image_model = nvidiaImageModel.value;
+        // A <select> always has a value, unlike the text fields above - only send it when it actually changed,
+        // so saving unrelated settings doesn't needlessly re-trigger the "restart the container" notice.
+        const providerSelect = body.querySelector("#cfgLlmProvider");
+        if (providerSelect && providerSelect.value !== ((window.CK.__providers && window.CK.__providers.llm_provider) || "moonshot")) credentials.llm_provider = providerSelect.value;
         if (rejected.length && !window.confirm("A validação indicou que pelo menos uma chave foi rejeitada pelo provedor. Salvar mesmo assim?")) return;
         try {
           if (Object.keys(patch).length) {
@@ -586,13 +639,13 @@
       });
     };
     run("#genScriptAiBtn", "Gerar roteiro com IA", async subject => {
-      const scriptPrompt = value(body, "#genScriptRequirements", "").trim(), systemPrompt = value(body, "#genSystemPrompt", "").trim();
-      const result = await request("/llm/scripts", { method: "POST", body: JSON.stringify({
-        video_subject: subject, video_language: value(body, "#genLanguageSelect", "pt-BR"), paragraph_number: Math.min(10, Math.max(1, integer(value(body, "#genParagraphInput", 5), 5))),
-        ...(scriptPrompt ? { video_script_prompt: scriptPrompt } : {}), ...(systemPrompt ? { custom_system_prompt: systemPrompt } : {}),
+      const result = await request("/scripts/short", { method: "POST", body: JSON.stringify({
+        subject, language: value(body, "#genLanguageSelect", "pt-BR"), paragraph_number: integer(value(body, "#genParagraphInput", 5), 5),
+        script_prompt: value(body, "#genScriptRequirements", "").trim(), system_prompt: value(body, "#genSystemPrompt", "").trim(),
       }) });
-      body.querySelector("#genScriptInput").value = result.video_script || "";
+      body.querySelector("#genScriptInput").value = result.script || "";
       body.querySelector("#genScriptInput").dispatchEvent(new Event("input")); // saves the draft and refreshes the word count
+      if (result.trimmed) notify("Roteiro cortado para caber na duração alvo do Short.");
     });
     // One search term per script chunk, in narration order, instead of a handful of generic
     // terms shared by the whole video - see visual_terms() in the gateway.
@@ -615,7 +668,7 @@
       body.querySelector("#genScriptInput").value = result.script || "";
       body.querySelector("#genScriptInput").dispatchEvent(new Event("input"));
       const terms = await alignTermsToScript(subject);
-      notify(`Roteiro com ${result.sections.length} seções · ≈ ${result.estimated_minutes} min de narração${terms ? ` · ${terms.cuts} cortes alinhados` : ""}`);
+      notify(`Roteiro com ${result.sections.length} seções · ≈ ${result.estimated_minutes} min de narração${terms ? ` · ${terms.cuts} cortes alinhados` : ""}${result.trimmed ? " · cortado para caber na duração alvo" : ""}`);
     });
     run("#genTermsAiBtn", "Gerar palavras-chave", async subject => {
       const result = await alignTermsToScript(subject);

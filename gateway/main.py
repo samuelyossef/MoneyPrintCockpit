@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import html
 import json
 import logging
@@ -113,6 +114,9 @@ def initialize_database() -> None:
             CREATE TABLE IF NOT EXISTS video_analytics (
               publication_id TEXT PRIMARY KEY, captured_at TEXT NOT NULL, metrics_json TEXT NOT NULL, score INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS job_reviews (
+              job_id TEXT PRIMARY KEY REFERENCES video_jobs(id), value_json TEXT NOT NULL, created_at TEXT NOT NULL
+            );
             """
         )
         job_columns = {column["name"] for column in db.execute("PRAGMA table_info(video_jobs)")}
@@ -214,11 +218,15 @@ def row_as_job(row: sqlite3.Row, db: sqlite3.Connection | None = None) -> dict[s
     result = {key: row[key] for key in row.keys() if key not in {"request_json", "turbo_payload_json"}}
     result["request"] = json.loads(row["request_json"])
     result["turbo"] = json.loads(row["turbo_payload_json"])
+    thumb = thumbnail_path(row["id"])
+    result["thumbnail_updated_at"] = thumb.stat().st_mtime if thumb.is_file() else None
     if db:
         result["artifacts"] = [dict(item) for item in db.execute("SELECT * FROM artifacts WHERE job_id = ?", (row["id"],))]
         result["publications"] = [dict(item) for item in db.execute("SELECT * FROM publications WHERE job_id = ?", (row["id"],))]
         metadata = db.execute("SELECT value_json FROM job_metadata WHERE job_id = ?", (row["id"],)).fetchone()
         result["metadata"] = json.loads(metadata["value_json"]) if metadata else None
+        review = db.execute("SELECT value_json FROM job_reviews WHERE job_id = ?", (row["id"],)).fetchone()
+        result["review"] = json.loads(review["value_json"]) if review else None
     return result
 
 
@@ -470,12 +478,17 @@ def provider_readiness() -> dict[str, Any]:
     model_match = re.search(r'moonshot_model_name\s*=\s*"([^"]*)"', value)
     return {
         "moonshot": 'moonshot_api_key = ""' not in value and "moonshot_api_key" in value,
+        "nvidia": 'nvidia_api_key = ""' not in value and "nvidia_api_key" in value,
         "pexels": 'pexels_api_keys = []' not in value and "pexels_api_keys" in value,
         "pixabay": 'pixabay_api_keys = []' not in value and "pixabay_api_keys" in value,
         "coverr": 'coverr_api_keys = []' not in value and "coverr_api_keys" in value,
         "upload_post": 'upload_post_api_key = ""' not in value and "upload_post_api_key" in value,
         "edge_tts": True,
         "moonshot_model": model_match.group(1) if model_match else "",
+        "llm_provider": _config_string(value, "cockpit_llm_provider") or "moonshot",
+        "nvidia_text_model": _config_string(value, "nvidia_text_model") or NVIDIA_DEFAULT_TEXT_MODEL,
+        "nvidia_vision_model": _config_string(value, "nvidia_vision_model") or NVIDIA_DEFAULT_VISION_MODEL,
+        "nvidia_image_model": _config_string(value, "nvidia_image_model") or NVIDIA_DEFAULT_IMAGE_MODEL,
     }
 
 
@@ -490,8 +503,13 @@ def _toml_set(text: str, key: str, rendered_value: str) -> str:
 
 
 class ProviderCredentials(BaseModel):
+    llm_provider: Literal["moonshot", "nvidia"] | None = None
     moonshot_api_key: str | None = Field(default=None, max_length=500)
     moonshot_model_name: str | None = Field(default=None, max_length=100)
+    nvidia_api_key: str | None = Field(default=None, max_length=500)
+    nvidia_text_model: str | None = Field(default=None, max_length=200)
+    nvidia_vision_model: str | None = Field(default=None, max_length=200)
+    nvidia_image_model: str | None = Field(default=None, max_length=200)
     pexels_api_key: str | None = Field(default=None, max_length=500)
     pixabay_api_key: str | None = Field(default=None, max_length=500)
     coverr_api_key: str | None = Field(default=None, max_length=500)
@@ -500,11 +518,18 @@ class ProviderCredentials(BaseModel):
 
 
 class ProviderValidation(BaseModel):
-    provider: Literal["moonshot", "pexels", "pixabay", "coverr", "upload_post"]
+    provider: Literal["moonshot", "nvidia", "pexels", "pixabay", "coverr", "upload_post"]
     api_key: str = Field(min_length=1, max_length=500)
 
 
 MOONSHOT_ENDPOINTS = {"china": "https://api.moonshot.cn/v1", "global": "https://api.moonshot.ai/v1"}
+NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+NVIDIA_DEFAULT_TEXT_MODEL = "google/gemma-4-31b-it"
+NVIDIA_DEFAULT_VISION_MODEL = "google/diffusiongemma-26b-a4b-it"
+# Image generation is a separate NVIDIA host/path from the chat-completions one above.
+NVIDIA_GENAI_BASE_URL = "https://ai.api.nvidia.com/v1/genai"
+NVIDIA_DEFAULT_IMAGE_MODEL = "black-forest-labs/flux.1-dev"
+THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT = 1344, 768  # closest FLUX-supported size to YouTube's 16:9
 
 
 async def detect_moonshot_region(client: httpx.AsyncClient, api_key: str) -> str | None:
@@ -536,6 +561,14 @@ async def validate_provider_key(input: ProviderValidation) -> dict[str, Any]:
                 region = await detect_moonshot_region(client, input.api_key)
                 detail = None if region else "Chave rejeitada pelo Moonshot/Kimi (testei as plataformas China e Global)."
                 return {"valid": region is not None, "detail": detail, "region": region}
+            if input.provider == "nvidia":
+                # /v1/models on the NIM gateway answers without checking the key at all, so a
+                # cheap real completion is the only reliable way to tell a bad key from a good one.
+                response = await client.post(
+                    f"{NVIDIA_BASE_URL}/chat/completions", headers={"Authorization": f"Bearer {input.api_key}"},
+                    json={"model": NVIDIA_DEFAULT_TEXT_MODEL, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
+                )
+                return {"valid": response.status_code == 200, "detail": None if response.status_code == 200 else "Chave rejeitada pela NVIDIA."}
             if input.provider == "pexels":
                 # A common query string like "test" gets served from Cloudflare's edge
                 # cache regardless of the Authorization header, making every key look
@@ -574,6 +607,28 @@ async def update_providers(input: ProviderCredentials) -> dict[str, Any]:
             text = _toml_set(text, "moonshot_base_url", f'"{MOONSHOT_ENDPOINTS["global"]}"' if region == "global" else '""')
     if input.moonshot_model_name:
         text = _toml_set(text, "moonshot_model_name", f'"{_toml_escape(input.moonshot_model_name)}"')
+    if input.nvidia_api_key:
+        text = _toml_set(text, "nvidia_api_key", f'"{_toml_escape(input.nvidia_api_key)}"')
+    if input.nvidia_text_model:
+        text = _toml_set(text, "nvidia_text_model", f'"{_toml_escape(input.nvidia_text_model)}"')
+    if input.nvidia_vision_model:
+        text = _toml_set(text, "nvidia_vision_model", f'"{_toml_escape(input.nvidia_vision_model)}"')
+    if input.nvidia_image_model:
+        text = _toml_set(text, "nvidia_image_model", f'"{_toml_escape(input.nvidia_image_model)}"')
+    if input.llm_provider:
+        text = _toml_set(text, "cockpit_llm_provider", f'"{input.llm_provider}"')
+        if input.llm_provider == "nvidia":
+            # The Short's own script generator lives in Turbo, not here - point its "openai"
+            # provider slot at the NIM gateway too, so both scripts come from the same model.
+            nvidia_key = _config_string(text, "nvidia_api_key")
+            if not nvidia_key:
+                raise HTTPException(status_code=409, detail="Configure a chave NVIDIA antes de trocar o provedor de IA.")
+            text = _toml_set(text, "llm_provider", '"openai"')
+            text = _toml_set(text, "openai_api_key", f'"{_toml_escape(nvidia_key)}"')
+            text = _toml_set(text, "openai_base_url", f'"{NVIDIA_BASE_URL}"')
+            text = _toml_set(text, "openai_model_name", f'"{_toml_escape(_config_string(text, "nvidia_text_model") or NVIDIA_DEFAULT_TEXT_MODEL)}"')
+        else:
+            text = _toml_set(text, "llm_provider", '"moonshot"')
     if input.pexels_api_key:
         text = _toml_set(text, "pexels_api_keys", f'["{_toml_escape(input.pexels_api_key)}"]')
     if input.pixabay_api_key:
@@ -623,12 +678,6 @@ def build_turbo_payload(subject: str, script: str, settings: dict[str, Any]) -> 
     return payload
 
 
-@app.post("/api/llm/{kind}")
-async def llm_proxy(kind: Literal["scripts", "terms"], request: Request) -> Any:
-    response = await turbo_request("POST", f"/api/v1/{kind}", json=await request.json())
-    return unwrap(response.json())
-
-
 @app.post("/api/projects/{project_id}/jobs", status_code=202)
 async def create_job(project_id: str, input: JobCreate) -> dict[str, Any]:
     project = row_as_project(get_project_or_404(project_id))
@@ -652,6 +701,7 @@ async def create_job(project_id: str, input: JobCreate) -> dict[str, Any]:
                 "video_script_prompt": merged.get("video_script_prompt", ""), "custom_system_prompt": merged.get("custom_system_prompt", ""),
             })
             script_text = str((unwrap(script_response.json()) or {}).get("video_script", "")).strip()
+            script_text = trim_to_words(script_text, short_script_max_words(int(merged.get("paragraph_number", 5))))
         if script_text and not str(merged.get("video_terms", "")).strip():
             terms, clip_seconds = await visual_terms(input.subject, script_text, float(merged.get("video_clip_duration") or 5), float(merged.get("voice_rate") or 1))
             merged["video_terms"], merged["video_clip_duration"] = ", ".join(terms), max(1, round(clip_seconds))
@@ -877,11 +927,15 @@ def store_metadata(job_id: str, raw: dict[str, Any]) -> dict[str, Any]:
         return {**row_as_job(job, db), "warnings": warnings}
 
 
+def _config_string(text: str, key: str) -> str:
+    match = re.search(rf'^{key}\s*=\s*"([^"]*)"', text, re.MULTILINE)
+    return match.group(1) if match else ""
+
+
 def config_value(key: str) -> str:
     config = DATA_DIR / "moneyprinter" / "config.toml"
     text = config.read_text(encoding="utf-8") if config.exists() else ""
-    match = re.search(rf'^{key}\s*=\s*"([^"]*)"', text, re.MULTILINE)
-    return match.group(1) if match else ""
+    return _config_string(text, key)
 
 
 def moonshot_config() -> tuple[str, str, str]:
@@ -890,29 +944,41 @@ def moonshot_config() -> tuple[str, str, str]:
     return config_value("moonshot_api_key"), base_url, config_value("moonshot_model_name") or "moonshot-v1-8k"
 
 
+def llm_config() -> tuple[str, str, str, str]:
+    """Which provider/base_url/key/model backs the gateway's own text calls (metadata, long
+    script, strategy, analytics) - independent of what Turbo itself uses for the Short's script."""
+    if config_value("cockpit_llm_provider") == "nvidia":
+        return "nvidia", NVIDIA_BASE_URL, config_value("nvidia_api_key"), config_value("nvidia_text_model") or NVIDIA_DEFAULT_TEXT_MODEL
+    key, base_url, model = moonshot_config()
+    return "moonshot", base_url, key, model
+
+
 @app.put("/api/jobs/{job_id}/metadata")
 def put_metadata(job_id: str, input: MetadataInput) -> dict[str, Any]:
     return store_metadata(job_id, input.model_dump())
 
 
-async def moonshot_chat(prompt: str, json_mode: bool = False) -> str:
-    key, base_url, model = moonshot_config()
+async def llm_chat(prompt: str, json_mode: bool = False) -> str:
+    provider, base_url, key, model = llm_config()
+    label = "Moonshot/Kimi" if provider == "moonshot" else "NVIDIA"
     if not key:
-        raise HTTPException(status_code=409, detail="Configure a chave Moonshot/Kimi em Configurações.")
+        raise HTTPException(status_code=409, detail=f"Configure a chave {label} em Configurações.")
     body: dict[str, Any] = {"model": model, "messages": [{"role": "user", "content": prompt}]}
-    if json_mode:
+    # response_format support varies across NIM models; the prompts already ask for plain JSON
+    # and parse_json_object() tolerates prose or a code fence around it.
+    if json_mode and provider == "moonshot":
         body["response_format"] = {"type": "json_object"}
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(30, read=180)) as client:
             response = await send_with_retry(client, "POST", f"{base_url}/chat/completions", headers={"Authorization": f"Bearer {key}"}, json=body)
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=503, detail=f"Moonshot indisponível: {exc}") from exc
+        raise HTTPException(status_code=503, detail=f"{label} indisponível: {exc}") from exc
     if response.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"Moonshot respondeu {response.status_code}: {response.text[:300]}")
+        raise HTTPException(status_code=502, detail=f"{label} respondeu {response.status_code}: {response.text[:300]}")
     try:
         return response.json()["choices"][0]["message"]["content"] or ""
     except (ValueError, KeyError, IndexError, TypeError) as exc:
-        raise HTTPException(status_code=502, detail="O Moonshot devolveu uma resposta inesperada") from exc
+        raise HTTPException(status_code=502, detail=f"O {label} devolveu uma resposta inesperada") from exc
 
 
 def parse_json_object(content: str) -> dict[str, Any]:
@@ -942,11 +1008,49 @@ async def generate_metadata(job_id: str) -> dict[str, Any]:
         guidance = '"title": até 70 caracteres, curto e chamativo, "description": 1 a 2 frases seguidas de 3 a 5 hashtags, "tags": lista de 8 a 15 termos de busca'
         excerpt = script[:6000]
     prompt = f"Crie metadados de YouTube no idioma {language} para o vídeo abaixo. Responda apenas JSON: {{{guidance}}}.\n\nTema: {job['subject']}\nRoteiro: {excerpt}"
-    generated = parse_json_object(await moonshot_chat(prompt, json_mode=True))
+    generated = parse_json_object(await llm_chat(prompt, json_mode=True))
     return store_metadata(job_id, {field: generated.get(field) for field in ("title", "description", "tags")})
 
 
 WORDS_PER_MINUTE = 150  # calibration knob: Edge TTS narrates ~150 words/min at voice rate 1.0
+SHORT_TARGET_SECONDS = {4: 60, 5: 75, 6: 90}  # mirrors the Shorts "Duração alvo" select in cockpit-views.js
+
+
+def short_script_max_words(paragraph_number: int) -> int:
+    seconds = SHORT_TARGET_SECONDS.get(paragraph_number, max(SHORT_TARGET_SECONDS.values()))
+    return round(seconds * WORDS_PER_MINUTE / 60)
+
+
+def trim_to_words(script: str, max_words: int) -> str:
+    """Caps an AI-written script at max_words, backing up to the end of the last full sentence
+    so a generated narration never reads longer than the format's chosen duration. Never applied
+    to a script the user typed or pasted themselves."""
+    words = script.split()
+    if len(words) <= max_words:
+        return script.strip()
+    truncated = " ".join(words[:max_words])
+    match = re.search(r"^(.*[.!?])[^.!?]*$", truncated, re.DOTALL)
+    return (match.group(1) if match else truncated).strip()
+
+
+class ShortScriptInput(BaseModel):
+    subject: str = Field(min_length=1, max_length=500)
+    language: str = Field(default="pt-BR", max_length=20)
+    paragraph_number: int = Field(default=5, ge=1, le=10)
+    script_prompt: str = Field(default="", max_length=2000)
+    system_prompt: str = Field(default="", max_length=4000)
+
+
+@app.post("/api/scripts/short")
+async def short_script(input: ShortScriptInput) -> dict[str, Any]:
+    response = await turbo_request("POST", "/api/v1/scripts", json={
+        "video_subject": input.subject, "video_language": clean_language(input.language),
+        "paragraph_number": input.paragraph_number,
+        "video_script_prompt": input.script_prompt, "custom_system_prompt": input.system_prompt,
+    })
+    script = str((unwrap(response.json()) or {}).get("video_script", "")).strip()
+    trimmed = trim_to_words(script, short_script_max_words(input.paragraph_number))
+    return {"script": trimmed, "words": len(trimmed.split()), "trimmed": trimmed != script}
 
 
 class LongScriptInput(BaseModel):
@@ -979,7 +1083,7 @@ async def long_script(input: LongScriptInput) -> dict[str, Any]:
     # stay narration-only, or the multi-step pipeline breaks. It's folded in as an extra, higher-weight
     # instruction on every call instead, same mechanism as `requirements` but framed as a standing rule.
     style = (f" Instruções de estilo do sistema, siga em tudo o que escrever: {system_prompt}." if system_prompt else "")
-    outline = parse_json_object(await moonshot_chat(
+    outline = parse_json_object(await llm_chat(
         f"Planeje um vídeo de YouTube de {input.minutes} minutos no idioma {language} sobre: {input.subject}."
         + (f" Nicho do canal: {input.niche}." if input.niche else "")
         + (f" Requisitos personalizados: {requirements}." if requirements else "") + style
@@ -994,16 +1098,17 @@ async def long_script(input: LongScriptInput) -> dict[str, Any]:
     parts: list[str] = []
     for index, section in enumerate(sections, start=1):
         previous = f"\nFinal da seção anterior (continue a partir dele, sem repetir): {parts[-1][-600:]}" if parts else ""
-        parts.append(clean_narration(await moonshot_chat(
+        parts.append(clean_narration(await llm_chat(
             f"Escreva a narração da seção {index} de {len(sections)} de um vídeo de YouTube no idioma {language} sobre: {input.subject}.\n"
             f"Seção: {section['heading']}\nPontos: {'; '.join(map(str, section.get('points') or []))}\n"
             f"Cerca de {words_per_section} palavras. Somente o texto falado, em parágrafos corridos: sem títulos, marcadores, markdown, emojis nem indicações de cena."
             + (f" Requisitos personalizados: {requirements}." if requirements else "") + style + previous
         )))
     script = "\n\n".join(part for part in parts if part)
-    words = len(script.split())
+    trimmed_script = trim_to_words(script, input.minutes * WORDS_PER_MINUTE)
+    words = len(trimmed_script.split())
     return {
-        "title": str(outline.get("title") or input.subject), "script": script,
+        "title": str(outline.get("title") or input.subject), "script": trimmed_script, "trimmed": trimmed_script != script,
         "sections": [str(section["heading"]) for section in sections], "words": words, "estimated_minutes": round(words / WORDS_PER_MINUTE, 1),
     }
 
@@ -1058,7 +1163,7 @@ async def visual_terms(subject: str, script: str, clip_seconds: float, voice_rat
     effective_clip_seconds = clip_seconds if slots <= MAX_VISUAL_TERMS else seconds / MAX_VISUAL_TERMS
     chunks = split_script(script, count) or [subject]
     numbered = "\n".join(f"{index + 1}. {chunk}" for index, chunk in enumerate(chunks))
-    generated = parse_json_object(await moonshot_chat(
+    generated = parse_json_object(await llm_chat(
         f"Tema do vídeo: {subject}\nTrechos numerados da narração, na ordem em que aparecem:\n{numbered}\n"
         "Para cada trecho, gere uma busca de banco de vídeos em INGLÊS (1 a 3 palavras) que mostre algo filmável e "
         "concreto do que é dito naquele trecho: uma cena, objeto, ação ou lugar. Nada abstrato, sem nomes próprios, "
@@ -1371,7 +1476,7 @@ def youtube_description(metadata: dict[str, Any]) -> str:
     return description[:5000]
 
 
-def youtube_upload(credentials: Any, video_path: Path, metadata: dict[str, Any]) -> str:
+def youtube_upload(credentials: Any, video_path: Path, metadata: dict[str, Any], thumbnail_file: Path | None = None) -> str:
     from googleapiclient.discovery import build
     from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaFileUpload
@@ -1396,7 +1501,15 @@ def youtube_upload(credentials: Any, video_path: Path, metadata: dict[str, Any])
         if exc.resp.status < 500:
             raise PublishRejected(str(exc)) from exc
         raise
-    return response["id"]
+    video_id = response["id"]
+    if thumbnail_file and thumbnail_file.is_file():
+        # A custom thumbnail is a nice-to-have on top of an already-published video - never fail
+        # the publish over it (e.g. the channel isn't phone-verified, which YouTube requires for this).
+        try:
+            youtube.thumbnails().set(videoId=video_id, media_body=MediaFileUpload(str(thumbnail_file), mimetype="image/jpeg")).execute()
+        except HttpError as exc:
+            logger.warning("Não foi possível definir a thumbnail do vídeo %s: %s", video_id, exc)
+    return video_id
 
 
 async def download_turbo_file(remote_path: str, target: Path) -> None:
@@ -1407,6 +1520,156 @@ async def download_turbo_file(remote_path: str, target: Path) -> None:
             with target.open("wb") as file:
                 async for chunk in response.aiter_bytes():
                     file.write(chunk)
+
+
+REVIEW_FRAMES = 8  # calibration knob: frames sampled across the video for the vision-model review
+
+
+async def run_ffmpeg(*args: str) -> None:
+    process = await asyncio.create_subprocess_exec("ffmpeg", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    _, stderr = await process.communicate()
+    if process.returncode != 0:
+        raise HTTPException(status_code=502, detail=f"ffmpeg falhou: {stderr.decode(errors='replace')[-500:]}")
+
+
+async def extract_review_frames(video_path: Path, duration: float, count: int, out_dir: Path) -> list[Path]:
+    frames = []
+    for index in range(count):
+        timestamp = max(0.0, duration * (index + 0.5) / count)  # middle of each equal slice
+        frame_path = out_dir / f"frame-{index}.jpg"
+        await run_ffmpeg("-y", "-ss", f"{timestamp:.2f}", "-i", str(video_path), "-frames:v", "1", "-vf", "scale=512:-2", "-q:v", "5", str(frame_path))
+        frames.append(frame_path)
+    return frames
+
+
+async def nvidia_chat(content: list[dict[str, Any]], model: str) -> str:
+    key = config_value("nvidia_api_key")
+    if not key:
+        raise HTTPException(status_code=409, detail="Configure a chave NVIDIA em Configurações.")
+    body = {"model": model, "messages": [{"role": "user", "content": content}], "chat_template_kwargs": {"enable_thinking": False}, "max_tokens": 2048}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30, read=180)) as client:
+            response = await send_with_retry(client, "POST", f"{NVIDIA_BASE_URL}/chat/completions", headers={"Authorization": f"Bearer {key}"}, json=body)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail=f"NVIDIA indisponível: {exc}") from exc
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"NVIDIA respondeu {response.status_code}: {response.text[:300]}")
+    try:
+        return response.json()["choices"][0]["message"]["content"] or ""
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise HTTPException(status_code=502, detail="A NVIDIA devolveu uma resposta inesperada") from exc
+
+
+def normalize_review(parsed: dict[str, Any], frame_count: int) -> dict[str, Any]:
+    frames_result = []
+    for item in parsed.get("frames") or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            index = int(item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        if not (0 <= index < frame_count):
+            continue
+        frames_result.append({"index": index, "matches": bool(item.get("matches")), "reason": str(item.get("reason") or "")[:300]})
+    return {"frames": frames_result, "summary": str(parsed.get("summary") or "")[:1000]}
+
+
+@app.post("/api/jobs/{job_id}/review")
+async def review_job(job_id: str) -> dict[str, Any]:
+    """Only ever advisory: never blocks approval, and doesn't touch cuts/terms automatically."""
+    with database() as db:
+        job = job_row_or_404(db, job_id)
+        artifact = db.execute("SELECT * FROM artifacts WHERE job_id=? AND kind='video' ORDER BY created_at LIMIT 1", (job_id,)).fetchone()
+    if job["state"] not in METADATA_STATES:
+        raise HTTPException(status_code=409, detail="Só é possível revisar vídeos concluídos")
+    if not artifact:
+        raise HTTPException(status_code=409, detail="O vídeo final não foi encontrado")
+    if not config_value("nvidia_api_key"):
+        raise HTTPException(status_code=409, detail="Configure a chave NVIDIA em Configurações para revisar imagens.")
+    vision_model = config_value("nvidia_vision_model") or NVIDIA_DEFAULT_VISION_MODEL
+    turbo_payload = json.loads(job["turbo_payload_json"])
+    script = job["script"] or turbo_payload.get("script") or ""
+    audio_duration = float(turbo_payload.get("audio_duration") or 0) or 30.0
+    chunks = split_script(script, REVIEW_FRAMES) if script.strip() else []
+    with tempfile.TemporaryDirectory() as folder:
+        video_path = Path(folder) / "video.mp4"
+        await download_turbo_file(artifact["remote_path"], video_path)
+        frames = await extract_review_frames(video_path, audio_duration, REVIEW_FRAMES, Path(folder))
+        content: list[dict[str, Any]] = [{"type": "text", "text": (
+            "Você está revisando um vídeo gerado automaticamente. Para cada imagem a seguir, diga se ela combina "
+            "com o trecho do roteiro narrado naquele momento (cena, objeto ou lugar relacionado). Responda apenas "
+            'JSON: {"frames": [{"index": número do quadro, "matches": true ou false, "reason": motivo curto}], "summary": resumo curto geral}'
+        )}]
+        for index, frame_path in enumerate(frames):
+            excerpt = chunks[index] if index < len(chunks) else ""
+            content.append({"type": "text", "text": f"Quadro {index}, trecho narrado: {excerpt}" if excerpt else f"Quadro {index}"})
+            content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64.b64encode(frame_path.read_bytes()).decode('ascii')}"}})
+        value = normalize_review(parse_json_object(await nvidia_chat(content, vision_model)), len(frames))
+    with database() as db:
+        db.execute(
+            "INSERT INTO job_reviews(job_id, value_json, created_at) VALUES (?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET value_json=excluded.value_json, created_at=excluded.created_at",
+            (job_id, json.dumps(value), now()),
+        )
+        return row_as_job(job_row_or_404(db, job_id), db)
+
+
+def thumbnail_path(job_id: str) -> Path:
+    return DATA_DIR / "thumbnails" / f"{job_id}.jpg"
+
+
+async def generate_thumbnail_image(prompt: str) -> bytes:
+    key = config_value("nvidia_api_key")
+    if not key:
+        raise HTTPException(status_code=409, detail="Configure a chave NVIDIA em Configurações para gerar thumbnails.")
+    model = config_value("nvidia_image_model") or NVIDIA_DEFAULT_IMAGE_MODEL
+    body = {"prompt": prompt[:2000], "width": THUMBNAIL_WIDTH, "height": THUMBNAIL_HEIGHT, "steps": 30, "cfg_scale": 3.5}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30, read=120)) as client:
+            response = await send_with_retry(client, "POST", f"{NVIDIA_GENAI_BASE_URL}/{model}", headers={"Authorization": f"Bearer {key}"}, json=body)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail=f"NVIDIA indisponível: {exc}") from exc
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"NVIDIA respondeu {response.status_code}: {response.text[:300]}")
+    try:
+        artifact = response.json()["artifacts"][0]
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise HTTPException(status_code=502, detail="A NVIDIA devolveu uma resposta inesperada") from exc
+    if artifact.get("finishReason") != "SUCCESS":
+        raise HTTPException(status_code=502, detail=f"A NVIDIA recusou a imagem: {artifact.get('finishReason')}")
+    return base64.b64decode(artifact["base64"])
+
+
+class ThumbnailInput(BaseModel):
+    prompt: str = Field(default="", max_length=2000)
+
+
+@app.post("/api/jobs/{job_id}/thumbnail")
+async def create_thumbnail(job_id: str, input: ThumbnailInput | None = None) -> dict[str, Any]:
+    input = input or ThumbnailInput()
+    with database() as db:
+        job = job_row_or_404(db, job_id)
+        stored = db.execute("SELECT value_json FROM job_metadata WHERE job_id=?", (job_id,)).fetchone()
+    if job["state"] not in METADATA_STATES:
+        raise HTTPException(status_code=409, detail="Só é possível gerar thumbnail para vídeos concluídos")
+    title = json.loads(stored["value_json"]).get("title") if stored else None
+    prompt = input.prompt.strip() or (
+        f"YouTube thumbnail, bold eye-catching composition, cinematic lighting, no text or letters, about: {title or job['subject']}"
+    )
+    image = await generate_thumbnail_image(prompt)
+    path = thumbnail_path(job_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(image)
+    with database() as db:
+        return row_as_job(job_row_or_404(db, job_id), db)
+
+
+@app.get("/api/jobs/{job_id}/thumbnail")
+def get_thumbnail(job_id: str) -> FileResponse:
+    path = thumbnail_path(job_id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Nenhuma thumbnail gerada ainda")
+    return FileResponse(path, media_type="image/jpeg")
 
 
 async def tiktok_upload(username: str, video_path: Path, metadata: dict[str, Any]) -> tuple[str, str]:
@@ -1502,7 +1765,7 @@ async def publish_to_channel(job_id: str, channel: sqlite3.Row, video: Any, meta
     try:
         # ponytail: uploads run inside the request, one channel after another; move to a background task if long videos hit browser/proxy timeouts.
         if platform == "youtube":
-            external_id, state = await asyncio.to_thread(youtube_upload, credentials, video_path, metadata), "published"
+            external_id, state = await asyncio.to_thread(youtube_upload, credentials, video_path, metadata, thumbnail_path(job_id)), "published"
         else:
             external_id, state = await tiktok_upload(channel["external_id"], video_path, metadata)
     except PublishRejected as exc:
@@ -1639,7 +1902,7 @@ async def suggest_topics(channel: sqlite3.Row, format: str, count: int) -> list[
     )
     seen = {subject.strip().lower() for subject in recent}
     topics: list[dict[str, str]] = []
-    for item in parse_json_object(await moonshot_chat(prompt, json_mode=True)).get("topics") or []:
+    for item in parse_json_object(await llm_chat(prompt, json_mode=True)).get("topics") or []:
         topic = str(item.get("topic") or "").strip()[:500] if isinstance(item, dict) else ""
         if topic and topic.lower() not in seen:  # the model still repeats a produced subject now and then
             seen.add(topic.lower())
@@ -1763,7 +2026,7 @@ async def refresh_analytics() -> dict[str, Any]:
                 )
         table = "\n".join(f"- {pub['subject']}: " + ", ".join(f"{key}={value}" for key, value in values.items()) for pub, values in zip(publications, metrics))
         try:
-            advice = parse_json_object(await moonshot_chat(
+            advice = parse_json_object(await llm_chat(
                 "Você analisa o desempenho dos vídeos de um canal do YouTube. Métricas do YouTube Analytics por vídeo "
                 f"(averageViewDuration em segundos, averageViewPercentage em %):\n{table}\n"
                 "Compare os vídeos entre si e dê de 3 a 5 recomendações práticas para os próximos, citando apenas números desta tabela. "

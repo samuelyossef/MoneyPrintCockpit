@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import os
 import tempfile
@@ -84,7 +85,12 @@ class GatewayContractTests(unittest.TestCase):
         (config_dir / "config.toml").write_text('moonshot_api_key = ""\nmoonshot_base_url = ""\npexels_api_keys = []\n', encoding="utf-8")
         with patch.object(self.main, "detect_moonshot_region", new=self._async_return("china")):
             response = asyncio.run(self.main.update_providers(self.main.ProviderCredentials(moonshot_api_key="sk-test-secret", pexels_api_key="pex-secret")))
-        self.assertEqual(response, {"moonshot": True, "pexels": True, "pixabay": False, "coverr": False, "upload_post": False, "edge_tts": True, "moonshot_model": ""})
+        self.assertEqual(response, {
+            "moonshot": True, "nvidia": False, "pexels": True, "pixabay": False, "coverr": False, "upload_post": False,
+            "edge_tts": True, "moonshot_model": "", "llm_provider": "moonshot",
+            "nvidia_text_model": self.main.NVIDIA_DEFAULT_TEXT_MODEL, "nvidia_vision_model": self.main.NVIDIA_DEFAULT_VISION_MODEL,
+            "nvidia_image_model": self.main.NVIDIA_DEFAULT_IMAGE_MODEL,
+        })
         self.assertNotIn("sk-test-secret", str(response))
         written = (config_dir / "config.toml").read_text(encoding="utf-8")
         self.assertIn('moonshot_api_key = "sk-test-secret"', written)
@@ -123,6 +129,58 @@ class GatewayContractTests(unittest.TestCase):
         asyncio.run(self.main.update_providers(self.main.ProviderCredentials(moonshot_model_name="kimi-k2.6")))
         written = (config_dir / "config.toml").read_text(encoding="utf-8")
         self.assertIn('moonshot_model_name = "kimi-k2.6"', written)
+
+    def test_validate_nvidia_key_reports_rejection(self):
+        from unittest.mock import AsyncMock, patch
+        fake_response = type("FakeResponse", (), {"status_code": 401})()
+        with patch("httpx.AsyncClient.post", new=AsyncMock(return_value=fake_response)):
+            result = asyncio.run(self.main.validate_provider_key(self.main.ProviderValidation(provider="nvidia", api_key="bad-key")))
+        self.assertFalse(result["valid"])
+
+    def test_update_providers_switches_llm_provider_to_nvidia_and_back(self):
+        config_dir = self.main.DATA_DIR / "moneyprinter"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "config.toml").write_text('llm_provider = "moonshot"\n', encoding="utf-8")
+        response = asyncio.run(self.main.update_providers(self.main.ProviderCredentials(
+            llm_provider="nvidia", nvidia_api_key="nv-secret", nvidia_text_model="google/gemma-4-31b-it",
+        )))
+        self.assertEqual(response["llm_provider"], "nvidia")
+        self.assertNotIn("nv-secret", str(response))
+        written = (config_dir / "config.toml").read_text(encoding="utf-8")
+        self.assertIn('llm_provider = "openai"', written)
+        self.assertIn('openai_api_key = "nv-secret"', written)
+        self.assertIn(f'openai_base_url = "{self.main.NVIDIA_BASE_URL}"', written)
+        self.assertIn('openai_model_name = "google/gemma-4-31b-it"', written)
+
+        back = asyncio.run(self.main.update_providers(self.main.ProviderCredentials(llm_provider="moonshot")))
+        self.assertEqual(back["llm_provider"], "moonshot")
+        self.assertIn('llm_provider = "moonshot"', (config_dir / "config.toml").read_text(encoding="utf-8"))
+
+    def test_update_providers_requires_nvidia_key_before_switching(self):
+        from fastapi import HTTPException
+        config_dir = self.main.DATA_DIR / "moneyprinter"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "config.toml").write_text('llm_provider = "moonshot"\n', encoding="utf-8")
+        with self.assertRaises(HTTPException) as blocked:
+            asyncio.run(self.main.update_providers(self.main.ProviderCredentials(llm_provider="nvidia")))
+        self.assertEqual(blocked.exception.status_code, 409)
+
+    def test_llm_chat_sends_json_response_format_only_for_moonshot(self):
+        from unittest.mock import AsyncMock, patch
+        config_dir = self.main.DATA_DIR / "moneyprinter"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        fake_response = type("R", (), {"status_code": 200, "json": lambda self: {"choices": [{"message": {"content": "ok"}}]}})()
+
+        (config_dir / "config.toml").write_text('moonshot_api_key = "mk"\n', encoding="utf-8")
+        with patch.object(self.main, "send_with_retry", new=AsyncMock(return_value=fake_response)) as send:
+            asyncio.run(self.main.llm_chat("prompt", json_mode=True))
+        self.assertIn("response_format", send.call_args.kwargs["json"])
+
+        (config_dir / "config.toml").write_text('cockpit_llm_provider = "nvidia"\nnvidia_api_key = "nk"\n', encoding="utf-8")
+        with patch.object(self.main, "send_with_retry", new=AsyncMock(return_value=fake_response)) as send:
+            asyncio.run(self.main.llm_chat("prompt", json_mode=True))
+        self.assertNotIn("response_format", send.call_args.kwargs["json"])
+        self.assertEqual(send.call_args.args[2], f"{self.main.NVIDIA_BASE_URL}/chat/completions")
 
     def test_build_turbo_payload_passes_video_params_and_drops_the_rest(self):
         payload = self.main.build_turbo_payload(" tema ", "", {
@@ -281,6 +339,7 @@ class GatewayContractTests(unittest.TestCase):
             job = asyncio.run(self.main.publish_job("job-1", self.main.PublishInput(confirm_not_uploaded=True)))
         self.assertEqual(credentials.call_args.args[0], "ch-1")
         self.assertEqual(upload.call_args.args[2]["title"], "Título")
+        self.assertEqual(upload.call_args.args[3], self.main.thumbnail_path("job-1"))
         self.assertEqual(job["publications"][0]["external_id"], "yt123")
         self.assertEqual(self._publication()["state"], "published")
         self.assertEqual(self._publication()["attempts"], 2)
@@ -398,7 +457,7 @@ class GatewayContractTests(unittest.TestCase):
             prompts.append(prompt)
             return outline if json_mode else f"## Título\n- parte {len(prompts) - 1} com **texto**"
 
-        with patch.object(self.main, "moonshot_chat", new=fake_chat):
+        with patch.object(self.main, "llm_chat", new=fake_chat):
             result = asyncio.run(self.main.long_script(self.main.LongScriptInput(subject="oceano", minutes=5)))
         self.assertEqual(len(prompts), 5)  # outline + one call per section
         self.assertIn("parte 1 com texto", prompts[2])  # each section continues from the previous ending
@@ -416,7 +475,7 @@ class GatewayContractTests(unittest.TestCase):
             prompts.append(prompt)
             return outline if json_mode else "narração"
 
-        with patch.object(self.main, "moonshot_chat", new=fake_chat):
+        with patch.object(self.main, "llm_chat", new=fake_chat):
             asyncio.run(self.main.long_script(self.main.LongScriptInput(subject="oceano", minutes=5, requirements="tom leve, estilo TikTok")))
         self.assertTrue(all("tom leve, estilo TikTok" in prompt for prompt in prompts))
 
@@ -429,7 +488,7 @@ class GatewayContractTests(unittest.TestCase):
             prompts.append(prompt)
             return outline if json_mode else "narração"
 
-        with patch.object(self.main, "moonshot_chat", new=fake_chat):
+        with patch.object(self.main, "llm_chat", new=fake_chat):
             asyncio.run(self.main.long_script(self.main.LongScriptInput(subject="oceano", minutes=5, system_prompt="nunca use a palavra incrível")))
         self.assertTrue(all("nunca use a palavra incrível" in prompt for prompt in prompts))
 
@@ -521,7 +580,7 @@ class GatewayContractTests(unittest.TestCase):
             prompts.append(prompt)
             return json.dumps({"topics": [{"topic": "Assunto"}, {"topic": "Tema novo", "angle": "a", "rationale": "r"}]})
 
-        with patch.object(self.main, "youtube_trends", return_value=["Vídeo em alta"]), patch.object(self.main, "moonshot_chat", new=fake_chat):
+        with patch.object(self.main, "youtube_trends", return_value=["Vídeo em alta"]), patch.object(self.main, "llm_chat", new=fake_chat):
             result = asyncio.run(self.main.strategy(self.main.StrategyInput(channel_id=channel_id)))
         self.assertEqual([topic["topic"] for topic in result["topics"]], ["Tema novo"])
         self.assertIn("Vídeo em alta", prompts[0])
@@ -536,7 +595,7 @@ class GatewayContractTests(unittest.TestCase):
         async def fake_chat(prompt, json_mode=False):
             return json.dumps({"title": "Título IA", "description": "desc", "tags": ["a", "b", "c"]})
 
-        with patch.object(self.main, "reconcile_job", new=self._async_return({"state": "completed"})), patch.object(self.main, "moonshot_chat", new=fake_chat):
+        with patch.object(self.main, "reconcile_job", new=self._async_return({"state": "completed"})), patch.object(self.main, "llm_chat", new=fake_chat):
             asyncio.run(self.main.agent_tick())
         with self.main.database() as db:
             state = db.execute("SELECT state FROM video_jobs").fetchone()["state"]
@@ -559,7 +618,7 @@ class GatewayContractTests(unittest.TestCase):
             self.assertIn("Trechos numerados", prompt)
             return json.dumps({"terms": ["ocean waves", "ocean waves", "coral reef"]})  # a duplicate the model repeated
 
-        with patch.object(self.main, "moonshot_chat", new=fake_chat):
+        with patch.object(self.main, "llm_chat", new=fake_chat):
             terms, clip_seconds = asyncio.run(self.main.visual_terms("oceano", script, clip_seconds=5))
         self.assertEqual(clip_seconds, 5)
         self.assertEqual(len(terms), 5)  # one per ~5s chunk of the 24s narration
@@ -572,7 +631,7 @@ class GatewayContractTests(unittest.TestCase):
         async def fake_chat(prompt, json_mode=False):
             return json.dumps({"terms": ["ocean"]})
 
-        with patch.object(self.main, "moonshot_chat", new=fake_chat):
+        with patch.object(self.main, "llm_chat", new=fake_chat):
             terms, clip_seconds = asyncio.run(self.main.visual_terms("oceano", script, clip_seconds=1))
         self.assertEqual(len(terms), self.main.MAX_VISUAL_TERMS)
         self.assertGreater(clip_seconds, 1)  # stretched so the capped term count still covers the whole narration
@@ -617,3 +676,146 @@ class GatewayContractTests(unittest.TestCase):
         terms_mock.assert_not_called()
         self.assertEqual(sent["video"]["video_concat_mode"], "random")
         self.assertNotIn("match_materials_to_script", sent["video"])
+
+    def test_trim_to_words_cuts_at_the_last_full_sentence(self):
+        script = "Primeira frase aqui. Segunda frase aqui. Terceira frase que não deveria caber."
+        self.assertEqual(self.main.trim_to_words(script, 100), script)  # already fits, untouched
+        self.assertEqual(self.main.trim_to_words(script, 6), "Primeira frase aqui. Segunda frase aqui.")
+        self.assertEqual(self.main.trim_to_words("sem pontuacao nenhuma aqui de jeito nenhum", 3), "sem pontuacao nenhuma")
+
+    def test_short_script_max_words_maps_paragraph_number_to_seconds(self):
+        self.assertEqual(self.main.short_script_max_words(4), round(60 * 150 / 60))
+        self.assertEqual(self.main.short_script_max_words(6), round(90 * 150 / 60))
+        self.assertEqual(self.main.short_script_max_words(99), self.main.short_script_max_words(6))  # unmapped value falls back to the longest Short
+
+    def test_short_script_endpoint_trims_an_oversized_turbo_response(self):
+        from unittest.mock import patch
+        long_script_text = " ".join(f"palavra{i}." for i in range(500))
+
+        async def fake_turbo(method, path, **kwargs):
+            return type("Response", (), {"json": lambda self: {"data": {"video_script": long_script_text}}})()
+
+        with patch.object(self.main, "turbo_request", new=fake_turbo):
+            result = asyncio.run(self.main.short_script(self.main.ShortScriptInput(subject="tema", paragraph_number=5)))
+        self.assertTrue(result["trimmed"])
+        self.assertLessEqual(result["words"], self.main.short_script_max_words(5))
+
+        async def fake_turbo_short(method, path, **kwargs):
+            return type("Response", (), {"json": lambda self: {"data": {"video_script": "uma frase curta."}}})()
+
+        with patch.object(self.main, "turbo_request", new=fake_turbo_short):
+            short_result = asyncio.run(self.main.short_script(self.main.ShortScriptInput(subject="tema", paragraph_number=5)))
+        self.assertFalse(short_result["trimmed"])
+
+    def test_create_job_trims_an_oversized_auto_generated_short_script(self):
+        from unittest.mock import patch
+        self._completed_job()
+        self._connected(("yt", "youtube"))
+        long_script_text = " ".join(f"palavra{i}." for i in range(500))
+        sent = {}
+
+        async def fake_turbo(method, path, **kwargs):
+            if path == "/api/v1/videos":
+                sent["video"] = kwargs["json"]
+                return type("Response", (), {"json": lambda self: {"data": {"task_id": "t1"}}})()
+            return type("Response", (), {"json": lambda self: {"data": {"video_script": long_script_text}}})()
+
+        with patch.object(self.main, "turbo_request", new=fake_turbo), patch.object(self.main, "visual_terms", new=self._async_return((["term"], 5.0))):
+            job = asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="tema", format="short", channel_ids=["yt"])))
+        self.assertLess(len(job["script"].split()), 500)
+        self.assertLessEqual(len(job["script"].split()), self.main.short_script_max_words(5))
+
+    def test_long_script_never_exceeds_the_chosen_minutes(self):
+        from unittest.mock import patch
+        outline = json.dumps({"title": "T", "sections": [{"heading": f"S{i}", "points": ["p"]} for i in range(4)]})
+        oversized_section = " ".join(f"palavra{i}." for i in range(400))  # way more than 5 min / 4 sections calls for
+
+        async def fake_chat(prompt, json_mode=False):
+            return outline if json_mode else oversized_section
+
+        with patch.object(self.main, "llm_chat", new=fake_chat):
+            result = asyncio.run(self.main.long_script(self.main.LongScriptInput(subject="oceano", minutes=5)))
+        self.assertTrue(result["trimmed"])
+        self.assertLessEqual(len(result["script"].split()), 5 * self.main.WORDS_PER_MINUTE)
+
+    def test_review_job_normalizes_frames_and_drops_invalid_indexes(self):
+        from unittest.mock import patch
+        self._completed_job()
+        with self.main.database() as db:
+            db.execute("UPDATE video_jobs SET script='Frase um. Frase dois.' WHERE id='job-1'")
+
+        async def fake_frames(video_path, duration, count, out_dir):
+            paths = []
+            for i in range(count):
+                path = out_dir / f"f{i}.jpg"
+                path.write_bytes(b"fake-jpeg-bytes")
+                paths.append(path)
+            return paths
+
+        vision_response = json.dumps({
+            "frames": [{"index": 0, "matches": True, "reason": "combina"}, {"index": 99, "matches": True, "reason": "índice inválido, deve sumir"}],
+            "summary": "tudo certo",
+        })
+
+        with patch.object(self.main, "download_turbo_file", new=self._async_return(None)), \
+                patch.object(self.main, "extract_review_frames", new=fake_frames), \
+                patch.object(self.main, "config_value", side_effect=lambda key: "nv-key" if key == "nvidia_api_key" else ""), \
+                patch.object(self.main, "nvidia_chat", new=self._async_return(vision_response)):
+            job = asyncio.run(self.main.review_job("job-1"))
+        self.assertEqual(len(job["review"]["frames"]), 1)  # index 99 is out of range for 8 frames and gets dropped
+        self.assertEqual(job["review"]["frames"][0], {"index": 0, "matches": True, "reason": "combina"})
+        self.assertEqual(job["review"]["summary"], "tudo certo")
+
+    def test_review_job_requires_a_configured_nvidia_key(self):
+        from fastapi import HTTPException
+        self._completed_job()
+        with self.assertRaises(HTTPException) as blocked:
+            asyncio.run(self.main.review_job("job-1"))
+        self.assertEqual(blocked.exception.status_code, 409)
+
+    def test_generate_thumbnail_image_decodes_the_base64_artifact(self):
+        from unittest.mock import AsyncMock, patch
+        config_dir = self.main.DATA_DIR / "moneyprinter"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "config.toml").write_text('nvidia_api_key = "nv-key"\n', encoding="utf-8")
+        payload = {"artifacts": [{"base64": base64.b64encode(b"fake-jpeg-bytes").decode(), "finishReason": "SUCCESS", "seed": 1}]}
+        fake_response = type("R", (), {"status_code": 200, "json": lambda self: payload})()
+        with patch.object(self.main, "send_with_retry", new=AsyncMock(return_value=fake_response)) as send:
+            image = asyncio.run(self.main.generate_thumbnail_image("a coffee shop"))
+        self.assertEqual(image, b"fake-jpeg-bytes")
+        self.assertTrue(send.call_args.args[2].startswith(self.main.NVIDIA_GENAI_BASE_URL))
+
+    def test_generate_thumbnail_image_requires_a_configured_nvidia_key(self):
+        from fastapi import HTTPException
+        with self.assertRaises(HTTPException) as blocked:
+            asyncio.run(self.main.generate_thumbnail_image("x"))
+        self.assertEqual(blocked.exception.status_code, 409)
+
+    def test_generate_thumbnail_image_rejects_a_filtered_result(self):
+        from unittest.mock import AsyncMock, patch
+        from fastapi import HTTPException
+        config_dir = self.main.DATA_DIR / "moneyprinter"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "config.toml").write_text('nvidia_api_key = "nv-key"\n', encoding="utf-8")
+        payload = {"artifacts": [{"base64": "", "finishReason": "CONTENT_FILTERED"}]}
+        fake_response = type("R", (), {"status_code": 200, "json": lambda self: payload})()
+        with patch.object(self.main, "send_with_retry", new=AsyncMock(return_value=fake_response)):
+            with self.assertRaises(HTTPException) as blocked:
+                asyncio.run(self.main.generate_thumbnail_image("x"))
+        self.assertEqual(blocked.exception.status_code, 502)
+
+    def test_create_thumbnail_writes_the_file_and_exposes_its_update_time(self):
+        from unittest.mock import patch
+        self._completed_job()
+        self.main.put_metadata("job-1", self.main.MetadataInput(title="Meu Título", description="d", tags="a,b,c"))
+        with patch.object(self.main, "generate_thumbnail_image", new=self._async_return(b"fake-jpeg")):
+            job = asyncio.run(self.main.create_thumbnail("job-1"))
+        self.assertIsNotNone(job["thumbnail_updated_at"])
+        self.assertEqual(self.main.thumbnail_path("job-1").read_bytes(), b"fake-jpeg")
+
+    def test_get_thumbnail_404s_before_one_exists(self):
+        from fastapi import HTTPException
+        self._completed_job()
+        with self.assertRaises(HTTPException) as blocked:
+            self.main.get_thumbnail("job-1")
+        self.assertEqual(blocked.exception.status_code, 404)

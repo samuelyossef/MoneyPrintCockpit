@@ -1086,8 +1086,10 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
     const prov = D.__providers;
     const panes = {
       ia: `
-        <div class="dr-sec" style="margin-top:0">Roteiro por IA</div>
-        <div class="card-note" style="margin:6px 0 14px;font-family:inherit">O MoneyPrinterTurbo usa Moonshot/Kimi para gerar roteiro e termos de busca.</div>
+        <div class="dr-sec" style="margin-top:0">Provedor de IA</div>
+        <div class="card-note" style="margin:6px 0 14px;font-family:inherit">Usado para roteiro, metadados, palavras-chave, estratégia e recomendações — inclusive o roteiro do Short, escrito pelo Turbo.</div>
+        ${field("Provedor de IA", prov && prov.llm_provider || "moonshot", { select: true, id: "cfgLlmProvider", opts: [["moonshot", "Kimi (Moonshot)"], ["nvidia", "NVIDIA"]] })}
+        <div class="dr-sec" style="margin-top:20px">Kimi (Moonshot)</div>
         <div class="grid2">
           <div><label class="dr-sec" style="margin:0 0 7px">Chave Moonshot/Kimi ${prov ? tag(!!prov.moonshot, prov.moonshot ? "Configurada" : "Não configurada") : ""}</label>
             <input class="np-input" id="cfgMoonshotKey" style="width:100%" type="password" placeholder="${prov && prov.moonshot ? "•••••••• (deixe em branco para manter)" : "sk-..."}" autocomplete="off" />
@@ -1096,7 +1098,20 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
             <input class="np-input" id="cfgMoonshotModel" style="width:100%" value="${esc(prov && prov.moonshot_model || "")}" placeholder="kimi-k3 (padrão)" autocomplete="off" />
             <div class="card-note" style="margin-top:6px;font-family:inherit">Ex.: kimi-k3, kimi-k2.6 — a lista exata depende do plano da sua conta.</div></div>
         </div>
-        <div class="card-note" style="margin-top:10px;font-family:inherit">Salvar grava direto em <code>runtime/moneyprinter/config.toml</code>. É preciso reiniciar o container para aplicar: <code>docker compose restart moneyprinterturbo</code>.</div>`,
+        <div class="dr-sec" style="margin-top:20px">NVIDIA</div>
+        <div class="card-note" style="margin:6px 0 14px;font-family:inherit">O modelo de visão é usado em "Revisar imagens com IA" e o de imagem em "Gerar thumbnail com IA", ambos no painel de publicação.</div>
+        <div class="grid2">
+          <div><label class="dr-sec" style="margin:0 0 7px">Chave NVIDIA ${prov ? tag(!!prov.nvidia, prov.nvidia ? "Configurada" : "Não configurada") : ""}</label>
+            <input class="np-input" id="cfgNvidiaKey" style="width:100%" type="password" placeholder="${prov && prov.nvidia ? "•••••••• (deixe em branco para manter)" : "nvapi-..."}" autocomplete="off" />
+            <div class="card-note" id="cfgNvidiaKeyStatus" style="margin-top:5px;min-height:14px"></div></div>
+          <div><label class="dr-sec" style="margin:0 0 7px">Modelo de texto</label>
+            <input class="np-input" id="cfgNvidiaTextModel" style="width:100%" value="${esc(prov && prov.nvidia_text_model || "")}" placeholder="google/gemma-4-31b-it" autocomplete="off" /></div>
+          <div><label class="dr-sec" style="margin:0 0 7px">Modelo de visão (revisão de imagens)</label>
+            <input class="np-input" id="cfgNvidiaVisionModel" style="width:100%" value="${esc(prov && prov.nvidia_vision_model || "")}" placeholder="google/diffusiongemma-26b-a4b-it" autocomplete="off" /></div>
+          <div><label class="dr-sec" style="margin:0 0 7px">Modelo de imagem (thumbnail)</label>
+            <input class="np-input" id="cfgNvidiaImageModel" style="width:100%" value="${esc(prov && prov.nvidia_image_model || "")}" placeholder="black-forest-labs/flux.1-dev" autocomplete="off" /></div>
+        </div>
+        <div class="card-note" style="margin-top:10px;font-family:inherit">Salvar grava direto em <code>runtime/moneyprinter/config.toml</code>. Trocar o provedor de IA também reconfigura o roteiro do Short no Turbo. É preciso reiniciar o container para aplicar: <code>docker compose restart moneyprinterturbo</code>.</div>`,
       video: `
         <div class="dr-sec" style="margin-top:0">Filmagens e stock</div>
         <div class="card-note" style="margin:6px 0 14px;font-family:inherit">Fonte padrão usada para buscar as filmagens. Configure a chave de quem for usar antes de selecionar.</div>
@@ -1214,6 +1229,7 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
             ? `O roteiro longo é escrito em várias chamadas de IA (uma por seção); a primeira precisa responder em JSON, então este texto entra como instrução de estilo em todas elas, em vez de substituí-las por completo. Usado por "Escrever roteiro longo com IA".`
             : `Substitui por completo as instruções que a IA recebe para escrever o roteiro do Short — tanto no botão "Gerar roteiro com IA" quanto se o roteiro for deixado em branco para o Turbo escrever sozinho.`} Deixe vazio para usar o prompt padrão.</div>
           <textarea class="np-input" id="genSystemPrompt" rows="16" style="width:100%;resize:vertical" placeholder="Deixe vazio para usar o prompt padrão"></textarea>
+          <button class="btn gen-save-defaults" type="button" style="margin-top:10px;padding:11px" title="Salvar estas opções como padrão para novos vídeos">Salvar padrão</button>
         </div>
       </div>`;
   }
@@ -1267,6 +1283,7 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
                 <div>
                   <label class="dr-sec" style="margin:0 0 7px">Requisitos personalizados do roteiro</label>
                   <textarea class="np-input" id="genScriptRequirements" rows="2" style="width:100%;resize:vertical" placeholder="Ex: use um tom mais leve, estilo TikTok, com uma abertura mais intrigante"></textarea>
+                  <button class="btn sm gen-save-defaults" type="button" style="margin-top:6px" title="Salvar estas opções como padrão para novos vídeos">Salvar padrão</button>
                 </div>
               </div>
             </details>
@@ -1329,6 +1346,12 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
                     <label class="card-note" style="font-family:inherit;display:flex;align-items:center;gap:6px">Agendar para <input class="np-input" type="datetime-local" id="genPublishAt" style="padding:4px 6px" /></label>
                     <span class="card-note" id="genPublishStatus" role="status" style="font-family:inherit"></span>
                   </div>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px">
+                    <button class="btn sm" id="genReviewBtn" type="button">Revisar imagens com IA</button>
+                    <button class="btn sm" id="genThumbBtn" type="button">Gerar thumbnail com IA</button>
+                  </div>
+                  <div id="genReviewResult" style="margin-top:6px"></div>
+                  <img id="genThumbImg" alt="Thumbnail gerada" style="margin-top:8px;width:100%;max-width:320px;border-radius:8px;display:block" hidden />
                 </div>
               </div></div>
           </div>
@@ -1400,7 +1423,7 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
             <div><label class="dr-sec" style="margin:0 0 7px">Volume da música</label>
               <select class="set-select" id="genBgmVolume" style="width:100%"><option value="0.1">10%</option><option value="0.2" selected>20%</option><option value="0.4">40%</option><option value="0.6">60%</option></select></div>
           </div>
-          <button class="btn" type="button" id="genSaveDefaultsBtn" style="padding:11px" title="Salvar estas opções como padrão para novos vídeos">Salvar padrão</button>
+          <button class="btn gen-save-defaults" type="button" id="genSaveDefaultsBtn" style="padding:11px" title="Salvar estas opções como padrão para novos vídeos">Salvar padrão</button>
         </div>
       </div>`;
   }
