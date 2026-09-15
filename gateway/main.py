@@ -4,12 +4,14 @@ from __future__ import annotations
 import asyncio
 import html
 import json
+import logging
 import os
 import re
 import sqlite3
+import statistics
 import tempfile
 from contextlib import asynccontextmanager, contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal
 from uuid import uuid4
@@ -31,6 +33,10 @@ RETRY_BASE_SECONDS = 1.0
 
 def now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def as_utc(value: datetime) -> datetime:
+    return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC)
 
 
 def api_key() -> str:
@@ -100,6 +106,13 @@ def initialize_database() -> None:
             CREATE TABLE IF NOT EXISTS settings (
               key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS operators (
+              channel_id TEXT PRIMARY KEY REFERENCES channels(id), enabled INTEGER NOT NULL DEFAULT 0, format TEXT NOT NULL DEFAULT 'short',
+              cadence_hours INTEGER NOT NULL DEFAULT 24, next_run_at TEXT, last_run_at TEXT, last_error TEXT, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS video_analytics (
+              publication_id TEXT PRIMARY KEY, captured_at TEXT NOT NULL, metrics_json TEXT NOT NULL, score INTEGER NOT NULL
+            );
             """
         )
         job_columns = {column["name"] for column in db.execute("PRAGMA table_info(video_jobs)")}
@@ -109,7 +122,12 @@ def initialize_database() -> None:
             db.execute("ALTER TABLE video_jobs ADD COLUMN format TEXT")
             # Renders from before the long/short split: landscape ones were long-form, the rest Shorts.
             db.execute("UPDATE video_jobs SET format = CASE WHEN json_extract(request_json, '$.video_aspect') = '16:9' THEN 'long' ELSE 'short' END")
-        if "channel_id" not in {column["name"] for column in db.execute("PRAGMA table_info(publications)")}:
+        if "created_by" not in job_columns:
+            db.execute("ALTER TABLE video_jobs ADD COLUMN created_by TEXT")
+        publication_columns = {column["name"] for column in db.execute("PRAGMA table_info(publications)")}
+        if "scheduled_at" not in publication_columns:
+            db.execute("ALTER TABLE publications ADD COLUMN scheduled_at TEXT")
+        if "channel_id" not in publication_columns:
             db.execute("ALTER TABLE publications ADD COLUMN channel_id TEXT REFERENCES channels(id)")
             db.execute("UPDATE publications SET channel_id = (SELECT channel_id FROM video_jobs WHERE video_jobs.id = publications.job_id)")
             # A channel chosen before multi-channel publishing lived on video_jobs.channel_id; it becomes a pending target.
@@ -340,7 +358,9 @@ async def reconcile_stale_jobs() -> None:
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     initialize_database()
     await reconcile_stale_jobs()
+    loop = asyncio.create_task(agent_loop())
     yield
+    loop.cancel()
 
 
 app = FastAPI(title="Moneyprint Cockpit Gateway", version="1.0.0", lifespan=lifespan)
@@ -981,7 +1001,7 @@ def approve_job(job_id: str) -> dict[str, Any]:
 
 
 # youtube.readonly is what lets the callback find out which channel was picked on Google's consent screen.
-YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload", "https://www.googleapis.com/auth/youtube.readonly"]
+YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload", "https://www.googleapis.com/auth/youtube.readonly", "https://www.googleapis.com/auth/yt-analytics.readonly"]
 LANGUAGE_PATTERN = r"[a-z]{2,3}(-[A-Za-z0-9]{2,8})*"
 UPLOAD_POST_BASE = "https://api.upload-post.com"
 PLATFORM_LABELS = {"youtube": "YouTube Studio", "tiktok": "TikTok"}
@@ -1157,7 +1177,9 @@ def youtube_credentials(channel_id: str) -> Any:
     from google.oauth2.credentials import Credentials
 
     token_file = youtube_token_file(channel_id)
-    credentials = Credentials.from_authorized_user_file(str(token_file), YOUTUBE_SCOPES)
+    # The scopes granted at connect time, not YOUTUBE_SCOPES: refreshing with a scope the token never got
+    # (e.g. Analytics, added later) fails with invalid_scope and would wrongly mark the channel expired.
+    credentials = Credentials.from_authorized_user_file(str(token_file))
     if not credentials.valid:
         try:
             credentials.refresh(GoogleRequest())
@@ -1335,6 +1357,7 @@ async def reconcile_publications(job_id: str) -> None:
 class PublishInput(BaseModel):
     channel_ids: list[str] | None = Field(default=None, max_length=5)  # None: the job's pending/failed targets
     confirm_not_uploaded: bool = False
+    publish_at: datetime | None = None  # future: validate now, upload when the agent loop reaches it
 
 
 async def publish_to_channel(job_id: str, channel: sqlite3.Row, video: Any, metadata: dict[str, Any], confirm_not_uploaded: bool) -> None:
@@ -1389,6 +1412,8 @@ async def publish_to_channel(job_id: str, channel: sqlite3.Row, video: Any, meta
 @app.post("/api/jobs/{job_id}/publish")
 async def publish_job(job_id: str, input: PublishInput | None = None) -> dict[str, Any]:
     input = input or PublishInput()
+    if input.publish_at and as_utc(input.publish_at) <= datetime.now(UTC):
+        raise HTTPException(status_code=422, detail="Escolha uma data de agendamento no futuro.")
     with database() as db:
         job = job_row_or_404(db, job_id)
         if job["state"] != "approved":
@@ -1408,7 +1433,9 @@ async def publish_job(job_id: str, input: PublishInput | None = None) -> dict[st
     for channel in channels:
         if channel["platform"] == "youtube" and not youtube_token_file(channel["id"]).is_file():
             raise HTTPException(status_code=409, detail=f"O canal {channel['name']} perdeu a autorização. Reconecte em Canais.")
-    metadata = {**normalize_youtube_metadata(json.loads(stored["value_json"]))[0], "format": job["format"]}
+    if input.publish_at:
+        return schedule_publications(job_id, channels, as_utc(input.publish_at))
+    metadata ={**normalize_youtube_metadata(json.loads(stored["value_json"]))[0], "format": job["format"]}
     failures: list[tuple[str, HTTPException]] = []
     with tempfile.TemporaryDirectory() as folder:
         video_path = Path(folder) / "video.mp4"
@@ -1431,6 +1458,371 @@ async def publish_job(job_id: str, input: PublishInput | None = None) -> dict[st
     with database() as db:
         job_view = row_as_job(job_row_or_404(db, job_id), db)
     return {**job_view, "errors": [{"channel_id": channel_id, "detail": exc.detail} for channel_id, exc in failures]}
+
+
+def schedule_publications(job_id: str, channels: list[sqlite3.Row], publish_at: datetime) -> dict[str, Any]:
+    with database() as db:
+        for channel in channels:
+            claimed = db.execute(
+                "INSERT INTO publications(id, job_id, platform, channel_id, state, scheduled_at, created_at, updated_at) VALUES (?, ?, ?, ?, 'scheduled', ?, ?, ?) "
+                "ON CONFLICT(job_id, platform) DO UPDATE SET channel_id=excluded.channel_id, state='scheduled', scheduled_at=excluded.scheduled_at, error=NULL, updated_at=excluded.updated_at "
+                "WHERE publications.state IN ('pending', 'failed', 'scheduled')",
+                (str(uuid4()), job_id, channel["platform"], channel["id"], publish_at.isoformat(), now(), now()),
+            ).rowcount
+            if not claimed:  # the database() block rolls back the channels already scheduled
+                raise HTTPException(status_code=409, detail=f"{channel['name']}: já foi enviado ou tem resultado incerto, não dá para agendar.")
+        return {**row_as_job(job_row_or_404(db, job_id), db), "errors": []}
+
+
+@app.delete("/api/jobs/{job_id}/schedule")
+def cancel_schedule(job_id: str, channel_id: str | None = None) -> dict[str, Any]:
+    with database() as db:
+        job = job_row_or_404(db, job_id)
+        db.execute(
+            "UPDATE publications SET state='pending', scheduled_at=NULL, updated_at=? WHERE job_id=? AND state='scheduled' AND (? IS NULL OR channel_id=?)",
+            (now(), job_id, channel_id, channel_id),
+        )
+        return row_as_job(job, db)
+
+
+# ── Agentes ──────────────────────────────────────────────────────────────────
+logger = logging.getLogger("cockpit.agents")
+AGENT_LOOP_SECONDS = 60
+PROJECT_NAMES = {"long": "Vídeos longos", "short": "Shorts"}  # the same projects the Gerador and Shorts screens use
+REGION_BY_LANGUAGE = {"pt": "BR", "en": "US", "es": "ES"}
+VOICE_BY_LANGUAGE = {"pt": "pt-BR-FranciscaNeural", "en": "en-US-JennyNeural", "es": "es-ES-ElviraNeural"}
+OPERATOR_MINUTES = 8  # calibration knob: length of the long videos the operator writes
+ANALYTICS_METRICS = "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,likes,comments,subscribersGained"
+
+
+def youtube_trends(language: str) -> list[str]:
+    """Titles trending on YouTube in the channel's region. Only a hint for the strategist, so any failure means no trends."""
+    from googleapiclient.discovery import build
+
+    with database() as db:
+        row = db.execute("SELECT id FROM channels WHERE platform='youtube' AND status='connected' AND deleted_at IS NULL LIMIT 1").fetchone()
+    if not row:
+        return []
+    try:
+        youtube = build("youtube", "v3", credentials=youtube_credentials(row["id"]), cache_discovery=False)
+        region = REGION_BY_LANGUAGE.get(language.split("-")[0], "US")
+        items = youtube.videos().list(part="snippet", chart="mostPopular", regionCode=region, maxResults=25).execute().get("items") or []
+    except Exception as exc:
+        logger.warning("Tendências do YouTube indisponíveis: %s", exc)
+        return []
+    return [item["snippet"]["title"] for item in items if (item.get("snippet") or {}).get("title")]
+
+
+async def suggest_topics(channel: sqlite3.Row, format: str, count: int) -> list[dict[str, str]]:
+    with database() as db:
+        recent = [row["subject"] for row in db.execute(
+            "SELECT jobs.subject FROM video_jobs AS jobs JOIN publications ON publications.job_id = jobs.id "
+            "WHERE publications.channel_id=? AND jobs.deleted_at IS NULL ORDER BY jobs.created_at DESC LIMIT 30",
+            (channel["id"],),
+        )]
+    trends = await asyncio.to_thread(youtube_trends, channel["language"])
+    length = "vídeos longos de 5 a 15 minutos" if format == "long" else "Shorts verticais de 60 a 90 segundos"
+    prompt = (
+        f"Você é o estrategista de conteúdo de um canal. Sugira {count} temas para {length}, no idioma {channel['language']}."
+        + (f" Nicho do canal: {channel['niche']}." if channel["niche"] else "")
+        + ("\nEm alta no YouTube agora (só inspiração, adapte ao nicho):\n- " + "\n- ".join(trends) if trends else "")
+        + ("\nJá produzidos, não repita:\n- " + "\n- ".join(recent) if recent else "")
+        + "\nNão invente números, estatísticas nem fontes."
+        + ' Responda apenas JSON: {"topics": [{"topic": tema pronto para usar como título de trabalho, "angle": o gancho ou ângulo, "rationale": por que deve funcionar neste canal}]}'
+    )
+    seen = {subject.strip().lower() for subject in recent}
+    topics: list[dict[str, str]] = []
+    for item in parse_json_object(await moonshot_chat(prompt, json_mode=True)).get("topics") or []:
+        topic = str(item.get("topic") or "").strip()[:500] if isinstance(item, dict) else ""
+        if topic and topic.lower() not in seen:  # the model still repeats a produced subject now and then
+            seen.add(topic.lower())
+            topics.append({"topic": topic, "angle": str(item.get("angle") or ""), "rationale": str(item.get("rationale") or "")})
+    if not topics:
+        raise HTTPException(status_code=502, detail="A IA não sugeriu nenhum tema novo")
+    return topics[:count]
+
+
+class StrategyInput(BaseModel):
+    channel_id: str
+    format: Literal["long", "short"] = "short"
+    count: int = Field(default=5, ge=1, le=10)
+
+
+@app.post("/api/agents/strategy")
+async def strategy(input: StrategyInput) -> dict[str, Any]:
+    with database() as db:
+        channel = channel_row_or_404(db, input.channel_id)
+    return {"topics": await suggest_topics(channel, input.format, input.count)}
+
+
+def analytics_score(metrics: dict[str, Any], channel_median_views: float) -> int:
+    """0-100 from retention, reach against the channel's own median (a small channel isn't judged by
+    absolute views) and engagement."""
+    views = float(metrics.get("views") or 0)
+    retention = min(float(metrics.get("averageViewPercentage") or 0), 100) / 100
+    reach = min(views / (2 * channel_median_views), 1) if channel_median_views > 0 else float(views > 0)  # twice the median scores full
+    interactions = float(metrics.get("likes") or 0) + float(metrics.get("comments") or 0)
+    engagement = min(interactions / views / 0.05, 1) if views else 0.0  # calibration knob: 5% likes+comments per view scores full
+    return round(100 * (0.4 * retention + 0.3 * reach + 0.3 * engagement))
+
+
+def youtube_video_metrics(credentials: Any, video_id: str, start_date: str) -> dict[str, Any]:
+    from googleapiclient.discovery import build
+
+    analytics = build("youtubeAnalytics", "v2", credentials=credentials, cache_discovery=False)
+    report = analytics.reports().query(
+        ids="channel==MINE", startDate=start_date, endDate=datetime.now(UTC).date().isoformat(), metrics=ANALYTICS_METRICS, filters=f"video=={video_id}",
+    ).execute()
+    rows = report.get("rows") or []
+    if not rows:  # no views yet (Analytics lags a day or two)
+        return {name: 0 for name in ANALYTICS_METRICS.split(",")}
+    return dict(zip((header["name"] for header in report.get("columnHeaders") or []), rows[0]))
+
+
+PUBLISHED_YOUTUBE = (
+    "FROM publications AS p JOIN video_jobs AS jobs ON jobs.id = p.job_id LEFT JOIN channels ON channels.id = p.channel_id "
+    "LEFT JOIN job_metadata AS meta ON meta.job_id = jobs.id LEFT JOIN video_analytics AS stats ON stats.publication_id = p.id "
+    "WHERE p.platform='youtube' AND p.state='published' AND p.channel_id IS NOT NULL AND jobs.deleted_at IS NULL"
+)
+
+
+@app.get("/api/agents/analytics")
+def analytics_overview() -> dict[str, Any]:
+    with database() as db:
+        videos = [
+            {"publication_id": row["id"], "channel_id": row["channel_id"], "channel_name": row["channel_name"], "external_id": row["external_id"],
+             "title": row["title"] or row["subject"], "metrics": json.loads(row["metrics_json"]) if row["metrics_json"] else None,
+             "score": row["score"], "captured_at": row["captured_at"]}
+            for row in db.execute(
+                "SELECT p.id, p.channel_id, p.external_id, jobs.subject, channels.name AS channel_name, json_extract(meta.value_json, '$.title') AS title, "
+                f"stats.metrics_json, stats.score, stats.captured_at {PUBLISHED_YOUTUBE} ORDER BY stats.score IS NULL, stats.score DESC"
+            )
+        ]
+        names = {row["id"]: row["name"] for row in db.execute("SELECT id, name FROM channels")}
+        recommendations = [
+            {"channel_id": row["key"].split(":", 1)[1], "channel_name": names.get(row["key"].split(":", 1)[1], ""), "items": json.loads(row["value_json"]), "updated_at": row["updated_at"]}
+            for row in db.execute("SELECT key, value_json, updated_at FROM settings WHERE key LIKE 'analytics-recommendations:%'")
+        ]
+    return {"videos": videos, "recommendations": recommendations}
+
+
+@app.post("/api/agents/analytics/refresh")
+async def refresh_analytics() -> dict[str, Any]:
+    from googleapiclient.errors import HttpError
+
+    with database() as db:
+        rows = db.execute(f"SELECT p.id, p.channel_id, p.external_id, p.updated_at, jobs.subject {PUBLISHED_YOUTUBE}").fetchall()
+    by_channel: dict[str, list[sqlite3.Row]] = {}
+    for row in rows:
+        by_channel.setdefault(row["channel_id"], []).append(row)
+    errors: list[dict[str, str]] = []
+    for channel_id, publications in by_channel.items():
+        try:
+            credentials = await asyncio.to_thread(youtube_credentials, channel_id)
+            # Published is the last state change of a published row, so updated_at is the publish date.
+            metrics = [await asyncio.to_thread(youtube_video_metrics, credentials, pub["external_id"], pub["updated_at"][:10]) for pub in publications]
+        except HttpError as exc:
+            detail = "Reconecte o canal em Canais para liberar o Analytics." if exc.resp.status == 403 else f"O YouTube Analytics respondeu {exc.resp.status}."
+            errors.append({"channel_id": channel_id, "detail": detail})
+            continue
+        except Exception as exc:
+            errors.append({"channel_id": channel_id, "detail": str(exc)[:300]})
+            continue
+        median = statistics.median(float(values.get("views") or 0) for values in metrics)
+        with database() as db:
+            for pub, values in zip(publications, metrics):
+                db.execute(
+                    "INSERT INTO video_analytics(publication_id, captured_at, metrics_json, score) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(publication_id) DO UPDATE SET captured_at=excluded.captured_at, metrics_json=excluded.metrics_json, score=excluded.score",
+                    (pub["id"], now(), json.dumps(values), analytics_score(values, median)),
+                )
+        table = "\n".join(f"- {pub['subject']}: " + ", ".join(f"{key}={value}" for key, value in values.items()) for pub, values in zip(publications, metrics))
+        try:
+            advice = parse_json_object(await moonshot_chat(
+                "Você analisa o desempenho dos vídeos de um canal do YouTube. Métricas do YouTube Analytics por vídeo "
+                f"(averageViewDuration em segundos, averageViewPercentage em %):\n{table}\n"
+                "Compare os vídeos entre si e dê de 3 a 5 recomendações práticas para os próximos, citando apenas números desta tabela. "
+                'Responda apenas JSON: {"recommendations": [texto curto]}',
+                json_mode=True,
+            ))
+        except HTTPException as exc:
+            errors.append({"channel_id": channel_id, "detail": f"Recomendações indisponíveis: {exc.detail}"})
+            continue
+        items = [str(item).strip() for item in advice.get("recommendations") or [] if str(item).strip()][:5]
+        with database() as db:
+            db.execute(
+                "INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at",
+                (f"analytics-recommendations:{channel_id}", json.dumps(items), now()),
+            )
+    return {**analytics_overview(), "errors": errors}
+
+
+@app.get("/api/agents/schedule")
+def list_schedule() -> list[dict[str, Any]]:
+    with database() as db:
+        return [dict(row) for row in db.execute(
+            "SELECT p.job_id, p.channel_id, p.platform, p.scheduled_at, jobs.subject, channels.name AS channel_name, json_extract(meta.value_json, '$.title') AS title "
+            "FROM publications AS p JOIN video_jobs AS jobs ON jobs.id = p.job_id LEFT JOIN channels ON channels.id = p.channel_id "
+            "LEFT JOIN job_metadata AS meta ON meta.job_id = jobs.id WHERE p.state='scheduled' AND jobs.deleted_at IS NULL ORDER BY p.scheduled_at"
+        )]
+
+
+def get_or_create_project(name: str, language: str) -> dict[str, Any]:
+    with database() as db:
+        row = db.execute("SELECT * FROM projects WHERE name=? AND deleted_at IS NULL ORDER BY created_at LIMIT 1", (name,)).fetchone()
+    if row:
+        return row_as_project(row)
+    return create_project(ProjectCreate(name=name, language=language, publish={"auto_publish": False, "platforms": [], "youtube_privacy": "private"}))
+
+
+class OperatorInput(BaseModel):
+    enabled: bool = False
+    format: Literal["long", "short"] = "short"
+    cadence_hours: Literal[12, 24, 48, 168] = 24
+    next_run_at: datetime | None = None
+
+
+@app.get("/api/agents/operators")
+def list_operators() -> dict[str, Any]:
+    with database() as db:
+        operators = [
+            {"channel_id": row["id"], "channel_name": row["name"], "platform": row["platform"], "enabled": bool(row["enabled"]),
+             "format": row["format"] or "short", "cadence_hours": row["cadence_hours"] or 24,
+             "next_run_at": row["next_run_at"], "last_run_at": row["last_run_at"], "last_error": row["last_error"]}
+            for row in db.execute(
+                "SELECT channels.id, channels.name, channels.platform, operators.enabled, operators.format, operators.cadence_hours, "
+                "operators.next_run_at, operators.last_run_at, operators.last_error FROM channels LEFT JOIN operators ON operators.channel_id = channels.id "
+                "WHERE channels.status='connected' AND channels.deleted_at IS NULL ORDER BY channels.created_at"
+            )
+        ]
+        awaiting = [dict(row) for row in db.execute(
+            "SELECT id, subject, format, completed_at FROM video_jobs WHERE created_by='operator' AND state='completed' AND deleted_at IS NULL ORDER BY completed_at DESC"
+        )]
+    return {"operators": operators, "awaiting_approval": awaiting}
+
+
+@app.put("/api/agents/operators/{channel_id}")
+def put_operator(channel_id: str, input: OperatorInput) -> dict[str, Any]:
+    with database() as db:
+        channel = channel_row_or_404(db, channel_id)
+        if channel["status"] != "connected":
+            raise HTTPException(status_code=409, detail="O canal não está conectado. Reconecte em Canais.")
+        if channel["platform"] != "youtube" and input.format == "long":
+            raise HTTPException(status_code=409, detail="TikTok recebe apenas Shorts.")
+        next_run = as_utc(input.next_run_at) if input.next_run_at else datetime.now(UTC) + timedelta(hours=input.cadence_hours)
+        db.execute(
+            "INSERT INTO operators(channel_id, enabled, format, cadence_hours, next_run_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(channel_id) DO UPDATE SET enabled=excluded.enabled, format=excluded.format, cadence_hours=excluded.cadence_hours, next_run_at=excluded.next_run_at, updated_at=excluded.updated_at",
+            (channel_id, int(input.enabled), input.format, input.cadence_hours, next_run.isoformat(), now()),
+        )
+    return next(operator for operator in list_operators()["operators"] if operator["channel_id"] == channel_id)
+
+
+@app.post("/api/agents/operators/{channel_id}/run")
+async def run_operator(channel_id: str) -> dict[str, Any]:
+    """Starts one video for the channel and stops there: the loop writes its metadata, but approving
+    and publishing stay with the user."""
+    with database() as db:
+        operator = db.execute("SELECT * FROM operators WHERE channel_id=?", (channel_id,)).fetchone()
+        channel = db.execute("SELECT * FROM channels WHERE id=? AND deleted_at IS NULL", (channel_id,)).fetchone()
+        busy = db.execute(
+            "SELECT 1 FROM video_jobs AS jobs JOIN publications ON publications.job_id = jobs.id "
+            "WHERE publications.channel_id=? AND jobs.created_by='operator' AND jobs.state IN ('queued', 'running') AND jobs.deleted_at IS NULL",
+            (channel_id,),
+        ).fetchone()
+    if not operator:
+        raise HTTPException(status_code=404, detail="Salve o operador deste canal antes de rodar.")
+    job, error = None, None
+    try:
+        if not channel or channel["status"] != "connected":
+            raise HTTPException(status_code=409, detail="O canal não está conectado. Reconecte em Canais.")
+        if busy:  # Turbo renders one video at a time; stacking the operator's queue only delays everything
+            raise HTTPException(status_code=409, detail="Pulado: o vídeo anterior do operador ainda está sendo gerado.")
+        format, language = operator["format"], channel["language"]
+        topic = (await suggest_topics(channel, format, 1))[0]["topic"]
+        settings: dict[str, Any] = {"video_language": language}
+        prefix = language.split("-")[0]
+        if prefix in VOICE_BY_LANGUAGE and not str(generation_defaults(format).get("voice_name", "")).startswith(prefix):
+            settings["voice_name"] = VOICE_BY_LANGUAGE[prefix]
+        script = ""
+        if format == "long":
+            written = await long_script(LongScriptInput(subject=topic, language=language, minutes=OPERATOR_MINUTES, niche=channel["niche"]))
+            script, settings["video_terms"] = written["script"], ", ".join(written["terms"])
+        project = get_or_create_project(PROJECT_NAMES[format], language)
+        job = await create_job(project["id"], JobCreate(subject=topic, script=script, format=format, channel_ids=[channel_id], settings=settings))
+        with database() as db:
+            db.execute("UPDATE video_jobs SET created_by='operator' WHERE id=?", (job["id"],))
+    except Exception as exc:
+        error = str(getattr(exc, "detail", exc))[:500] or "Falha no operador"
+    next_run = datetime.now(UTC) + timedelta(hours=operator["cadence_hours"])
+    with database() as db:
+        db.execute(
+            "UPDATE operators SET last_run_at=?, next_run_at=?, last_error=?, updated_at=? WHERE channel_id=?",
+            (now(), next_run.isoformat(), error, now(), channel_id),
+        )
+    return {"job": job, "error": error}
+
+
+async def publish_due_schedules() -> None:
+    with database() as db:
+        due = db.execute("SELECT job_id, channel_id FROM publications WHERE state='scheduled' AND scheduled_at <= ?", (now(),)).fetchall()
+    targets: dict[str, list[str]] = {}
+    for row in due:
+        targets.setdefault(row["job_id"], []).append(row["channel_id"])
+    for job_id, channel_ids in targets.items():
+        try:
+            await publish_job(job_id, PublishInput(channel_ids=channel_ids))
+        except Exception as exc:
+            # A check failing before the claim (lost authorization, deleted video) would otherwise retry every minute forever.
+            with database() as db:
+                db.execute(
+                    f"UPDATE publications SET state='failed', error=?, updated_at=? WHERE job_id=? AND state='scheduled' AND channel_id IN ({','.join('?' * len(channel_ids))})",
+                    (str(getattr(exc, "detail", exc))[:500], now(), job_id, *channel_ids),
+                )
+
+
+async def reconcile_processing_publications() -> None:
+    with database() as db:
+        job_ids = [row["job_id"] for row in db.execute("SELECT DISTINCT job_id FROM publications WHERE state='processing'")]
+    for job_id in job_ids:
+        await reconcile_publications(job_id)
+
+
+async def run_due_operators() -> None:
+    with database() as db:
+        due = [row["channel_id"] for row in db.execute("SELECT channel_id FROM operators WHERE enabled=1 AND next_run_at <= ?", (now(),))]
+    for channel_id in due:
+        await run_operator(channel_id)  # records its own errors and always moves next_run_at forward
+
+
+async def prepare_operator_jobs() -> None:
+    """Keeps operator renders tracked without a browser open and writes their metadata; they stay "completed" for approval."""
+    with database() as db:
+        job_ids = [row["id"] for row in db.execute(
+            "SELECT jobs.id FROM video_jobs AS jobs LEFT JOIN job_metadata AS meta ON meta.job_id = jobs.id "
+            "WHERE jobs.created_by='operator' AND jobs.deleted_at IS NULL AND meta.job_id IS NULL AND jobs.state IN ('queued', 'running', 'completed')"
+        )]
+    for job_id in job_ids:
+        try:
+            if (await reconcile_job(job_id)).get("state") == "completed":
+                await generate_metadata(job_id)
+        except Exception as exc:
+            logger.warning("Operador: o trabalho %s não avançou: %s", job_id, getattr(exc, "detail", exc))
+
+
+async def agent_tick() -> None:
+    for step in (publish_due_schedules, reconcile_processing_publications, run_due_operators, prepare_operator_jobs):
+        try:
+            await step()
+        except Exception:
+            logger.exception("Passo %s do laço de agentes falhou", step.__name__)
+
+
+async def agent_loop() -> None:
+    # ponytail: in-process loop, fine while the Dockerfile runs a single uvicorn worker; several workers would need a DB lock.
+    while True:
+        await agent_tick()
+        await asyncio.sleep(AGENT_LOOP_SECONDS)
 
 
 @app.middleware("http")

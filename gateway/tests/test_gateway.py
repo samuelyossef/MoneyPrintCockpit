@@ -400,3 +400,91 @@ class GatewayContractTests(unittest.TestCase):
         self.assertEqual(upload.call_args.args[2]["format"], "short")
         self.assertEqual(self.main.youtube_description({"description": "oi", "format": "short"}), "oi\n\n#Shorts")
         self.assertEqual(self.main.youtube_description({"description": "oi", "format": "long"}), "oi")
+
+    def test_analytics_score_is_relative_to_the_channel_median(self):
+        metrics = {"views": 200, "averageViewPercentage": 50, "likes": 10, "comments": 0}
+        self.assertEqual(self.main.analytics_score(metrics, 100), 80)  # 200 views is a hit on a 100-view channel
+        self.assertEqual(self.main.analytics_score(metrics, 10000), 50)  # and weak on a 10k-view one
+        self.assertEqual(self.main.analytics_score({"views": 0}, 0), 0)
+
+    def test_scheduled_publish_waits_for_the_agent_loop(self):
+        from datetime import UTC, datetime, timedelta
+        from unittest.mock import AsyncMock, patch
+        from fastapi import HTTPException
+        self._approved_job(self._channel())
+        schedule = lambda delta: self.main.PublishInput(publish_at=datetime.now(UTC) + delta)
+        download = AsyncMock()
+        with patch.object(self.main, "download_turbo_file", new=download):
+            with self.assertRaises(HTTPException):
+                asyncio.run(self.main.publish_job("job-1", schedule(timedelta(minutes=-1))))
+            job = asyncio.run(self.main.publish_job("job-1", schedule(timedelta(hours=1))))
+            self.assertEqual(job["publications"][0]["state"], "scheduled")
+            self.assertEqual(self.main.cancel_schedule("job-1")["publications"][0]["state"], "pending")
+            asyncio.run(self.main.publish_job("job-1", schedule(timedelta(hours=1))))
+            asyncio.run(self.main.publish_due_schedules())  # not due yet
+        download.assert_not_awaited()
+        self.assertEqual((len(self.main.list_schedule()), self._publication()["state"]), (1, "scheduled"))
+        with self.main.database() as db:
+            db.execute("UPDATE publications SET scheduled_at=?", ((datetime.now(UTC) - timedelta(minutes=1)).isoformat(),))
+        with patch.object(self.main, "download_turbo_file", new=download), \
+                patch.object(self.main, "youtube_credentials", return_value=object()), \
+                patch.object(self.main, "youtube_upload", return_value="yt9"):
+            asyncio.run(self.main.publish_due_schedules())
+        self.assertEqual((self._publication()["state"], self._publication()["external_id"]), ("published", "yt9"))
+
+    def test_operator_starts_one_video_then_skips_while_it_renders(self):
+        from datetime import UTC, datetime
+        from unittest.mock import patch
+        channel_id = self._channel()
+        self.main.put_operator(channel_id, self.main.OperatorInput(enabled=True, format="short", cadence_hours=24))
+        sent = []
+
+        async def fake_turbo(method, path, **kwargs):
+            sent.append(kwargs["json"])
+            return type("Response", (), {"json": lambda self: {"data": {"task_id": "t1"}}})()
+
+        with patch.object(self.main, "suggest_topics", new=self._async_return([{"topic": "Tema do operador"}])), \
+                patch.object(self.main, "turbo_request", new=fake_turbo):
+            first = asyncio.run(self.main.run_operator(channel_id))
+            second = asyncio.run(self.main.run_operator(channel_id))
+        self.assertIsNone(first["error"])
+        self.assertIn("Pulado", second["error"])
+        self.assertEqual(len(sent), 1)
+        with self.main.database() as db:
+            job = db.execute("SELECT created_by, subject, state FROM video_jobs").fetchone()
+            operator = db.execute("SELECT next_run_at FROM operators").fetchone()
+        self.assertEqual(tuple(job), ("operator", "Tema do operador", "queued"))
+        self.assertGreater(operator["next_run_at"], datetime.now(UTC).isoformat())
+        self.assertTrue(self.main.list_operators()["operators"][0]["enabled"])
+
+    def test_strategy_uses_trends_and_drops_subjects_already_made(self):
+        from unittest.mock import patch
+        channel_id = self._channel()
+        self._completed_job(channel_id)  # subject "assunto", targeted at this channel
+        prompts = []
+
+        async def fake_chat(prompt, json_mode=False):
+            prompts.append(prompt)
+            return json.dumps({"topics": [{"topic": "Assunto"}, {"topic": "Tema novo", "angle": "a", "rationale": "r"}]})
+
+        with patch.object(self.main, "youtube_trends", return_value=["Vídeo em alta"]), patch.object(self.main, "moonshot_chat", new=fake_chat):
+            result = asyncio.run(self.main.strategy(self.main.StrategyInput(channel_id=channel_id)))
+        self.assertEqual([topic["topic"] for topic in result["topics"]], ["Tema novo"])
+        self.assertIn("Vídeo em alta", prompts[0])
+        self.assertIn("assunto", prompts[0])
+
+    def test_loop_writes_metadata_for_operator_videos_but_never_approves(self):
+        from unittest.mock import patch
+        self._completed_job()
+        with self.main.database() as db:
+            db.execute("UPDATE video_jobs SET created_by='operator'")
+
+        async def fake_chat(prompt, json_mode=False):
+            return json.dumps({"title": "Título IA", "description": "desc", "tags": ["a", "b", "c"]})
+
+        with patch.object(self.main, "reconcile_job", new=self._async_return({"state": "completed"})), patch.object(self.main, "moonshot_chat", new=fake_chat):
+            asyncio.run(self.main.agent_tick())
+        with self.main.database() as db:
+            state = db.execute("SELECT state FROM video_jobs").fetchone()["state"]
+            metadata = json.loads(db.execute("SELECT value_json FROM job_metadata").fetchone()["value_json"])
+        self.assertEqual((state, metadata["title"]), ("completed", "Título IA"))

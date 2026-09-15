@@ -103,6 +103,7 @@
   function publicationText(pub) {
     const link = pub.platform === "youtube" ? `https://youtu.be/${pub.external_id}` : (/^https?:/.test(pub.external_id || "") ? pub.external_id : "");
     if (pub.state === "published") return `publicado (privado)${pub.external_id && link ? ": " + link : ""}`;
+    if (pub.state === "scheduled") return `agendado para ${when(pub.scheduled_at)}`;
     return `${PUB_LABELS[pub.state] || pub.state}${pub.error ? " — " + pub.error : ""}`;
   }
   function publicationLine(pub) {
@@ -110,17 +111,21 @@
     return `${channel ? channel.name : (pub.platform === "tiktok" ? "TikTok" : "YouTube")}: ${publicationText(pub)}`;
   }
   const OPEN_STATES = ["pending", "failed", "reconciliation_required"];
-  async function publish(job, channelIds) {
+  const when = iso => iso ? new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : "—";
+  /* publishAt is a datetime-local value (local time, no zone); empty publishes now. */
+  async function publish(job, channelIds, publishAt) {
     const uncertain = (job.publications || []).some(p => p.state === "reconciliation_required");
     if (uncertain && !window.confirm("Um envio anterior pode ter chegado à plataforma. Confirme que o vídeo NÃO está publicado para enviar de novo.")) return job;
-    const result = await request(`/jobs/${job.id}/publish`, { method: "POST", body: JSON.stringify({ channel_ids: channelIds && channelIds.length ? channelIds : null, confirm_not_uploaded: uncertain }) });
+    const result = await request(`/jobs/${job.id}/publish`, { method: "POST", body: JSON.stringify({
+      channel_ids: channelIds && channelIds.length ? channelIds : null, confirm_not_uploaded: uncertain, publish_at: publishAt ? new Date(publishAt).toISOString() : null,
+    }) });
     if (result.errors && result.errors.length) window.alert(result.errors.map(error => error.detail).join("\n"));
     return result;
   }
 
   function bindPublishing(body, job) {
     const $ = selector => body.querySelector(selector);
-    const box = $("#genMetaBox"), publishBtn = $("#genPublishBtn");
+    const box = $("#genMetaBox"), publishBtn = $("#genPublishBtn"), publishAt = $("#genPublishAt");
     if (!box || !publishBtn) return;
     box.hidden = false;
     // Channels picked at generation time are pending publications; without them, use what is selected now.
@@ -134,7 +139,7 @@
         : open ? `Aprovado — pronto para publicar em ${channelsLabel}` : "Aprovado — escolha o canal";
       $("#genApproveBtn").disabled = job.state !== "completed";
       publishBtn.disabled = job.state !== "approved" || !open || pubs.some(p => p.state === "uploading");
-      publishBtn.lastChild.textContent = open ? ` Publicar em ${channelsLabel}` : " Publicar (privado)";
+      publishBtn.lastChild.textContent = open ? ` ${publishAt && publishAt.value ? "Agendar" : "Publicar"} em ${channelsLabel}` : " Publicar (privado)";
     };
     const fill = () => {
       const meta = job.metadata || {};
@@ -153,15 +158,18 @@
     act($("#genMetaAiBtn"), () => request(`/jobs/${job.id}/metadata/generate`, { method: "POST" }), true);
     act($("#genMetaSaveBtn"), save, true);
     act($("#genApproveBtn"), async () => { await save(); return request(`/jobs/${job.id}/approve`, { method: "POST" }); }, false);
-    act(publishBtn, () => publish(job, chosen()), false);
+    act(publishBtn, () => publish(job, chosen(), publishAt && publishAt.value), false);
     const picker = $("#genChannelSelect") || $("#genChannelList");
     if (picker) picker.onchange = () => setTimeout(states); // after the one-per-platform listener adjusts the boxes
+    if (publishAt) publishAt.oninput = states;
     fill();
     states();
   }
 
+  // One project per screen, created on first use - the picker is gone, so there is nothing left to name.
+  const PROJECT_NAMES = { long: "Vídeos longos", short: "Shorts" };
   async function projectFor(body) {
-    const name = value(body, "#genProjectName", "Meu projeto").trim() || "Meu projeto";
+    const name = PROJECT_NAMES[screenFormat(body)] || "Meu projeto";
     const defaults = { video_language: value(body, "#genLanguageSelect", "pt-BR"), voice_name: value(body, "#genVoiceSelect", "pt-BR-FranciscaNeural") };
     if (activeProject && activeProject.name === name) return activeProject;
     const projects = await request("/projects");
@@ -311,43 +319,6 @@
 
   async function deleteJob(jobId) { await request(`/jobs/${jobId}`, { method: "DELETE" }); await syncVideos(); }
   async function retryJob(jobId) { await request(`/jobs/${jobId}/retry`, { method: "POST" }); await syncVideos(); }
-  async function deleteProject(projectId) { await request(`/projects/${projectId}`, { method: "DELETE" }); if (activeProject && activeProject.id === projectId) activeProject = null; }
-
-  async function populateProjectSelect(body) {
-    const select = body.querySelector("#genProjectSelect");
-    if (!select) return;
-    try {
-      const projects = await request("/projects");
-      select.innerHTML = `<option value="">Novo projeto…</option>` + projects.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("");
-      const nameInput = body.querySelector("#genProjectName");
-      const current = projects.find(p => p.name === (nameInput && nameInput.value));
-      if (current) select.value = current.id;
-    } catch (_) { /* Gateway offline: keep the plain name field working. */ }
-  }
-
-  function bindProjectControls(body, notify) {
-    const select = body.querySelector("#genProjectSelect");
-    const nameInput = body.querySelector("#genProjectName");
-    const deleteBtn = body.querySelector("#genProjectDeleteBtn");
-    if (select && !select.dataset.bound) {
-      select.dataset.bound = "true";
-      select.addEventListener("change", () => {
-        if (!select.value) { nameInput.value = ""; activeProject = null; return; }
-        nameInput.value = select.selectedOptions[0].textContent;
-        activeProject = { id: select.value, name: nameInput.value };
-      });
-    }
-    if (deleteBtn && !deleteBtn.dataset.bound) {
-      deleteBtn.dataset.bound = "true";
-      deleteBtn.addEventListener("click", async () => {
-        const projectId = select && select.value;
-        if (!projectId) { notify("Selecione um projeto existente para excluir."); return; }
-        if (!window.confirm(`Excluir o projeto "${nameInput.value}" e todo o seu histórico?`)) return;
-        try { await deleteProject(projectId); nameInput.value = ""; await populateProjectSelect(body); await syncVideos(); notify("Projeto excluído."); }
-        catch (error) { notify(error.message); }
-      });
-    }
-  }
 
   const cachedDefaults = {}; // "long" / "short" per screen, "base" for Configurações
   function applyDefaults(body, defaults) {
@@ -496,7 +467,7 @@
   const draftKey = body => `moneyprint-generation-draft-v1-${screenFormat(body)}`;
 
   function saveDraft(body) {
-    const inputs = ["#genProjectName", "#genTopicInput", "#genScriptInput", "#genTermsInput", "#genLanguageSelect", "#genVoiceSelect"];
+    const inputs = ["#genTopicInput", "#genScriptInput", "#genTermsInput", "#genLanguageSelect", "#genVoiceSelect"];
     const draft = Object.fromEntries(inputs.map(selector => [selector, value(body, selector, "")]));
     try { localStorage.setItem(draftKey(body), JSON.stringify(draft)); } catch (_) { /* storage full or blocked: drafts are a convenience */ }
   }
@@ -515,8 +486,6 @@
     renderPendingJobs();
     resumeActiveJob();
     syncVideos(); // a job may have started elsewhere (another tab, the API) since the last sync
-    bindProjectControls(body, notify);
-    populateProjectSelect(body);
     bindGenerationDefaults(body, notify);
     fillChannelSelects();
     const button = body.querySelector("#genStartBtn");
@@ -542,7 +511,7 @@
     };
     restoreDraft(body);
     updateStats();
-    body.querySelectorAll("#genProjectName, #genTopicInput, #genScriptInput, #genTermsInput, #genLanguageSelect, #genVoiceSelect").forEach(input => input.addEventListener("input", () => saveDraft(body)));
+    body.querySelectorAll("#genTopicInput, #genScriptInput, #genTermsInput, #genLanguageSelect, #genVoiceSelect").forEach(input => input.addEventListener("input", () => saveDraft(body)));
     scriptInput.addEventListener("input", updateStats);
     button.addEventListener("click", async () => {
       const subject = value(body, "#genTopicInput", "").trim();
@@ -640,12 +609,13 @@
         if (status) status.textContent = "Salvando metadados…";
         await request(`/jobs/${jobId}/metadata`, { method: "PUT", body: JSON.stringify({ title, description: description || (job.metadata && job.metadata.description) || "", tags: tags.length ? tags : (job.metadata && job.metadata.tags) || [] }) });
         if (job.state === "completed") { if (status) status.textContent = "Aprovando…"; job = await request(`/jobs/${jobId}/approve`, { method: "POST" }); }
-        if (status) status.textContent = "Enviando…";
-        const published = await publish(job, [channelId]);
+        const publishAt = value(body, "#ytPubAt", "");
+        if (status) status.textContent = publishAt ? "Agendando…" : "Enviando…";
+        const published = await publish(job, [channelId], publishAt);
         if (published === job) { if (status) status.textContent = ""; return; } // operator cancelled the re-send
         const pub = (published.publications || []).find(p => p.channel_id === channelId);
         if (status) status.textContent = pub ? publicationLine(pub) : "";
-        notify(pub && pub.state === "processing" ? "Vídeo enviado; o TikTok ainda está processando." : "Vídeo publicado.");
+        notify(pub && pub.state === "scheduled" ? "Publicação agendada." : pub && pub.state === "processing" ? "Vídeo enviado; o TikTok ainda está processando." : "Vídeo publicado.");
         syncVideos();
       } catch (error) {
         if (status) status.textContent = "";
@@ -670,7 +640,7 @@
     const youtube = connected.filter(c => c.platform === "YouTube");
     const option = c => `<option value="${esc(c.id)}">${esc(c.name)} · ${esc(c.platform)}</option>`;
     // Long videos only go to YouTube; Shorts to any connected channel.
-    [["#genChannelSelect", youtube, "Escolher depois"], ["#ytLibChannelSelect", screenFormat(document) === "long" ? youtube : connected, "Selecione um canal…"]].forEach(([selector, list, empty]) => {
+    [["#genChannelSelect", youtube, "Escolher depois"], ["#ytLibChannelSelect", screenFormat(document) === "long" ? youtube : connected, "Selecione um canal…"], ["#agStrategyChannel", connected, "Selecione um canal…"]].forEach(([selector, list, empty]) => {
       const select = document.querySelector(selector);
       if (!select) return;
       const current = select.value;
@@ -733,5 +703,144 @@
     await syncChannels();
   }
 
-  window.MoneyPrinterRuntime = { bindGenerator, deleteJob, retryJob, bindConfigSettings, bindYoutubeLibraryPublish, connectChannel, channelAction, saveChannel };
+  /* ── Agentes: each pane loads from the Gateway when its tab opens ── */
+  const localInput = iso => { // ISO instant -> datetime-local value in the viewer's zone
+    if (!iso) return "";
+    const date = new Date(iso);
+    return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  };
+  const CADENCES = [[12, "A cada 12 h"], [24, "Diária"], [48, "A cada 2 dias"], [168, "Semanal"]];
+  const emptyState = (title, text) => `<div class="empty"><div class="empty-t">${title}</div><div class="empty-s">${text}</div></div>`;
+  const rowStyle = "display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)";
+
+  function bindAgents(body, notify) {
+    const card = body.querySelector("#agentsCard");
+    if (!card || card.dataset.bound) return;
+    card.dataset.bound = "true";
+    const $ = selector => card.querySelector(selector);
+    const busy = async (button, task) => {
+      const label = button.textContent;
+      button.disabled = true; button.textContent = "Aguarde…";
+      try { await task(); } catch (error) { notify(error.message); } finally { button.disabled = false; button.textContent = label; }
+    };
+    fillChannelSelects();
+
+    let topics = [];
+    $("#agStrategyBtn").onclick = () => busy($("#agStrategyBtn"), async () => {
+      const channelId = $("#agStrategyChannel").value, format = $("#agStrategyFormat").value;
+      if (!channelId) { notify("Conecte e selecione um canal primeiro."); return; }
+      topics = (await request("/agents/strategy", { method: "POST", body: JSON.stringify({ channel_id: channelId, format }) })).topics;
+      $("#agStrategyList").innerHTML = topics.map((t, i) => `
+        <div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px">
+          <div style="font-weight:600;color:var(--ink)">${esc(t.topic)}</div>
+          ${t.angle ? `<div style="font-size:12.5px;margin-top:4px">${esc(t.angle)}</div>` : ""}
+          ${t.rationale ? `<div class="card-note" style="font-family:inherit;margin-top:4px">${esc(t.rationale)}</div>` : ""}
+          <button class="btn sm" type="button" style="margin-top:8px" data-use-topic="${i}" data-topic-format="${format}">Usar no ${format === "long" ? "Gerador" : "Shorts"}</button>
+        </div>`).join("");
+    });
+    $("#agStrategyList").onclick = event => {
+      const button = event.target.closest("[data-use-topic]");
+      if (!button) return;
+      const format = button.dataset.topicFormat, key = `moneyprint-generation-draft-v1-${format}`;
+      // restoreDraft on that screen picks the topic up; the old script and terms belonged to another topic.
+      try { localStorage.setItem(key, JSON.stringify({ ...JSON.parse(localStorage.getItem(key) || "{}"), "#genTopicInput": topics[+button.dataset.useTopic].topic, "#genScriptInput": "", "#genTermsInput": "" })); }
+      catch (_) { notify("Não foi possível guardar o tema neste navegador."); }
+      window.CK.__go(format === "long" ? "gerador" : "youtube");
+    };
+
+    const duration = seconds => `${Math.floor(seconds / 60)}:${String(Math.round(seconds % 60)).padStart(2, "0")}`;
+    const metric = (m, key, format) => m && m[key] != null ? format(m[key]) : "—";
+    const renderAnalytics = data => {
+      const videos = data.videos || [];
+      $("#agAnalyticsBody").innerHTML = (data.errors || []).map(e => `<div class="card-note" style="font-family:inherit;color:var(--warn);margin-bottom:6px">${esc(e.detail)}</div>`).join("")
+        + (videos.length ? `<div style="overflow-x:auto"><table class="perm" style="width:100%">
+          <thead><tr><th>Vídeo</th><th>Canal</th><th>Views</th><th>Retenção</th><th>Duração média</th><th>Likes</th><th>Inscritos</th><th>Nota</th></tr></thead>
+          <tbody>${videos.map(v => `<tr><td style="text-align:left">${esc(v.title)}</td><td>${esc(v.channel_name || "")}</td>
+            <td>${metric(v.metrics, "views", String)}</td><td>${metric(v.metrics, "averageViewPercentage", n => Math.round(n) + "%")}</td>
+            <td>${metric(v.metrics, "averageViewDuration", duration)}</td><td>${metric(v.metrics, "likes", String)}</td>
+            <td>${metric(v.metrics, "subscribersGained", String)}</td><td><b>${v.score ?? "—"}</b></td></tr>`).join("")}</tbody></table></div>`
+          : emptyState("Nenhum vídeo publicado no YouTube ainda", "As métricas aparecem aqui depois da primeira publicação."))
+        + (data.recommendations || []).filter(r => r.items.length).map(r => `
+          <div class="dr-sec" style="margin-top:18px">Recomendações · ${esc(r.channel_name)}</div>
+          <ul style="margin:8px 0 0 18px;display:flex;flex-direction:column;gap:6px">${r.items.map(item => `<li>${esc(item)}</li>`).join("")}</ul>`).join("");
+    };
+    const loadAnalytics = async () => { try { renderAnalytics(await request("/agents/analytics")); } catch (error) { notify(error.message); } };
+    $("#agAnalyticsBtn").onclick = () => busy($("#agAnalyticsBtn"), async () => renderAnalytics(await request("/agents/analytics/refresh", { method: "POST" })));
+
+    const loadSchedule = async () => {
+      let items;
+      try { items = await request("/agents/schedule"); } catch (error) { notify(error.message); return; }
+      $("#agScheduleBody").innerHTML = items.length ? items.map(s => `
+        <div style="${rowStyle}">
+          <div style="min-width:0"><div style="font-weight:500;color:var(--ink)">${esc(s.title || s.subject)}</div>
+            <div class="card-note" style="font-family:inherit">${esc(s.channel_name || s.platform)} · ${esc(when(s.scheduled_at))}</div></div>
+          <button class="btn sm" type="button" data-cancel-job="${esc(s.job_id)}" data-cancel-channel="${esc(s.channel_id)}">Cancelar</button>
+        </div>`).join("") : emptyState("Nada agendado", "Aprove um vídeo e preencha “Agendar para” no Gerador ou no Shorts.");
+    };
+    $("#agScheduleBody").onclick = event => {
+      const button = event.target.closest("[data-cancel-job]");
+      if (!button) return;
+      busy(button, async () => {
+        await request(`/jobs/${button.dataset.cancelJob}/schedule?channel_id=${encodeURIComponent(button.dataset.cancelChannel)}`, { method: "DELETE" });
+        notify("Agendamento cancelado; o vídeo voltou para aguardando publicação.");
+        await loadSchedule();
+      });
+    };
+
+    const loadOperators = async () => {
+      let data;
+      try { data = await request("/agents/operators"); } catch (error) { notify(error.message); return; }
+      const select = (field, options, current) => `<select class="set-select" style="width:100%" data-op-field="${field}">${options.map(([v, label]) => `<option value="${v}" ${String(v) === String(current) ? "selected" : ""}>${label}</option>`).join("")}</select>`;
+      $("#agOperatorBody").innerHTML = data.operators.length ? data.operators.map(op => `
+        <div class="card" style="margin:0" data-operator="${esc(op.channel_id)}">
+          <div class="card-hd"><span class="card-title">${esc(op.channel_name)} · ${op.platform === "tiktok" ? "TikTok" : "YouTube"}</span><span class="spacer"></span>
+            <label style="display:flex;align-items:center;gap:7px;font-size:13px"><input type="checkbox" class="cbx" data-op-field="enabled" ${op.enabled ? "checked" : ""} /> Ligado</label></div>
+          <div class="card-bd" style="display:flex;flex-direction:column;gap:12px">
+            <div style="display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">
+              <div class="md-field"><label>Formato</label>${select("format", op.platform === "tiktok" ? [["short", "Short"]] : [["short", "Short"], ["long", "Vídeo longo"]], op.format)}</div>
+              <div class="md-field"><label>Frequência</label>${select("cadence_hours", CADENCES, op.cadence_hours)}</div>
+              <div class="md-field"><label>Próxima execução</label><input class="np-input" style="width:100%" type="datetime-local" data-op-field="next_run_at" value="${localInput(op.next_run_at)}" /></div>
+            </div>
+            <div class="card-note" style="font-family:inherit">Última execução: ${esc(when(op.last_run_at))}${op.last_error ? ` · <span style="color:var(--warn)">${esc(op.last_error)}</span>` : ""}</div>
+            <div style="display:flex;gap:8px"><button class="btn sm primary" type="button" data-op-act="save">Salvar</button><button class="btn sm" type="button" data-op-act="run">Rodar agora</button></div>
+          </div>
+        </div>`).join("") : emptyState("Nenhum canal conectado", "Conecte um canal em Canais para configurar o operador.");
+      $("#agAwaitingBody").innerHTML = data.awaiting_approval.length ? data.awaiting_approval.map(job => `
+        <div style="${rowStyle}">
+          <div style="min-width:0"><div style="font-weight:500;color:var(--ink)">${esc(job.subject)}</div>
+            <div class="card-note" style="font-family:inherit">${job.format === "long" ? "Vídeo longo" : "Short"} · concluído em ${esc(when(job.completed_at))}</div></div>
+          <button class="btn sm" type="button" data-view="${job.format === "long" ? "gerador" : "youtube"}">Revisar</button>
+        </div>`).join("") : `<div class="card-note" style="font-family:inherit;margin-top:8px">Nenhum vídeo do operador aguardando.</div>`;
+    };
+    $("#agOperatorBody").onclick = event => {
+      const button = event.target.closest("[data-op-act]");
+      if (!button) return;
+      const box = button.closest("[data-operator]"), field = name => box.querySelector(`[data-op-field="${name}"]`);
+      busy(button, async () => {
+        if (button.dataset.opAct === "save") {
+          const next = field("next_run_at").value;
+          await request(`/agents/operators/${box.dataset.operator}`, { method: "PUT", body: JSON.stringify({
+            enabled: field("enabled").checked, format: field("format").value, cadence_hours: Number(field("cadence_hours").value), next_run_at: next ? new Date(next).toISOString() : null,
+          }) });
+          notify("Operador salvo.");
+        } else {
+          const result = await request(`/agents/operators/${box.dataset.operator}/run`, { method: "POST" });
+          notify(result.error || "Vídeo enviado para geração. Ele vai aguardar a sua aprovação.");
+          syncVideos();
+        }
+        await loadOperators();
+      });
+    };
+
+    const loaders = { analytics: loadAnalytics, agendamento: loadSchedule, operador: loadOperators };
+    $("#agTabs").onclick = event => {
+      const tab = event.target.closest("[data-agtab]");
+      if (!tab) return;
+      card.querySelectorAll("[data-agtab]").forEach(item => item.classList.toggle("is-active", item === tab));
+      card.querySelectorAll("[data-agpane]").forEach(pane => { pane.hidden = pane.dataset.agpane !== tab.dataset.agtab; });
+      if (loaders[tab.dataset.agtab]) loaders[tab.dataset.agtab]();
+    };
+  }
+
+  window.MoneyPrinterRuntime = { bindGenerator, deleteJob, retryJob, bindConfigSettings, bindYoutubeLibraryPublish, connectChannel, channelAction, saveChannel, bindAgents };
 }());

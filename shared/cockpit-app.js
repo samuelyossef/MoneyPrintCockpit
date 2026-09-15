@@ -33,6 +33,7 @@
     config:    { title: "Configurações", sub: "Preferências da conta, notificações e integrações", render: V.configuracoes },
     gerador:   { title: "Gerador de Vídeo", sub: "Vídeos longos 16:9 para YouTube", render: V.gerador },
     youtube:   { title: "Shorts", sub: "Vídeos verticais para YouTube Shorts e TikTok", render: V.youtubeShorts },
+    agentes:   { title: "Agentes", sub: "Estratégia, analytics, agendamento e operador automático", render: V.agentes },
   };
 
   const NAV = {
@@ -47,7 +48,7 @@
       { section: "Studio", items: [
         { v: "gerador", label: "Gerador de Vídeo", icon: "spark" },
         { v: "youtube", label: "Shorts", icon: "yt" },
-        { v: "soon:Agentes", label: "Agentes", icon: "spark", count: "42" },
+        { v: "agentes", label: "Agentes", icon: "spark" },
         { v: "custos", label: "Analytics", icon: "activity" },
       ]},
       { section: "Observabilidade", items: [
@@ -608,6 +609,7 @@
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindGenerator(body, showToast);
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindConfigSettings(body, showToast);
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindYoutubeLibraryPublish(body, showToast);
+    if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindAgents(body, showToast);
 
     /* vídeos recentes: filtro por formato + modo de visualização + filtro avançado */
     const vidTabs = body.querySelector("#vidTabs"), vidView = body.querySelector("#vidView");

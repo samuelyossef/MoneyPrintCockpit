@@ -1174,6 +1174,7 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
           <div style="display:flex;flex-direction:column;gap:16px">
             <div class="md-field"><label>Título do vídeo</label><input class="np-input" style="width:100%" id="ytPubTitle" placeholder="Obrigatório na primeira publicação" /></div>
             <div class="md-field"><label>Descrição / tags</label><input class="np-input" style="width:100%" id="ytPubDesc" placeholder="Ex: Descrição do vídeo #Shorts, #Curiosidades, #Fatos" /></div>
+            <div class="md-field"><label>Agendar para (opcional)</label><input class="np-input" style="width:100%" type="datetime-local" id="ytPubAt" /></div>
           </div>
         </div>
         <button class="btn primary" style="width:100%;padding:11px;margin-top:16px" id="ytPubBtn">Publicar no canal (privado)</button>
@@ -1206,15 +1207,6 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
         <div class="card" style="margin-bottom:0" data-format="${format}">
           <div class="card-hd"><span class="card-title">${isLong ? "Vídeo longo para YouTube" : "Short para YouTube e TikTok"}</span><span class="spacer"></span><span class="badge plan-pro">${isLong ? "16:9 · 5–15 min" : "9:16 · 60–90 s"}</span></div>
           <div class="card-bd" style="display:flex;flex-direction:column;gap:16px">
-            <div>
-              <label class="dr-sec" style="margin:0 0 7px">Projeto</label>
-              <div style="display:flex;gap:8px">
-                <select class="set-select" id="genProjectSelect" style="flex:1"><option value="">Novo projeto…</option></select>
-                <button class="btn sm" type="button" id="genProjectDeleteBtn" title="Excluir projeto">Excluir</button>
-              </div>
-              <input class="np-input" id="genProjectName" style="width:100%;margin-top:8px" value="Meu projeto" maxlength="120" />
-              <div class="card-note" style="margin-top:6px">O tema, roteiro e configurações ficam salvos neste projeto.</div>
-            </div>
             <div>
               <label class="dr-sec" style="margin:0 0 7px">Tema / tópico do vídeo</label>
               <textarea class="np-input" id="genTopicInput" rows="2" style="width:100%;resize:vertical" placeholder="Ex: 5 fatos inacreditáveis sobre as profundezas do oceano"></textarea>
@@ -1346,6 +1338,7 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
                     <button class="btn sm" id="genMetaAiBtn" type="button">Gerar com IA</button>
                     <button class="btn sm" id="genMetaSaveBtn" type="button">Salvar</button>
                     <button class="btn sm primary" id="genApproveBtn" type="button">Aprovar</button>
+                    <label class="card-note" style="font-family:inherit;display:flex;align-items:center;gap:6px">Agendar para <input class="np-input" type="datetime-local" id="genPublishAt" style="padding:4px 6px" /></label>
                     <span class="card-note" id="genPublishStatus" role="status" style="font-family:inherit"></span>
                   </div>
                 </div>
@@ -1363,6 +1356,42 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
       activity: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
     };
     return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths[n] || ""}</svg>`;
+  }
+
+  /* ── Agentes ────────────────────────────────── */
+  /* Panes are filled by MoneyPrinterRuntime.bindAgents when opened: they all need live Gateway data. */
+  function agentes() {
+    const tabs = [["estrategia", "Estratégia"], ["analytics", "Analytics"], ["agendamento", "Agendamento"], ["operador", "Operador automático"]];
+    return `
+      <div class="card" style="margin-bottom:0" id="agentsCard">
+        <div class="view-tabs" id="agTabs" style="padding:0 18px;flex-wrap:wrap">${tabs.map((t, i) =>
+          `<button class="view-tab ${i ? "" : "is-active"}" data-agtab="${t[0]}">${t[1]}</button>`).join("")}</div>
+        <div class="card-bd">
+          <div data-agpane="estrategia">
+            <div class="card-note" style="font-family:inherit;margin-bottom:12px">Sugere temas a partir do nicho do canal, do que está em alta no YouTube e do que você já produziu.</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+              <div class="md-field" style="min-width:220px"><label>Canal</label><select class="set-select" style="width:100%" id="agStrategyChannel"><option value="">Selecione um canal…</option></select></div>
+              <div class="md-field"><label>Formato</label><select class="set-select" id="agStrategyFormat"><option value="short">Short</option><option value="long">Vídeo longo</option></select></div>
+              <button class="btn primary" id="agStrategyBtn" type="button">Sugerir temas</button>
+            </div>
+            <div id="agStrategyList" style="display:flex;flex-direction:column;gap:10px;margin-top:16px"></div>
+          </div>
+          <div data-agpane="analytics" hidden>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <span class="card-note" style="font-family:inherit;flex:1">Desempenho real dos vídeos publicados no YouTube. A nota (0–100) compara cada vídeo com a mediana do próprio canal.</span>
+              <button class="btn sm" id="agAnalyticsBtn" type="button">Atualizar métricas</button>
+            </div>
+            <div id="agAnalyticsBody" style="margin-top:12px"></div>
+          </div>
+          <div data-agpane="agendamento" hidden><div id="agScheduleBody"></div></div>
+          <div data-agpane="operador" hidden>
+            <div class="card-note" style="font-family:inherit;margin-bottom:12px">Gera vídeos sozinho na frequência escolhida e prepara os metadados. Nada é publicado sem a sua aprovação.</div>
+            <div id="agOperatorBody" style="display:flex;flex-direction:column;gap:12px"></div>
+            <div class="dr-sec" style="margin-top:20px">Aguardando sua aprovação</div>
+            <div id="agAwaitingBody"></div>
+          </div>
+        </div>
+      </div>`;
   }
 
   /* ── Notificações ───────────────────────────── */
@@ -1390,5 +1419,5 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
 
   return { overview, usuarios, logs, billing, clientes, custosIA, videoGrids, configuracoes, gerador, notificacoes,
            alertRows, userRows, logRows, orgRows, userDrawer, logDrawer, orgDrawer, perfilUsuario, filtersBar,
-           organizacao, orgRec, newOrgRec, canais, canaisHead, canalRows, canalRec, newCanalRec, canal, videoList, youtubeShorts };
+           organizacao, orgRec, newOrgRec, canais, canaisHead, canalRows, canalRec, newCanalRec, canal, videoList, youtubeShorts, agentes };
 })();
