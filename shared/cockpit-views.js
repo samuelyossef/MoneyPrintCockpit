@@ -1121,6 +1121,8 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
           <div><label class="dr-sec" style="margin:0 0 7px">Chave Upload-Post ${prov ? tag(!!prov.upload_post, prov.upload_post ? "Configurada" : "Não configurada") : ""}</label>
             <input class="np-input" id="cfgUploadPostKey" style="width:100%" type="password" placeholder="${prov && prov.upload_post ? "•••••••• (deixe em branco para manter)" : "cole a chave aqui"}" autocomplete="off" />
             <div class="card-note" id="cfgUploadPostKeyStatus" style="margin-top:5px;min-height:14px"></div></div>
+          <div><label class="dr-sec" style="margin:0 0 7px">Usuário Upload-Post</label>
+            <input class="np-input" id="cfgUploadPostUser" style="width:100%" value="${esc(prov && prov.upload_post_username || "")}" placeholder="nome de usuário" autocomplete="off" /></div>
         </div>
         <div class="card-note" style="margin-top:10px;font-family:inherit">A chave Upload-Post é usada para conectar canais TikTok em <a href="#" data-view="clientes" style="color:var(--accent)">Canais</a>.</div>
         <div class="card-note" style="margin-top:10px;font-family:inherit">Salvar grava direto em <code>runtime/moneyprinter/config.toml</code>. É preciso reiniciar o container para aplicar: <code>docker compose restart moneyprinterturbo</code>.</div>`,
@@ -1194,11 +1196,48 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
    *   1. Roteiro IA -> 2. Keywords -> 3. Voz e Legendas -> 4. Filmagens Stock -> 5. Render HD
    * - Player de pré-visualização integrado com ações de download e publicação
    */
-  function gerador(scope) { return studio(scope, "long") + libraryCard("long"); }
-  function youtubeShorts(scope) { return studio(scope, "short") + libraryCard("short"); }
+  /* Every screen tab shares one id scheme ("genTabs"/data-gentab/data-genpane): Gerador and Shorts
+     are never open together, so both can reuse the same ids without clashing, like every other "gen*" element. */
+  function screenTabs(tabs) {
+    return `
+      <div class="view-tabs" id="genTabs" style="margin-bottom:14px">${tabs.map((t, i) =>
+        `<button class="view-tab ${i === 0 ? "is-active" : ""}" type="button" data-gentab="${t[0]}">${t[1]}</button>`).join("")}</div>
+      ${tabs.map((t, i) => `<div data-genpane="${t[0]}"${i === 0 ? "" : " hidden"}>${t[2]}</div>`).join("")}`;
+  }
+  function systemPromptPane(format) {
+    const isLong = format === "long";
+    return `
+      <div class="card" style="margin-bottom:0">
+        <div class="card-hd"><span class="card-title">Prompt do sistema (opcional)</span></div>
+        <div class="card-bd">
+          <div class="card-note" style="font-family:inherit;margin-bottom:10px">${isLong
+            ? `O roteiro longo é escrito em várias chamadas de IA (uma por seção); a primeira precisa responder em JSON, então este texto entra como instrução de estilo em todas elas, em vez de substituí-las por completo. Usado por "Escrever roteiro longo com IA".`
+            : `Substitui por completo as instruções que a IA recebe para escrever o roteiro do Short — tanto no botão "Gerar roteiro com IA" quanto se o roteiro for deixado em branco para o Turbo escrever sozinho.`} Deixe vazio para usar o prompt padrão.</div>
+          <textarea class="np-input" id="genSystemPrompt" rows="16" style="width:100%;resize:vertical" placeholder="Deixe vazio para usar o prompt padrão"></textarea>
+        </div>
+      </div>`;
+  }
+  function gerador(scope) {
+    return screenTabs([
+      ["gerar", "Gerador", studioCreative(scope, "long")],
+      ["parametros", "Parâmetros de vídeo", studioParams("long")],
+      ["prompt", "Prompt do sistema", systemPromptPane("long")],
+      ["biblioteca", "Biblioteca", libraryCard("long")],
+    ]);
+  }
+  function youtubeShorts(scope) {
+    return screenTabs([
+      ["gerar", "Gerador", studioCreative(scope, "short")],
+      ["parametros", "Parâmetros de vídeo", studioParams("short")],
+      ["prompt", "Prompt do sistema", systemPromptPane("short")],
+      ["biblioteca", "Biblioteca", libraryCard("short")],
+    ]);
+  }
   /* One form, two formats: the engine (Turbo, approval, publishing) is shared; what differs is the
-     aspect, the duration control, the script writer and which channels may receive the video. */
-  function studio(scope, format) {
+     aspect, the duration control, the script writer and which channels may receive the video.
+     Split in two: studioCreative (topic/script/channels + the live pipeline/preview) sits on the
+     "Gerador" tab; studioParams (voice/render/subtitle knobs + "Salvar padrão") gets its own tab. */
+  function studioCreative(scope, format) {
     const isLong = format === "long";
     const chips = ["Psicologia", "Profundezas", "Hábitos Ricos", "Espaço", "História Oculta"];
     const steps = [["Roteiro IA", "doc"], ["Keywords", "search"], ["Voz e Legendas", "mic"], ["Filmagens Stock", "grid"], ["Render HD", "activity"]];
@@ -1222,6 +1261,15 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
               <textarea class="np-input" id="genScriptInput" rows="${isLong ? 10 : 4}" style="width:100%;resize:vertical" placeholder="${isLong ? "Escreva por seções com a IA ou cole o roteiro completo" : "Deixe vazio para a IA escrever, ou gere/cole e edite aqui"}"></textarea>
               <div class="card-note" id="genScriptStats" style="margin-top:6px;font-family:inherit"></div>
             </div>
+            <details>
+              <summary class="dr-sec" style="margin:0;cursor:pointer">Configurações avançadas do roteiro</summary>
+              <div style="display:flex;flex-direction:column;gap:12px;margin-top:10px">
+                <div>
+                  <label class="dr-sec" style="margin:0 0 7px">Requisitos personalizados do roteiro</label>
+                  <textarea class="np-input" id="genScriptRequirements" rows="2" style="width:100%;resize:vertical" placeholder="Ex: use um tom mais leve, estilo TikTok, com uma abertura mais intrigante"></textarea>
+                </div>
+              </div>
+            </details>
             <div>
               <div style="display:flex;justify-content:space-between;align-items:center;margin:0 0 7px"><label class="dr-sec" style="margin:0">Palavras-chave das filmagens (opcional)</label><button class="btn sm" type="button" id="genTermsAiBtn">Gerar palavras-chave</button></div>
               <input class="np-input" id="genTermsInput" style="width:100%" placeholder="deep ocean, ocean life — separadas por vírgula (em inglês o Pexels acha mais)" />
@@ -1233,70 +1281,10 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
                 : `<div id="genChannelList" style="display:flex;flex-direction:column;gap:6px"></div>`}
               <div class="card-note" style="margin-top:6px;font-family:inherit">Canais conectados em <a href="#" data-view="clientes" style="color:var(--accent)">Canais</a>.${isLong ? " Vídeos longos vão só para o YouTube." : " No máximo um canal por plataforma."}</div>
             </div>
-            <div class="grid2" style="margin:0">
-              <div><label class="dr-sec" style="margin:0 0 7px">Idioma da narração</label>
-                <select class="set-select" id="genLanguageSelect" style="width:100%"><option value="pt-BR">Português (Brasil)</option><option value="en-US">English (US)</option><option value="es-ES">Español</option></select></div>
-              <div><label class="dr-sec" style="margin:0 0 7px">Voz sintética</label>
-                <select class="set-select" id="genVoiceSelect" style="width:100%">
-                  <optgroup label="Português (Brasil)"><option value="pt-BR-FranciscaNeural">Francisca — Feminina</option><option value="pt-BR-AntonioNeural">Antonio — Masculina</option></optgroup>
-                  <optgroup label="English (US)"><option value="en-US-JennyNeural">Jenny — Female</option><option value="en-US-GuyNeural">Guy — Male</option></optgroup>
-                  <optgroup label="Español"><option value="es-ES-ElviraNeural">Elvira — Femenina</option><option value="es-ES-AlvaroNeural">Álvaro — Masculino</option></optgroup>
-                </select></div>
-            </div>
-            <div class="grid2" style="margin:0">
-              <div><label class="dr-sec" style="margin:0 0 7px">Velocidade da voz</label>
-                <select class="set-select" id="genVoiceRate" style="width:100%"><option value="0.8">0.8×</option><option value="1" selected>1.0×</option><option value="1.2">1.2×</option><option value="1.5">1.5×</option></select></div>
-              <div><label class="dr-sec" style="margin:0 0 7px">Volume da voz</label>
-                <select class="set-select" id="genVoiceVolume" style="width:100%"><option value="0.6">60%</option><option value="1" selected>100%</option><option value="1.5">150%</option><option value="2">200%</option></select></div>
-            </div>
-            <div class="grid2" style="margin:0">
-              <div><label class="dr-sec" style="margin:0 0 7px">Duração alvo</label>
-                ${isLong
-                  ? `<select class="set-select" id="genTargetMinutes" style="width:100%">${[5, 8, 10, 15].map(m => `<option value="${m}" ${m === 8 ? "selected" : ""}>${m} minutos</option>`).join("")}</select>
-                <div class="card-note" style="margin-top:6px">Usada pelo roteiro longo. O render leva de 30 a 90 min.</div>`
-                  : `<select class="set-select" id="genParagraphInput" style="width:100%">${[[4, "60 s"], [5, "75 s"], [6, "90 s"]].map(([n, label]) => `<option value="${n}" ${n === 5 ? "selected" : ""}>${label}</option>`).join("")}</select>
-                <div class="card-note" style="margin-top:6px">Tamanho do roteiro gerado pela IA.</div>`}</div>
-              <div><label class="dr-sec" style="margin:0 0 7px">Duração de cada clipe (segundos)</label>
-                <input class="np-input" id="genDurationInput" style="width:100%" type="number" min="1" max="30" value="5" />
-                <div class="card-note" style="margin-top:6px">Tempo de corte dinâmico entre cenas.</div></div>
-            </div>
-            <div class="grid2" style="margin:0;grid-template-columns:repeat(${isLong ? 3 : 4},1fr)">
-              ${isLong ? "" : `<div><label class="dr-sec" style="margin:0 0 7px">Vídeos gerados</label>
-                <input class="np-input" id="genVideoCount" style="width:100%" type="number" min="1" max="5" value="1" /></div>`}
-              <div><label class="dr-sec" style="margin:0 0 7px">Ordem dos clipes</label>
-                <select class="set-select" id="genConcatMode" style="width:100%"><option value="random">Aleatória</option><option value="sequential">Sequencial</option></select></div>
-              <div><label class="dr-sec" style="margin:0 0 7px">Transição</label>
-                <select class="set-select" id="genTransition" style="width:100%"><option value="">Nenhuma</option><option value="Shuffle">Aleatória</option><option value="FadeIn">Fade in</option><option value="FadeOut">Fade out</option><option value="SlideIn">Slide in</option><option value="SlideOut">Slide out</option><option value="ZoomIn">Zoom in</option><option value="ZoomOut">Zoom out</option></select></div>
-              <div><label class="dr-sec" style="margin:0 0 7px">Velocidade do clipe</label>
-                <select class="set-select" id="genClipSpeed" style="width:100%"><option value="0.8">0.8×</option><option value="1" selected>1.0×</option><option value="1.2">1.2×</option><option value="1.5">1.5×</option></select></div>
-            </div>
-            <div class="grid2" style="margin:0;grid-template-columns:1fr 1fr 1fr">
-              <div><label class="dr-sec" style="margin:0 0 7px">Legendas</label>
-                <label style="display:flex;align-items:center;gap:7px;height:34px"><input type="checkbox" class="cbx" id="genSubtitleEnabled" checked /> Ativadas</label></div>
-              <div><label class="dr-sec" style="margin:0 0 7px">Posição da legenda</label>
-                <select class="set-select" id="genSubtitlePosition" style="width:100%"><option value="bottom">Inferior</option><option value="center">Centro</option><option value="top">Superior</option></select></div>
-              <div><label class="dr-sec" style="margin:0 0 7px">Espessura da borda</label>
-                <input class="np-input" id="genStrokeWidth" style="width:100%" type="number" min="0" max="10" step="0.5" value="1.5" /></div>
-            </div>
-            <div class="grid2" style="margin:0;grid-template-columns:1fr 1fr 1fr">
-              <div><label class="dr-sec" style="margin:0 0 7px">Tamanho da legenda</label><input class="np-input" id="genFontSizeInput" style="width:100%" type="number" value="56" /></div>
-              <div><label class="dr-sec" style="margin:0 0 7px">Cor do texto</label><input class="np-input" id="genTextColorInput" style="width:100%" type="color" value="#FFFFFF" /></div>
-              <div><label class="dr-sec" style="margin:0 0 7px">Cor da borda</label><input class="np-input" id="genStrokeColorInput" style="width:100%" type="color" value="#000000" /></div>
-            </div>
-            <div class="grid2" style="margin:0">
-              <div><label class="dr-sec" style="margin:0 0 7px">Trilha sonora de fundo (BGM)</label>
-                <select class="set-select" id="genBgmSelect" style="width:100%"><option value="">Sem música de fundo</option><option value="random">Aleatória (músicas do Turbo)</option></select></div>
-              <div><label class="dr-sec" style="margin:0 0 7px">Volume da música</label>
-                <select class="set-select" id="genBgmVolume" style="width:100%"><option value="0.1">10%</option><option value="0.2" selected>20%</option><option value="0.4">40%</option><option value="0.6">60%</option></select></div>
-            </div>
-            <div style="display:flex;gap:8px">
-              <button class="btn primary" id="genStartBtn" style="flex:1;padding:11px">${isLong ? "Gerar vídeo longo" : "Gerar Short"}</button>
-              <button class="btn" type="button" id="genSaveDefaultsBtn" style="padding:11px" title="Salvar estas opções como padrão para novos vídeos">Salvar padrão</button>
-            </div>
+            <button class="btn primary" id="genStartBtn" style="padding:11px">${isLong ? "Gerar vídeo longo" : "Gerar Short"}</button>
           </div>
         </div>
         <div style="display:flex;flex-direction:column;gap:20px">
-          <div id="genPendingJobs" hidden></div>
           <div class="card" style="margin-bottom:0">
             <div class="card-hd"><span class="card-title">Pipeline em tempo real</span><span class="spacer"></span><span class="card-note" id="genPipelineNote">Pronto para gerar</span></div>
             <div class="card-bd">
@@ -1347,6 +1335,75 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
         </div>
       </div>`;
   }
+  /* Voice/render/subtitle knobs, moved off the "Gerador" tab into their own — same fields Turbo's
+     VideoParams exposes, just laid out per format like studioCreative was. */
+  function studioParams(format) {
+    const isLong = format === "long";
+    return `
+      <div class="card" style="margin-bottom:0">
+        <div class="card-hd"><span class="card-title">Parâmetros de vídeo</span></div>
+        <div class="card-bd" style="display:flex;flex-direction:column;gap:16px">
+          <div class="grid2" style="margin:0">
+            <div><label class="dr-sec" style="margin:0 0 7px">Idioma da narração</label>
+              <select class="set-select" id="genLanguageSelect" style="width:100%"><option value="pt-BR">Português (Brasil)</option><option value="en-US">English (US)</option><option value="es-ES">Español</option></select></div>
+            <div><label class="dr-sec" style="margin:0 0 7px">Voz sintética</label>
+              <select class="set-select" id="genVoiceSelect" style="width:100%">
+                <optgroup label="Português (Brasil)"><option value="pt-BR-FranciscaNeural">Francisca — Feminina</option><option value="pt-BR-AntonioNeural">Antonio — Masculina</option></optgroup>
+                <optgroup label="English (US)"><option value="en-US-JennyNeural">Jenny — Female</option><option value="en-US-GuyNeural">Guy — Male</option></optgroup>
+                <optgroup label="Español"><option value="es-ES-ElviraNeural">Elvira — Femenina</option><option value="es-ES-AlvaroNeural">Álvaro — Masculino</option></optgroup>
+              </select></div>
+          </div>
+          <div class="grid2" style="margin:0">
+            <div><label class="dr-sec" style="margin:0 0 7px">Velocidade da voz</label>
+              <select class="set-select" id="genVoiceRate" style="width:100%"><option value="0.8">0.8×</option><option value="1" selected>1.0×</option><option value="1.2">1.2×</option><option value="1.5">1.5×</option></select></div>
+            <div><label class="dr-sec" style="margin:0 0 7px">Volume da voz</label>
+              <select class="set-select" id="genVoiceVolume" style="width:100%"><option value="0.6">60%</option><option value="1" selected>100%</option><option value="1.5">150%</option><option value="2">200%</option></select></div>
+          </div>
+          <div class="grid2" style="margin:0">
+            <div><label class="dr-sec" style="margin:0 0 7px">Duração alvo</label>
+              ${isLong
+                ? `<select class="set-select" id="genTargetMinutes" style="width:100%">${[5, 8, 10, 15].map(m => `<option value="${m}" ${m === 8 ? "selected" : ""}>${m} minutos</option>`).join("")}</select>
+              <div class="card-note" style="margin-top:6px">Usada pelo roteiro longo. O render leva de 30 a 90 min.</div>`
+                : `<select class="set-select" id="genParagraphInput" style="width:100%">${[[4, "60 s"], [5, "75 s"], [6, "90 s"]].map(([n, label]) => `<option value="${n}" ${n === 5 ? "selected" : ""}>${label}</option>`).join("")}</select>
+              <div class="card-note" style="margin-top:6px">Tamanho do roteiro gerado pela IA.</div>`}</div>
+            <div><label class="dr-sec" style="margin:0 0 7px">Duração de cada clipe (segundos)</label>
+              <input class="np-input" id="genDurationInput" style="width:100%" type="number" min="1" max="30" value="5" />
+              <div class="card-note" style="margin-top:6px">Tempo de corte dinâmico entre cenas.</div></div>
+          </div>
+          <div class="grid2" style="margin:0;grid-template-columns:repeat(${isLong ? 3 : 4},1fr)">
+            ${isLong ? "" : `<div><label class="dr-sec" style="margin:0 0 7px">Vídeos gerados</label>
+              <input class="np-input" id="genVideoCount" style="width:100%" type="number" min="1" max="5" value="1" /></div>`}
+            <div><label class="dr-sec" style="margin:0 0 7px">Imagens</label>
+              <select class="set-select" id="genConcatMode" style="width:100%"><option value="script" selected>Seguir o roteiro (recomendado)</option><option value="random">Aleatória</option></select>
+              <div class="card-note" style="margin-top:6px">"Seguir o roteiro" busca uma filmagem para cada trecho narrado, na ordem. Gere as palavras-chave antes para ver quantos cortes vão ser usados.</div></div>
+            <div><label class="dr-sec" style="margin:0 0 7px">Transição</label>
+              <select class="set-select" id="genTransition" style="width:100%"><option value="">Nenhuma</option><option value="Shuffle">Aleatória</option><option value="FadeIn">Fade in</option><option value="FadeOut">Fade out</option><option value="SlideIn">Slide in</option><option value="SlideOut">Slide out</option><option value="ZoomIn">Zoom in</option><option value="ZoomOut">Zoom out</option></select></div>
+            <div><label class="dr-sec" style="margin:0 0 7px">Velocidade do clipe</label>
+              <select class="set-select" id="genClipSpeed" style="width:100%"><option value="0.8">0.8×</option><option value="1" selected>1.0×</option><option value="1.2">1.2×</option><option value="1.5">1.5×</option></select></div>
+          </div>
+          <div class="grid2" style="margin:0;grid-template-columns:1fr 1fr 1fr">
+            <div><label class="dr-sec" style="margin:0 0 7px">Legendas</label>
+              <label style="display:flex;align-items:center;gap:7px;height:34px"><input type="checkbox" class="cbx" id="genSubtitleEnabled" checked /> Ativadas</label></div>
+            <div><label class="dr-sec" style="margin:0 0 7px">Posição da legenda</label>
+              <select class="set-select" id="genSubtitlePosition" style="width:100%"><option value="bottom">Inferior</option><option value="center">Centro</option><option value="top">Superior</option></select></div>
+            <div><label class="dr-sec" style="margin:0 0 7px">Espessura da borda</label>
+              <input class="np-input" id="genStrokeWidth" style="width:100%" type="number" min="0" max="10" step="0.5" value="1.5" /></div>
+          </div>
+          <div class="grid2" style="margin:0;grid-template-columns:1fr 1fr 1fr">
+            <div><label class="dr-sec" style="margin:0 0 7px">Tamanho da legenda</label><input class="np-input" id="genFontSizeInput" style="width:100%" type="number" value="56" /></div>
+            <div><label class="dr-sec" style="margin:0 0 7px">Cor do texto</label><input class="np-input" id="genTextColorInput" style="width:100%" type="color" value="#FFFFFF" /></div>
+            <div><label class="dr-sec" style="margin:0 0 7px">Cor da borda</label><input class="np-input" id="genStrokeColorInput" style="width:100%" type="color" value="#000000" /></div>
+          </div>
+          <div class="grid2" style="margin:0">
+            <div><label class="dr-sec" style="margin:0 0 7px">Trilha sonora de fundo (BGM)</label>
+              <select class="set-select" id="genBgmSelect" style="width:100%"><option value="">Sem música de fundo</option><option value="random">Aleatória (músicas do Turbo)</option></select></div>
+            <div><label class="dr-sec" style="margin:0 0 7px">Volume da música</label>
+              <select class="set-select" id="genBgmVolume" style="width:100%"><option value="0.1">10%</option><option value="0.2" selected>20%</option><option value="0.4">40%</option><option value="0.6">60%</option></select></div>
+          </div>
+          <button class="btn" type="button" id="genSaveDefaultsBtn" style="padding:11px" title="Salvar estas opções como padrão para novos vídeos">Salvar padrão</button>
+        </div>
+      </div>`;
+  }
   function ic2(n) {
     const paths = {
       doc: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
@@ -1394,6 +1451,16 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
       </div>`;
   }
 
+  /* ── Jobs e workers ─────────────────────────── */
+  /* Filled by MoneyPrinterRuntime.bindJobsWorkers/renderPendingJobs from window.CK.PENDING_JOBS. */
+  function jobsWorkers() {
+    return `
+      <div class="card" style="margin-top:16px">
+        <div class="card-hd"><span class="card-title">Jobs em andamento / com falha</span></div>
+        <div class="card-bd" id="jobsWorkersBody" style="padding:0 18px"></div>
+      </div>`;
+  }
+
   /* ── Notificações ───────────────────────────── */
   function notificacoes(scope) {
     const list = D.NOTIFICATIONS;
@@ -1419,5 +1486,5 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
 
   return { overview, usuarios, logs, billing, clientes, custosIA, videoGrids, configuracoes, gerador, notificacoes,
            alertRows, userRows, logRows, orgRows, userDrawer, logDrawer, orgDrawer, perfilUsuario, filtersBar,
-           organizacao, orgRec, newOrgRec, canais, canaisHead, canalRows, canalRec, newCanalRec, canal, videoList, youtubeShorts, agentes };
+           organizacao, orgRec, newOrgRec, canais, canaisHead, canalRows, canalRec, newCanalRec, canal, videoList, youtubeShorts, agentes, jobsWorkers };
 })();

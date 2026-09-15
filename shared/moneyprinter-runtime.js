@@ -151,6 +151,7 @@
         button.disabled = true;
         try { job = await task(); if (refill) fill(); }
         catch (error) { window.alert(error.message); job = await request(`/jobs/${job.id}`).catch(() => job); }
+        finally { button.disabled = false; } // states() only re-enables genApproveBtn/publishBtn; other buttons rely on this.
         states();
         if (job.state === "approved") syncVideos();
       };
@@ -187,9 +188,13 @@
     stream.addEventListener("job.updated", event => {
       const current = JSON.parse(event.data);
       activeJob = current;
-      setPipeline(body, current);
+      // #viewBody is shared by both screens with identical ids inside (ponytail: same guard
+      // bindGenerationDefaults already uses) - only paint this update if its screen is still open.
+      const onScreen = screenFormat(document.getElementById("viewBody")) === current.format;
+      if (onScreen) setPipeline(body, current);
       if (current.state === "completed") {
-        showArtifact(body, current); notify("Vídeo concluído e salvo no projeto."); stream.close();
+        if (onScreen) showArtifact(body, current);
+        notify("Vídeo concluído e salvo no projeto."); stream.close();
         syncVideos().then(() => { if (window.CK.__go) setTimeout(() => window.CK.__go("overview"), 1500); });
       }
       if (current.state === "failed" || current.state === "interrupted") { notify(current.error || "A geração não foi concluída."); stream.close(); syncVideos(); }
@@ -222,38 +227,49 @@
     showArtifact(body, latest);
   }
 
-  /* Paints the Gerador "Jobs em andamento / com falha" card in place, so a status change
-     shows up without re-rendering the whole form the user may be filling in. */
+  /* Paints the "Jobs e workers" page in place, so a status change shows up without a full
+     re-render. Lives on its own screen (not the Gerador/Shorts forms) and covers both formats -
+     retry only applies to failed/interrupted; delete is blocked server-side for queued/running. */
   function renderPendingJobs() {
-    const box = document.getElementById("genPendingJobs");
+    const box = document.getElementById("jobsWorkersBody");
     if (!box) return;
-    const format = screenFormat(document);
-    const jobs = ((window.CK && window.CK.PENDING_JOBS) || []).filter(job => job.format === format);
+    const jobs = (window.CK && window.CK.PENDING_JOBS) || [];
     const labels = { queued: "Na fila", running: "Gerando…", failed: "Falhou", interrupted: "Interrompido" };
-    box.hidden = !jobs.length;
-    box.innerHTML = jobs.length ? `
-      <div class="card" style="margin-bottom:0">
-        <div class="card-hd"><span class="card-title">Jobs em andamento / com falha</span></div>
-        <div class="card-bd" style="display:flex;flex-direction:column;gap:2px">
-          ${jobs.map(j => `
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
-              <div style="min-width:0">
-                <div style="font-weight:500;color:var(--ink);font-size:13px">${esc(j.subject)}</div>
-                <div style="font-size:11.5px;color:var(--muted)">${esc(j.projectName)} · ${esc(labels[j.state] || j.state)}${j.error ? " — " + esc(j.error) : ""}</div>
-              </div>
-              ${j.state === "failed" || j.state === "interrupted" ? `<button class="btn sm" data-retry-job="${esc(j.id)}" style="flex-shrink:0">Repetir</button>` : ""}
-            </div>`).join("")}
+    const formatLabels = { long: "Vídeo longo", short: "Short" };
+    box.innerHTML = jobs.length ? jobs.map(j => `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
+        <div style="min-width:0">
+          <div style="font-weight:500;color:var(--ink);font-size:13px">${esc(j.subject)}</div>
+          <div style="font-size:11.5px;color:var(--muted)">${esc(j.projectName)} · ${esc(formatLabels[j.format] || j.format)} · ${esc(labels[j.state] || j.state)}${j.error ? " — " + esc(j.error) : ""}</div>
         </div>
-      </div>` : "";
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          ${j.state === "failed" || j.state === "interrupted" ? `<button class="btn sm" data-retry-job="${esc(j.id)}">Repetir</button>
+          <button class="btn sm" data-delete-job="${esc(j.id)}">Deletar</button>` : ""}
+        </div>
+      </div>`).join("") : `<div class="empty"><div class="empty-t">Nenhum job em andamento ou com falha</div><div class="empty-s">Jobs na fila, gerando ou com erro aparecem aqui.</div></div>`;
     if (box.dataset.bound) return;
     box.dataset.bound = "true";
     box.addEventListener("click", async event => {
-      const btn = event.target.closest("[data-retry-job]");
-      if (!btn) return;
-      btn.disabled = true;
-      try { await retryJob(btn.dataset.retryJob); if (lastNotify) lastNotify("Job reenviado para o Turbo"); }
-      catch (error) { btn.disabled = false; if (lastNotify) lastNotify(error.message); }
+      const retry = event.target.closest("[data-retry-job]");
+      const del = event.target.closest("[data-delete-job]");
+      if (retry) {
+        retry.disabled = true;
+        try { await retryJob(retry.dataset.retryJob); if (lastNotify) lastNotify("Job reenviado para o Turbo"); }
+        catch (error) { retry.disabled = false; if (lastNotify) lastNotify(error.message); }
+      } else if (del) {
+        if (!window.confirm("Excluir este job? Essa ação não pode ser desfeita.")) return;
+        del.disabled = true;
+        try { await deleteJob(del.dataset.deleteJob); if (lastNotify) lastNotify("Job excluído"); }
+        catch (error) { del.disabled = false; if (lastNotify) lastNotify(error.message); }
+      }
     });
+  }
+
+  function bindJobsWorkers(body, notify) {
+    if (!body.querySelector("#jobsWorkersBody")) return;
+    lastNotify = notify;
+    renderPendingJobs();
+    syncVideos(); // a job may have started/finished elsewhere since the last sync
   }
 
   /* Replaces the Dashboard/History mock catalog (window.CK.VIDEOS) with real
@@ -467,7 +483,7 @@
   const draftKey = body => `moneyprint-generation-draft-v1-${screenFormat(body)}`;
 
   function saveDraft(body) {
-    const inputs = ["#genTopicInput", "#genScriptInput", "#genTermsInput", "#genLanguageSelect", "#genVoiceSelect"];
+    const inputs = ["#genTopicInput", "#genScriptInput", "#genTermsInput", "#genLanguageSelect", "#genVoiceSelect", "#genScriptRequirements", "#genSystemPrompt"];
     const draft = Object.fromEntries(inputs.map(selector => [selector, value(body, selector, "")]));
     try { localStorage.setItem(draftKey(body), JSON.stringify(draft)); } catch (_) { /* storage full or blocked: drafts are a convenience */ }
   }
@@ -483,11 +499,20 @@
     if (!body.querySelector("#genStartBtn")) return;
     const format = screenFormat(body);
     lastNotify = notify;
-    renderPendingJobs();
     resumeActiveJob();
     syncVideos(); // a job may have started elsewhere (another tab, the API) since the last sync
     bindGenerationDefaults(body, notify);
     fillChannelSelects();
+    const genTabs = body.querySelector("#genTabs");
+    if (genTabs && !genTabs.dataset.bound) {
+      genTabs.dataset.bound = "true";
+      genTabs.addEventListener("click", event => {
+        const tab = event.target.closest("[data-gentab]");
+        if (!tab) return;
+        genTabs.querySelectorAll("[data-gentab]").forEach(b => b.classList.toggle("is-active", b === tab));
+        body.querySelectorAll("[data-genpane]").forEach(pane => { pane.hidden = pane.dataset.genpane !== tab.dataset.gentab; });
+      });
+    }
     const button = body.querySelector("#genStartBtn");
     if (!button || button.dataset.moneyprinterBound) return;
     button.dataset.moneyprinterBound = "true";
@@ -511,7 +536,7 @@
     };
     restoreDraft(body);
     updateStats();
-    body.querySelectorAll("#genTopicInput, #genScriptInput, #genTermsInput, #genLanguageSelect, #genVoiceSelect").forEach(input => input.addEventListener("input", () => saveDraft(body)));
+    body.querySelectorAll("#genTopicInput, #genScriptInput, #genTermsInput, #genLanguageSelect, #genVoiceSelect, #genScriptRequirements, #genSystemPrompt").forEach(input => input.addEventListener("input", () => saveDraft(body)));
     scriptInput.addEventListener("input", updateStats);
     button.addEventListener("click", async () => {
       const subject = value(body, "#genTopicInput", "").trim();
@@ -522,8 +547,10 @@
         const project = await projectFor(body);
         const number = (selector, fallback) => { const n = Number.parseFloat(value(body, selector, fallback)); return Number.isFinite(n) ? n : fallback; };
         const subtitle = body.querySelector("#genSubtitleEnabled");
+        const scriptPrompt = value(body, "#genScriptRequirements", "").trim(), systemPrompt = value(body, "#genSystemPrompt", "").trim();
         const job = await request(`/projects/${project.id}/jobs`, { method: "POST", body: JSON.stringify({ subject, format, channel_ids: selectedChannels(body), script: value(body, "#genScriptInput", ""), settings: {
           video_language: value(body, "#genLanguageSelect", "pt-BR"), voice_name: value(body, "#genVoiceSelect", "pt-BR-FranciscaNeural"),
+          ...(scriptPrompt ? { video_script_prompt: scriptPrompt } : {}), ...(systemPrompt ? { custom_system_prompt: systemPrompt } : {}),
           paragraph_number: integer(value(body, "#genParagraphInput", 5), 5), video_clip_duration: integer(value(body, "#genDurationInput", 5), 5),
           video_count: integer(value(body, "#genVideoCount", 1), 1), video_clip_speed: number("#genClipSpeed", 1),
           video_concat_mode: value(body, "#genConcatMode", "random"), video_transition_mode: value(body, "#genTransition", ""),
@@ -559,23 +586,41 @@
       });
     };
     run("#genScriptAiBtn", "Gerar roteiro com IA", async subject => {
-      const result = await request("/llm/scripts", { method: "POST", body: JSON.stringify({ video_subject: subject, video_language: value(body, "#genLanguageSelect", "pt-BR"), paragraph_number: Math.min(10, Math.max(1, integer(value(body, "#genParagraphInput", 5), 5))) }) });
+      const scriptPrompt = value(body, "#genScriptRequirements", "").trim(), systemPrompt = value(body, "#genSystemPrompt", "").trim();
+      const result = await request("/llm/scripts", { method: "POST", body: JSON.stringify({
+        video_subject: subject, video_language: value(body, "#genLanguageSelect", "pt-BR"), paragraph_number: Math.min(10, Math.max(1, integer(value(body, "#genParagraphInput", 5), 5))),
+        ...(scriptPrompt ? { video_script_prompt: scriptPrompt } : {}), ...(systemPrompt ? { custom_system_prompt: systemPrompt } : {}),
+      }) });
       body.querySelector("#genScriptInput").value = result.video_script || "";
       body.querySelector("#genScriptInput").dispatchEvent(new Event("input")); // saves the draft and refreshes the word count
     });
+    // One search term per script chunk, in narration order, instead of a handful of generic
+    // terms shared by the whole video - see visual_terms() in the gateway.
+    const alignTermsToScript = async subject => {
+      const script = value(body, "#genScriptInput", "").trim();
+      if (!script) return null;
+      const result = await request("/scripts/terms", { method: "POST", body: JSON.stringify({
+        subject, script, clip_seconds: integer(value(body, "#genDurationInput", 5), 5), voice_rate: Number.parseFloat(value(body, "#genVoiceRate", "1")) || 1,
+      }) });
+      body.querySelector("#genTermsInput").value = result.terms.join(", ");
+      body.querySelector("#genTermsInput").dispatchEvent(new Event("input"));
+      return result;
+    };
     run("#genLongScriptBtn", "Escrever roteiro longo com IA", async subject => {
       const channel = channelById(selectedChannels(body)[0]);
       const result = await request("/scripts/long", { method: "POST", body: JSON.stringify({
         subject, language: value(body, "#genLanguageSelect", "pt-BR"), minutes: integer(value(body, "#genTargetMinutes", 8), 8), niche: (channel && channel.niche) || "",
+        requirements: value(body, "#genScriptRequirements", "").trim(), system_prompt: value(body, "#genSystemPrompt", "").trim(),
       }) });
-      body.querySelector("#genTermsInput").value = (result.terms || []).join(", ");
       body.querySelector("#genScriptInput").value = result.script || "";
       body.querySelector("#genScriptInput").dispatchEvent(new Event("input"));
-      notify(`Roteiro com ${result.sections.length} seções · ≈ ${result.estimated_minutes} min de narração`);
+      const terms = await alignTermsToScript(subject);
+      notify(`Roteiro com ${result.sections.length} seções · ≈ ${result.estimated_minutes} min de narração${terms ? ` · ${terms.cuts} cortes alinhados` : ""}`);
     });
     run("#genTermsAiBtn", "Gerar palavras-chave", async subject => {
-      const result = await request("/llm/terms", { method: "POST", body: JSON.stringify({ video_subject: subject, video_script: value(body, "#genScriptInput", ""), amount: 5 }) });
-      body.querySelector("#genTermsInput").value = (result.video_terms || []).join(", ");
+      const result = await alignTermsToScript(subject);
+      if (!result) { notify("Escreva ou gere o roteiro primeiro."); return; }
+      notify(`${result.cuts} cortes de ${result.clip_seconds}s alinhados ao roteiro.`);
     });
   }
 
@@ -791,7 +836,7 @@
       let data;
       try { data = await request("/agents/operators"); } catch (error) { notify(error.message); return; }
       const select = (field, options, current) => `<select class="set-select" style="width:100%" data-op-field="${field}">${options.map(([v, label]) => `<option value="${v}" ${String(v) === String(current) ? "selected" : ""}>${label}</option>`).join("")}</select>`;
-      $("#agOperatorBody").innerHTML = data.operators.length ? data.operators.map(op => `
+      $("#agOperatorBody").innerHTML = (data.operators || []).length ? (data.operators || []).map(op => `
         <div class="card" style="margin:0" data-operator="${esc(op.channel_id)}">
           <div class="card-hd"><span class="card-title">${esc(op.channel_name)} · ${op.platform === "tiktok" ? "TikTok" : "YouTube"}</span><span class="spacer"></span>
             <label style="display:flex;align-items:center;gap:7px;font-size:13px"><input type="checkbox" class="cbx" data-op-field="enabled" ${op.enabled ? "checked" : ""} /> Ligado</label></div>
@@ -805,7 +850,7 @@
             <div style="display:flex;gap:8px"><button class="btn sm primary" type="button" data-op-act="save">Salvar</button><button class="btn sm" type="button" data-op-act="run">Rodar agora</button></div>
           </div>
         </div>`).join("") : emptyState("Nenhum canal conectado", "Conecte um canal em Canais para configurar o operador.");
-      $("#agAwaitingBody").innerHTML = data.awaiting_approval.length ? data.awaiting_approval.map(job => `
+      $("#agAwaitingBody").innerHTML = (data.awaiting_approval || []).length ? (data.awaiting_approval || []).map(job => `
         <div style="${rowStyle}">
           <div style="min-width:0"><div style="font-weight:500;color:var(--ink)">${esc(job.subject)}</div>
             <div class="card-note" style="font-family:inherit">${job.format === "long" ? "Vídeo longo" : "Short"} · concluído em ${esc(when(job.completed_at))}</div></div>
@@ -842,5 +887,5 @@
     };
   }
 
-  window.MoneyPrinterRuntime = { bindGenerator, deleteJob, retryJob, bindConfigSettings, bindYoutubeLibraryPublish, connectChannel, channelAction, saveChannel, bindAgents };
+  window.MoneyPrinterRuntime = { bindGenerator, deleteJob, retryJob, bindConfigSettings, bindYoutubeLibraryPublish, connectChannel, channelAction, saveChannel, bindAgents, bindJobsWorkers };
 }());

@@ -34,6 +34,7 @@
     gerador:   { title: "Gerador de Vídeo", sub: "Vídeos longos 16:9 para YouTube", render: V.gerador },
     youtube:   { title: "Shorts", sub: "Vídeos verticais para YouTube Shorts e TikTok", render: V.youtubeShorts },
     agentes:   { title: "Agentes", sub: "Estratégia, analytics, agendamento e operador automático", render: V.agentes },
+    jobsWorkers: { title: "Jobs e workers", sub: "Trabalhos na fila, em andamento ou com falha", render: V.jobsWorkers },
   };
 
   const NAV = {
@@ -53,7 +54,7 @@
       ]},
       { section: "Observabilidade", items: [
         { v: "logs", label: "Logs e traces", icon: "logs" },
-        { v: "soon:Jobs e workers", label: "Jobs e workers", icon: "activity", count: "2" },
+        { v: "jobsWorkers", label: "Jobs e workers", icon: "activity", get count() { return D.PENDING_JOBS && D.PENDING_JOBS.length ? String(D.PENDING_JOBS.length) : ""; } },
       ]},
       { section: "Conta", items: [
         { v: "soon:Integrações", label: "Integrações", icon: "grid" },
@@ -558,20 +559,6 @@
       renderView();
     }));
 
-    /* alertas: filtro por severidade */
-    const tabs = body.querySelector("#sevTabs");
-    if (tabs) {
-      const org = D.ORGS.find(o => o.id === S.org);
-      const list = D.ALERTS.filter(a => S.org === "all" || a.org === org.name || a.org === "Plataforma");
-      tabs.addEventListener("click", e => {
-        const b = e.target.closest(".sev-tab"); if (!b) return;
-        tabs.querySelectorAll(".sev-tab").forEach(x => x.classList.remove("is-on"));
-        b.classList.add("is-on");
-        body.querySelector("#alertList").innerHTML = V.alertRows(list, b.dataset.sev);
-        e.stopPropagation();
-      }, true);
-    }
-
     /* configurações: abas */
     const cfgTabs = body.querySelector("#cfgTabs");
     if (cfgTabs) {
@@ -610,6 +597,7 @@
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindConfigSettings(body, showToast);
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindYoutubeLibraryPublish(body, showToast);
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindAgents(body, showToast);
+    if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindJobsWorkers(body, showToast);
 
     /* vídeos recentes: filtro por formato + modo de visualização + filtro avançado */
     const vidTabs = body.querySelector("#vidTabs"), vidView = body.querySelector("#vidView");
@@ -759,31 +747,6 @@
     /* clientes: drawer por organização */
     const orgRows = body.querySelectorAll("[data-org-row]");
     orgRows.forEach(tr => tr.addEventListener("click", () => openOrgPage(tr.dataset.orgRow)));
-
-    /* aprovações */
-    const grid = body.querySelector("#aprGrid");
-    if (grid) {
-      grid.addEventListener("click", e => {
-        const a = e.target.closest("[data-approve]"), r = e.target.closest("[data-reject]"), rv = e.target.closest("[data-review]");
-        const card = e.target.closest(".apr"); if (!card) return;
-        if (rv) { const d = D.APPROVALS[+card.dataset.apr]; openDrawer({
-          title: d.agent, sub: d.action,
-          body: `<div class="dr-sec">Solicitação</div><dl class="kv">
-              <dt>Solicitado por</dt><dd>${d.by}</dd><dt>Risco</dt><dd>${d.risk === "low" ? "Baixo" : d.risk === "med" ? "Médio" : "Alto"}</dd>
-              <dt>Custo estimado</dt><dd class="mono">${d.cost}</dd><dt>Idade</dt><dd>${d.when}</dd></dl>
-            <div class="dr-sec">Ferramentas envolvidas</div><div class="scope-tags"><span class="tag is-on">send_email</span><span class="tag">read_documents</span><span class="tag">search_web</span></div>
-            <div class="dr-sec">Política aplicada</div><div style="font-size:13px;color:var(--ink-2)">Ações externas exigem aprovação humana quando o risco é médio ou alto, ou quando o custo estimado passa de US$ 1,00.</div>`,
-          footer: `<button class="btn primary" data-toast="Solicitação aprovada">Aprovar</button><button class="btn danger" data-toast="Solicitação rejeitada">Rejeitar</button>`,
-        }); return; }
-        if (a || r) {
-          card.classList.add("is-done");
-          card.querySelector(".apr-actions").innerHTML = `<span class="card-note">${a ? "Aprovado" : "Rejeitado"} · há instantes</span>`;
-          showToast(a ? "Solicitação aprovada — agente notificado" : "Solicitação rejeitada");
-          const left = grid.querySelectorAll(".apr:not(.is-done)").length;
-          body.querySelector("#aprCount").textContent = left + " pendentes";
-        }
-      });
-    }
   }
 
   /* ── boot ───────────────────────────────────── */

@@ -156,6 +156,7 @@ def default_generation_settings() -> dict[str, Any]:
         "bgm_type": "",
         "video_count": 1,
         "video_clip_duration": 5,
+        "video_concat_mode": "script",
         "paragraph_number": 5,
         "font_size": 56,
         "text_fore_color": "#FFFFFF",
@@ -638,7 +639,23 @@ async def create_job(project_id: str, input: JobCreate) -> dict[str, Any]:
     merged = {**generation_defaults(input.format), **project["defaults"], **input.settings, **FORMAT_LOCKED[input.format]}
     # Turbo's encoder defaults to 2 threads; this container sees the same Docker VM CPUs as Turbo.
     merged.setdefault("n_threads", os.cpu_count() or 2)
-    request_payload = build_turbo_payload(input.subject, input.script, merged)
+    script_text = input.script.strip()
+    if merged.get("video_concat_mode") == "script":
+        # "Seguir o roteiro": one visual search term per script chunk, downloaded in that
+        # order, instead of Turbo's handful of generic terms shared across the whole video
+        # (see visual_terms()) - that's what made footage look unrelated to the narration.
+        merged["match_materials_to_script"], merged["video_concat_mode"] = True, "sequential"
+        if not script_text and input.format == "short":
+            script_response = await turbo_request("POST", "/api/v1/scripts", json={
+                "video_subject": input.subject, "video_language": merged.get("video_language", "pt-BR"),
+                "paragraph_number": merged.get("paragraph_number", 5),
+                "video_script_prompt": merged.get("video_script_prompt", ""), "custom_system_prompt": merged.get("custom_system_prompt", ""),
+            })
+            script_text = str((unwrap(script_response.json()) or {}).get("video_script", "")).strip()
+        if script_text and not str(merged.get("video_terms", "")).strip():
+            terms, clip_seconds = await visual_terms(input.subject, script_text, float(merged.get("video_clip_duration") or 5), float(merged.get("voice_rate") or 1))
+            merged["video_terms"], merged["video_clip_duration"] = ", ".join(terms), max(1, round(clip_seconds))
+    request_payload = build_turbo_payload(input.subject, script_text, merged)
     response = await turbo_request("POST", "/api/v1/videos", json=request_payload)
     turbo_result = unwrap(response.json())
     if not isinstance(turbo_result, dict) or not turbo_result.get("task_id"):
@@ -647,7 +664,7 @@ async def create_job(project_id: str, input: JobCreate) -> dict[str, Any]:
     with database() as db:
         db.execute(
             "INSERT INTO video_jobs(id, project_id, turbo_task_id, subject, script, request_json, state, created_at, updated_at, format) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
-            (job_id, project_id, turbo_result["task_id"], input.subject.strip(), input.script.strip(), json.dumps(request_payload), timestamp, timestamp, input.format),
+            (job_id, project_id, turbo_result["task_id"], input.subject.strip(), script_text, json.dumps(request_payload), timestamp, timestamp, input.format),
         )
         # The channels picked now are the video's publish targets, waiting for approval.
         for channel in channels:
@@ -937,6 +954,8 @@ class LongScriptInput(BaseModel):
     language: str = Field(default="pt-BR", max_length=20)
     minutes: int = Field(default=8, ge=5, le=15)
     niche: str = Field(default="", max_length=200)
+    requirements: str = Field(default="", max_length=2000)
+    system_prompt: str = Field(default="", max_length=4000)
 
 
 def clean_narration(text: str) -> str:
@@ -953,11 +972,19 @@ async def long_script(input: LongScriptInput) -> dict[str, Any]:
     language = clean_language(input.language)
     section_count = max(4, round(input.minutes / 1.5))
     words_per_section = input.minutes * WORDS_PER_MINUTE // section_count
+    requirements = input.requirements.strip()
+    system_prompt = input.system_prompt.strip()
+    # ponytail: unlike Turbo's own custom_system_prompt (a full replacement), this can't replace the
+    # whole instruction set here - the outline call must stay valid JSON and each section call must
+    # stay narration-only, or the multi-step pipeline breaks. It's folded in as an extra, higher-weight
+    # instruction on every call instead, same mechanism as `requirements` but framed as a standing rule.
+    style = (f" Instruções de estilo do sistema, siga em tudo o que escrever: {system_prompt}." if system_prompt else "")
     outline = parse_json_object(await moonshot_chat(
         f"Planeje um vídeo de YouTube de {input.minutes} minutos no idioma {language} sobre: {input.subject}."
         + (f" Nicho do canal: {input.niche}." if input.niche else "")
+        + (f" Requisitos personalizados: {requirements}." if requirements else "") + style
         + f' Responda apenas JSON: {{"title": título do vídeo, "sections": lista com {section_count} itens '
-        '{"heading": título da seção, "points": lista de 2 a 4 pontos, "terms": lista de 3 termos curtos EM INGLÊS para buscar filmagens em banco de vídeos}}. '
+        '{"heading": título da seção, "points": lista de 2 a 4 pontos}}. '
         "A primeira seção é um gancho de abertura e a última uma conclusão com chamada para se inscrever.",
         json_mode=True,
     ))
@@ -970,19 +997,90 @@ async def long_script(input: LongScriptInput) -> dict[str, Any]:
         parts.append(clean_narration(await moonshot_chat(
             f"Escreva a narração da seção {index} de {len(sections)} de um vídeo de YouTube no idioma {language} sobre: {input.subject}.\n"
             f"Seção: {section['heading']}\nPontos: {'; '.join(map(str, section.get('points') or []))}\n"
-            f"Cerca de {words_per_section} palavras. Somente o texto falado, em parágrafos corridos: sem títulos, marcadores, markdown, emojis nem indicações de cena.{previous}"
+            f"Cerca de {words_per_section} palavras. Somente o texto falado, em parágrafos corridos: sem títulos, marcadores, markdown, emojis nem indicações de cena."
+            + (f" Requisitos personalizados: {requirements}." if requirements else "") + style + previous
         )))
     script = "\n\n".join(part for part in parts if part)
-    terms: dict[str, str] = {}
-    for section in sections:
-        for term in section.get("terms") or []:
-            if str(term).strip():
-                terms.setdefault(str(term).strip().lower(), str(term).strip())
     words = len(script.split())
     return {
-        "title": str(outline.get("title") or input.subject), "script": script, "terms": list(terms.values())[:30],
+        "title": str(outline.get("title") or input.subject), "script": script,
         "sections": [str(section["heading"]) for section in sections], "words": words, "estimated_minutes": round(words / WORDS_PER_MINUTE, 1),
     }
+
+
+def split_script(script: str, parts: int) -> list[str]:
+    """Splits narration into `parts` contiguous, roughly-equal chunks by word count, preserving
+    order and every word - used to line up one visual search term per script chunk."""
+    words = script.split()
+    if parts <= 1 or not words:
+        return [script.strip()] if script.strip() else []
+    parts = min(parts, len(words))
+    chunk = -(-len(words) // parts)  # ceil division without importing math
+    return [" ".join(words[i:i + chunk]) for i in range(0, len(words), chunk)]
+
+
+def narration_seconds(script: str, voice_rate: float = 1.0) -> float:
+    return len(script.split()) / (WORDS_PER_MINUTE / 60) / max(voice_rate, 0.1)
+
+
+MAX_VISUAL_TERMS = 80  # ponytail: cap on Pexels searches per video; raise alongside the API's hourly quota
+
+
+def _fill_visual_terms(terms: list[str], count: int) -> list[str]:
+    """Turbo drops a term's candidates once its URLs are already claimed by an earlier term
+    in the list, so duplicates silently lose their slot; dedupe, then pad or truncate to
+    exactly `count` so every script chunk still gets a term of its own."""
+    seen: set[str] = set()
+    unique = []
+    for term in terms:
+        key = term.lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(term)
+    if not unique:
+        unique = ["b-roll footage"]
+    result = list(unique[:count])
+    suffixes = ["close up", "wide shot", "detail shot"]
+    index = 0
+    while len(result) < count:
+        result.append(f"{unique[index % len(unique)]} {suffixes[(index // len(unique)) % len(suffixes)]}")
+        index += 1
+    return result[:count]
+
+
+async def visual_terms(subject: str, script: str, clip_seconds: float, voice_rate: float = 1.0) -> tuple[list[str], float]:
+    """One stock-footage search term per script chunk, in narration order. Combined with Turbo's
+    match_materials_to_script + sequential mode, this makes the footage follow what's being said
+    instead of cycling a handful of subject-wide terms across the whole video."""
+    seconds = narration_seconds(script, voice_rate)
+    slots = max(1, -(-int(seconds) // max(int(clip_seconds), 1)))
+    count = min(slots, MAX_VISUAL_TERMS)
+    effective_clip_seconds = clip_seconds if slots <= MAX_VISUAL_TERMS else seconds / MAX_VISUAL_TERMS
+    chunks = split_script(script, count) or [subject]
+    numbered = "\n".join(f"{index + 1}. {chunk}" for index, chunk in enumerate(chunks))
+    generated = parse_json_object(await moonshot_chat(
+        f"Tema do vídeo: {subject}\nTrechos numerados da narração, na ordem em que aparecem:\n{numbered}\n"
+        "Para cada trecho, gere uma busca de banco de vídeos em INGLÊS (1 a 3 palavras) que mostre algo filmável e "
+        "concreto do que é dito naquele trecho: uma cena, objeto, ação ou lugar. Nada abstrato, sem nomes próprios, "
+        "sem texto na tela. Os termos devem ser diferentes entre si - não repita o tema geral em todos.\n"
+        f'Responda apenas JSON: {{"terms": lista com exatamente {len(chunks)} strings, na mesma ordem dos trechos}}',
+        json_mode=True,
+    ))
+    raw_terms = [str(term).strip() for term in generated.get("terms") or [] if str(term).strip()]
+    return _fill_visual_terms(raw_terms, len(chunks)), effective_clip_seconds
+
+
+class VisualTermsInput(BaseModel):
+    subject: str = Field(min_length=1, max_length=500)
+    script: str = Field(min_length=1, max_length=40000)
+    clip_seconds: float = Field(default=5, ge=1, le=30)
+    voice_rate: float = Field(default=1.0, ge=0.5, le=2.0)
+
+
+@app.post("/api/scripts/terms")
+async def script_terms(input: VisualTermsInput) -> dict[str, Any]:
+    terms, clip_seconds = await visual_terms(input.subject, input.script, input.clip_seconds, input.voice_rate)
+    return {"terms": terms, "clip_seconds": round(clip_seconds, 1), "cuts": len(terms)}
 
 
 @app.post("/api/jobs/{job_id}/approve")
@@ -1026,8 +1124,17 @@ def clean_language(value: str) -> str:
 
 
 def job_language(db: sqlite3.Connection, job: sqlite3.Row) -> str:
-    """Metadata language follows the channel the video is for, falling back to the project's."""
-    row = db.execute("SELECT language FROM channels WHERE id=?", (job["channel_id"],)).fetchone() if job["channel_id"] else None
+    """Metadata language follows the channel the video is for, falling back to the project's.
+
+    ponytail: video_jobs.channel_id is only ever set by the pre-multi-channel migration
+    backfill (never by create_job), so the YouTube target now comes from publications
+    (one row per platform per job) instead of that stale column.
+    """
+    row = db.execute(
+        "SELECT channels.language FROM publications JOIN channels ON channels.id = publications.channel_id "
+        "WHERE publications.job_id=? AND publications.platform='youtube'",
+        (job["id"],),
+    ).fetchone()
     row = row or db.execute("SELECT language FROM projects WHERE id=?", (job["project_id"],)).fetchone()
     return row["language"] if row else "pt-BR"
 
@@ -1619,8 +1726,6 @@ async def refresh_analytics() -> dict[str, Any]:
     for channel_id, publications in by_channel.items():
         try:
             credentials = await asyncio.to_thread(youtube_credentials, channel_id)
-            # Published is the last state change of a published row, so updated_at is the publish date.
-            metrics = [await asyncio.to_thread(youtube_video_metrics, credentials, pub["external_id"], pub["updated_at"][:10]) for pub in publications]
         except HttpError as exc:
             detail = "Reconecte o canal em Canais para liberar o Analytics." if exc.resp.status == 403 else f"O YouTube Analytics respondeu {exc.resp.status}."
             errors.append({"channel_id": channel_id, "detail": detail})
@@ -1628,6 +1733,26 @@ async def refresh_analytics() -> dict[str, Any]:
         except Exception as exc:
             errors.append({"channel_id": channel_id, "detail": str(exc)[:300]})
             continue
+        # ponytail: per-video try/except so one bad video (deleted/privated on YouTube) can't abort
+        # the rest of the channel's refresh; upgrade to a batch Analytics query if this loop gets slow.
+        ok_publications: list[sqlite3.Row] = []
+        metrics: list[dict[str, Any]] = []
+        for pub in publications:
+            try:
+                # Published is the last state change of a published row, so updated_at is the publish date.
+                values = await asyncio.to_thread(youtube_video_metrics, credentials, pub["external_id"], pub["updated_at"][:10])
+            except HttpError as exc:
+                detail = "Reconecte o canal em Canais para liberar o Analytics." if exc.resp.status == 403 else f"O YouTube Analytics respondeu {exc.resp.status}."
+                errors.append({"channel_id": channel_id, "detail": f"{pub['subject']}: {detail}"})
+                continue
+            except Exception as exc:
+                errors.append({"channel_id": channel_id, "detail": f"{pub['subject']}: {str(exc)[:300]}"})
+                continue
+            ok_publications.append(pub)
+            metrics.append(values)
+        if not metrics:
+            continue
+        publications = ok_publications
         median = statistics.median(float(values.get("views") or 0) for values in metrics)
         with database() as db:
             for pub, values in zip(publications, metrics):
@@ -1747,7 +1872,7 @@ async def run_operator(channel_id: str) -> dict[str, Any]:
         script = ""
         if format == "long":
             written = await long_script(LongScriptInput(subject=topic, language=language, minutes=OPERATOR_MINUTES, niche=channel["niche"]))
-            script, settings["video_terms"] = written["script"], ", ".join(written["terms"])
+            script = written["script"]
         project = get_or_create_project(PROJECT_NAMES[format], language)
         job = await create_job(project["id"], JobCreate(subject=topic, script=script, format=format, channel_ids=[channel_id], settings=settings))
         with database() as db:
@@ -1785,7 +1910,10 @@ async def reconcile_processing_publications() -> None:
     with database() as db:
         job_ids = [row["job_id"] for row in db.execute("SELECT DISTINCT job_id FROM publications WHERE state='processing'")]
     for job_id in job_ids:
-        await reconcile_publications(job_id)
+        try:
+            await reconcile_publications(job_id)
+        except Exception as exc:
+            logger.warning("Reconciliação: o trabalho %s falhou: %s", job_id, getattr(exc, "detail", exc))
 
 
 async def run_due_operators() -> None:

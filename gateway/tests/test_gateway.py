@@ -215,6 +215,30 @@ class GatewayContractTests(unittest.TestCase):
         self.main.put_metadata("job-1", self.main.MetadataInput(title="Título", description="d", tags="a,b,c"))
         self.assertEqual(self.main.approve_job("job-1")["state"], "approved")
 
+    def test_job_language_follows_the_youtube_channel_not_the_stale_column(self):
+        # Regression: video_jobs.channel_id is never written by create_job (only by the
+        # pre-multi-channel migration backfill), so job_language must resolve the channel
+        # via publications, not that column.
+        channel_id = self._channel()
+        with self.main.database() as db:
+            db.execute("UPDATE channels SET language='en-US' WHERE id=?", (channel_id,))
+        self._completed_job()  # as create_job leaves it: video_jobs.channel_id stays NULL
+        with self.main.database() as db:
+            db.execute(
+                "INSERT INTO publications(id, job_id, platform, channel_id, state, created_at, updated_at) VALUES ('pub-1', 'job-1', 'youtube', ?, 'pending', ?, ?)",
+                (channel_id, self.main.now(), self.main.now()),
+            )
+        with self.main.database() as db:
+            job = self.main.job_row_or_404(db, "job-1")
+            self.assertIsNone(job["channel_id"])
+            self.assertEqual(self.main.job_language(db, job), "en-US")
+
+    def test_job_language_falls_back_to_the_project_when_no_channel_was_picked(self):
+        self._completed_job()  # no channel picked at all: falls back to the project's language
+        with self.main.database() as db:
+            job = self.main.job_row_or_404(db, "job-1")
+            self.assertEqual(self.main.job_language(db, job), "pt-BR")
+
     def _channel(self, platform="youtube", status="connected", external_id="UC1"):
         with self.main.database() as db:
             db.execute(
@@ -324,6 +348,8 @@ class GatewayContractTests(unittest.TestCase):
         sent = []
 
         async def fake_turbo(method, path, **kwargs):
+            if path == "/api/v1/scripts":  # "script" concat mode asks Turbo to write a Short's script first; empty here keeps this test focused on format-locking
+                return type("Response", (), {"json": lambda self: {"data": {"video_script": ""}}})()
             sent.append(kwargs["json"])
             return type("Response", (), {"json": lambda self: {"data": {"task_id": f"t{len(sent)}"}}})()
 
@@ -365,7 +391,7 @@ class GatewayContractTests(unittest.TestCase):
 
     def test_long_script_is_written_section_by_section(self):
         from unittest.mock import patch
-        outline = json.dumps({"title": "T", "sections": [{"heading": f"S{i}", "points": ["p"], "terms": ["Ocean", "ocean", f"t{i}"]} for i in range(4)]})
+        outline = json.dumps({"title": "T", "sections": [{"heading": f"S{i}", "points": ["p"]} for i in range(4)]})
         prompts = []
 
         async def fake_chat(prompt, json_mode=False):
@@ -378,8 +404,34 @@ class GatewayContractTests(unittest.TestCase):
         self.assertIn("parte 1 com texto", prompts[2])  # each section continues from the previous ending
         self.assertNotIn("#", result["script"])
         self.assertNotIn("*", result["script"])
-        self.assertEqual(result["terms"], ["Ocean", "t0", "t1", "t2", "t3"])
+        self.assertNotIn("terms", result)
         self.assertEqual(result["sections"], ["S0", "S1", "S2", "S3"])
+
+    def test_long_script_honors_custom_requirements_throughout(self):
+        from unittest.mock import patch
+        outline = json.dumps({"title": "T", "sections": [{"heading": "S0", "points": ["p"]}] * 4})
+        prompts = []
+
+        async def fake_chat(prompt, json_mode=False):
+            prompts.append(prompt)
+            return outline if json_mode else "narração"
+
+        with patch.object(self.main, "moonshot_chat", new=fake_chat):
+            asyncio.run(self.main.long_script(self.main.LongScriptInput(subject="oceano", minutes=5, requirements="tom leve, estilo TikTok")))
+        self.assertTrue(all("tom leve, estilo TikTok" in prompt for prompt in prompts))
+
+    def test_long_script_folds_system_prompt_into_every_call(self):
+        from unittest.mock import patch
+        outline = json.dumps({"title": "T", "sections": [{"heading": "S0", "points": ["p"]}] * 4})
+        prompts = []
+
+        async def fake_chat(prompt, json_mode=False):
+            prompts.append(prompt)
+            return outline if json_mode else "narração"
+
+        with patch.object(self.main, "moonshot_chat", new=fake_chat):
+            asyncio.run(self.main.long_script(self.main.LongScriptInput(subject="oceano", minutes=5, system_prompt="nunca use a palavra incrível")))
+        self.assertTrue(all("nunca use a palavra incrível" in prompt for prompt in prompts))
 
     def test_short_publishes_to_youtube_and_tiktok_with_one_download(self):
         from unittest.mock import AsyncMock, patch
@@ -440,6 +492,8 @@ class GatewayContractTests(unittest.TestCase):
         sent = []
 
         async def fake_turbo(method, path, **kwargs):
+            if path == "/api/v1/scripts":  # "script" concat mode asks Turbo to write the Short first when none was given
+                return type("Response", (), {"json": lambda self: {"data": {"video_script": ""}}})()
             sent.append(kwargs["json"])
             return type("Response", (), {"json": lambda self: {"data": {"task_id": "t1"}}})()
 
@@ -488,3 +542,78 @@ class GatewayContractTests(unittest.TestCase):
             state = db.execute("SELECT state FROM video_jobs").fetchone()["state"]
             metadata = json.loads(db.execute("SELECT value_json FROM job_metadata").fetchone()["value_json"])
         self.assertEqual((state, metadata["title"]), ("completed", "Título IA"))
+
+    def test_split_script_preserves_every_word_in_order(self):
+        script = " ".join(f"palavra{i}" for i in range(10))
+        chunks = self.main.split_script(script, 3)
+        self.assertEqual(len(chunks), 3)
+        self.assertEqual(" ".join(chunks).split(), script.split())  # nothing lost, nothing reordered
+        self.assertEqual(self.main.split_script("", 5), [])
+        self.assertEqual(self.main.split_script("uma palavra", 1), ["uma palavra"])
+
+    def test_visual_terms_align_one_per_chunk_and_dedupe(self):
+        from unittest.mock import patch
+        script = " ".join(f"palavra{i}" for i in range(60))  # ~24s of narration at 150 wpm
+
+        async def fake_chat(prompt, json_mode=False):
+            self.assertIn("Trechos numerados", prompt)
+            return json.dumps({"terms": ["ocean waves", "ocean waves", "coral reef"]})  # a duplicate the model repeated
+
+        with patch.object(self.main, "moonshot_chat", new=fake_chat):
+            terms, clip_seconds = asyncio.run(self.main.visual_terms("oceano", script, clip_seconds=5))
+        self.assertEqual(clip_seconds, 5)
+        self.assertEqual(len(terms), 5)  # one per ~5s chunk of the 24s narration
+        self.assertEqual(len(set(terms)), len(terms))  # the repeated "ocean waves" got deduped, then padded back out distinctly
+
+    def test_visual_terms_caps_search_count_and_stretches_clip_length(self):
+        from unittest.mock import patch
+        script = " ".join(f"palavra{i}" for i in range(4000))  # far more than MAX_VISUAL_TERMS slots at 1s clips
+
+        async def fake_chat(prompt, json_mode=False):
+            return json.dumps({"terms": ["ocean"]})
+
+        with patch.object(self.main, "moonshot_chat", new=fake_chat):
+            terms, clip_seconds = asyncio.run(self.main.visual_terms("oceano", script, clip_seconds=1))
+        self.assertEqual(len(terms), self.main.MAX_VISUAL_TERMS)
+        self.assertGreater(clip_seconds, 1)  # stretched so the capped term count still covers the whole narration
+
+    def test_create_job_script_mode_aligns_terms_and_locks_sequential(self):
+        from unittest.mock import patch
+        self._completed_job()
+        self._connected(("yt", "youtube"))
+        sent = {}
+
+        async def fake_turbo(method, path, **kwargs):
+            if path == "/api/v1/videos":
+                sent["video"] = kwargs["json"]
+                return type("Response", (), {"json": lambda self: {"data": {"task_id": "t1"}}})()
+            return type("Response", (), {"json": lambda self: {"data": {"video_script": "uma frase de teste bem curta"}}})()
+
+        async def fake_visual_terms(subject, script, clip_seconds, voice_rate=1.0):
+            sent["visual_terms_args"] = (subject, script, clip_seconds)
+            return ["term one", "term two"], 4.0
+
+        with patch.object(self.main, "turbo_request", new=fake_turbo), patch.object(self.main, "visual_terms", new=fake_visual_terms):
+            job = asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="tema", format="short", channel_ids=["yt"])))
+        self.assertEqual(sent["video"]["match_materials_to_script"], True)
+        self.assertEqual(sent["video"]["video_concat_mode"], "sequential")
+        self.assertEqual(sent["video"]["video_terms"], "term one, term two")
+        self.assertEqual(sent["video"]["video_clip_duration"], 4)
+        self.assertEqual(sent["visual_terms_args"][1], "uma frase de teste bem curta")  # the script Turbo just wrote, not blank
+        self.assertEqual(job["script"], "uma frase de teste bem curta")
+
+    def test_create_job_random_mode_skips_alignment(self):
+        from unittest.mock import patch
+        self._completed_job()
+        self._connected(("yt", "youtube"))
+        sent = {}
+
+        async def fake_turbo(method, path, **kwargs):
+            sent["video"] = kwargs["json"]
+            return type("Response", (), {"json": lambda self: {"data": {"task_id": "t1"}}})()
+
+        with patch.object(self.main, "turbo_request", new=fake_turbo), patch.object(self.main, "visual_terms") as terms_mock:
+            asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="tema", format="short", channel_ids=["yt"], settings={"video_concat_mode": "random"})))
+        terms_mock.assert_not_called()
+        self.assertEqual(sent["video"]["video_concat_mode"], "random")
+        self.assertNotIn("match_materials_to_script", sent["video"])
