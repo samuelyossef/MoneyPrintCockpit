@@ -6,6 +6,7 @@ import base64
 import html
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -651,7 +652,7 @@ TURBO_VIDEO_FIELDS = (
     "video_concat_mode", "video_transition_mode", "video_terms", "match_materials_to_script", "paragraph_number",
     "video_script_prompt", "custom_system_prompt", "voice_name", "voice_rate", "voice_volume",
     "bgm_type", "bgm_volume", "subtitle_enabled", "subtitle_position", "font_size", "text_fore_color",
-    "stroke_color", "stroke_width", "n_threads",
+    "stroke_color", "stroke_width", "n_threads", "video_materials",
 )
 
 
@@ -678,6 +679,18 @@ def build_turbo_payload(subject: str, script: str, settings: dict[str, Any]) -> 
     return payload
 
 
+def job_max_words(format: str, settings: dict[str, Any]) -> int | None:
+    """The narration budget the screen asked for: the Short's "Duração alvo" select, or the long
+    video's target in minutes. None means no target was sent, so nothing is trimmed."""
+    if format == "short":
+        return short_script_max_words(int(settings.get("paragraph_number", 5) or 5))
+    try:
+        minutes = float(settings.get("target_minutes") or 0)
+    except (TypeError, ValueError):
+        return None
+    return int(minutes * WORDS_PER_MINUTE) or None
+
+
 @app.post("/api/projects/{project_id}/jobs", status_code=202)
 async def create_job(project_id: str, input: JobCreate) -> dict[str, Any]:
     project = row_as_project(get_project_or_404(project_id))
@@ -689,7 +702,11 @@ async def create_job(project_id: str, input: JobCreate) -> dict[str, Any]:
     # Turbo's encoder defaults to 2 threads; this container sees the same Docker VM CPUs as Turbo.
     merged.setdefault("n_threads", os.cpu_count() or 2)
     script_text = input.script.strip()
-    if merged.get("video_concat_mode") == "script":
+    ai_images = merged.get("video_source") == "ai_images"
+    if ai_images and not config_value("nvidia_api_key"):
+        raise HTTPException(status_code=409, detail="Configure a chave NVIDIA em Configurações para gerar vídeos com imagens de IA.")
+    follow_script = merged.get("video_concat_mode") == "script"
+    if follow_script or ai_images:
         # "Seguir o roteiro": one visual search term per script chunk, downloaded in that
         # order, instead of Turbo's handful of generic terms shared across the whole video
         # (see visual_terms()) - that's what made footage look unrelated to the narration.
@@ -701,10 +718,20 @@ async def create_job(project_id: str, input: JobCreate) -> dict[str, Any]:
                 "video_script_prompt": merged.get("video_script_prompt", ""), "custom_system_prompt": merged.get("custom_system_prompt", ""),
             })
             script_text = str((unwrap(script_response.json()) or {}).get("video_script", "")).strip()
-            script_text = trim_to_words(script_text, short_script_max_words(int(merged.get("paragraph_number", 5))))
-        if script_text and not str(merged.get("video_terms", "")).strip():
-            terms, clip_seconds = await visual_terms(input.subject, script_text, float(merged.get("video_clip_duration") or 5), float(merged.get("voice_rate") or 1))
-            merged["video_terms"], merged["video_clip_duration"] = ", ".join(terms), max(1, round(clip_seconds))
+    # The chosen duration wins over whatever was written, pasted or generated, in every mode: a
+    # longer script would stretch the narration past it, and the visuals are cut to fit the script.
+    max_words = job_max_words(input.format, merged)
+    if script_text and max_words:
+        script_text = trim_to_words(script_text, max_words)
+    if ai_images:
+        if not script_text:
+            raise HTTPException(status_code=409, detail="Escreva ou gere o roteiro antes de gerar o vídeo com imagens de IA.")
+        materials, clip = await ai_image_materials(input.subject, script_text, input.format, float(merged.get("video_clip_duration") or 5), float(merged.get("voice_rate") or 1))
+        merged.pop("video_terms", None)
+        merged.update(video_source="local", video_materials=materials, video_clip_duration=clip, match_materials_to_script=False)
+    elif follow_script and script_text and not str(merged.get("video_terms", "")).strip():
+        terms, clip_seconds = await visual_terms(input.subject, script_text, float(merged.get("video_clip_duration") or 5), float(merged.get("voice_rate") or 1))
+        merged["video_terms"], merged["video_clip_duration"] = ", ".join(terms), max(1, round(clip_seconds))
     request_payload = build_turbo_payload(input.subject, script_text, merged)
     response = await turbo_request("POST", "/api/v1/videos", json=request_payload)
     turbo_result = unwrap(response.json())
@@ -1175,6 +1202,53 @@ async def visual_terms(subject: str, script: str, clip_seconds: float, voice_rat
     return _fill_visual_terms(raw_terms, len(chunks)), effective_clip_seconds
 
 
+# High enough that "Duração de cada clipe" is honoured even on a 15-minute video (180 images at 5 s);
+# ponytail: it is a safety stop against a runaway NVIDIA bill, not a quality setting.
+MAX_AI_IMAGES = 200
+AI_IMAGE_SIZES = {"short": (768, 1344), "long": (1344, 768)}  # FLUX.1-dev accepts 768-1344 in steps of 64
+
+
+async def ai_image_materials(subject: str, script: str, format: str, clip_seconds: float, voice_rate: float = 1.0) -> tuple[list[dict[str, Any]], int]:
+    """One FLUX image per narration chunk, uploaded to Turbo as local materials in narration order.
+    Turbo turns each image into a slow-zoom clip (video_source="local")."""
+    seconds = narration_seconds(script, voice_rate)
+    count = max(1, min(math.ceil(seconds / max(clip_seconds, 1)), MAX_AI_IMAGES))
+    clip = max(1, math.ceil(seconds / count))  # rounded up so the images cover the whole narration; Turbo trims the rest
+    chunks = split_script(script, count) or [subject]
+    numbered = "\n".join(f"{index + 1}. {chunk}" for index, chunk in enumerate(chunks))
+    generated = parse_json_object(await llm_chat(
+        f"Tema do vídeo: {subject}\nTrechos numerados da narração, na ordem em que aparecem:\n{numbered}\n"
+        "Cada trecho vira uma imagem gerada por IA, e as imagens em sequência contam a história do vídeo. "
+        'Defina um estilo visual único para todas ("style", em INGLÊS: técnica, paleta, iluminação) e, para cada trecho, '
+        "descreva em INGLÊS uma cena concreta que ilustre o que é dito (sujeito, ação, lugar, enquadramento), sem texto na imagem.\n"
+        f'Responda apenas JSON: {{"style": string, "scenes": lista com exatamente {len(chunks)} strings, na mesma ordem dos trechos}}',
+        json_mode=True,
+    ))
+    style = str(generated.get("style") or "cinematic digital illustration, rich colors").strip()
+    scenes = _fill_visual_terms([str(scene).strip() for scene in generated.get("scenes") or [] if str(scene).strip()], len(chunks))
+    width, height = AI_IMAGE_SIZES[format]
+    batch, limit = uuid4().hex, asyncio.Semaphore(4)
+
+    async def render(index: int, scene: str) -> str | None:
+        async with limit:
+            for attempt in range(2):  # one retry: NIM occasionally times out a single image under a burst
+                try:
+                    image = await generate_image(f"{style}. {scene}. No text, no letters.", width, height)
+                    response = await turbo_request("POST", "/api/v1/video_materials", files={"file": (f"{batch}-{index:03}.jpg", image, "image/jpeg")})
+                    return str((unwrap(response.json()) or {}).get("file") or "") or None
+                except HTTPException as exc:
+                    logger.warning("AI image %s attempt %s failed: %s", index, attempt + 1, exc.detail)
+            return None
+
+    files = await asyncio.gather(*(render(index, scene) for index, scene in enumerate(scenes)))
+    good = [index for index, file in enumerate(files) if file]
+    if not good:
+        raise HTTPException(status_code=502, detail="Nenhuma imagem pôde ser gerada pela NVIDIA. Tente de novo ou use filmagens de banco.")
+    # A refused scene borrows its nearest good neighbour, so the rest stay aligned with the narration.
+    filled = [files[index] or files[min(good, key=lambda g: abs(g - index))] for index in range(len(files))]
+    return [{"provider": "local", "url": file, "duration": clip} for file in filled], clip
+
+
 class VisualTermsInput(BaseModel):
     subject: str = Field(min_length=1, max_length=500)
     script: str = Field(min_length=1, max_length=40000)
@@ -1618,12 +1692,12 @@ def thumbnail_path(job_id: str) -> Path:
     return DATA_DIR / "thumbnails" / f"{job_id}.jpg"
 
 
-async def generate_thumbnail_image(prompt: str) -> bytes:
+async def generate_image(prompt: str, width: int = THUMBNAIL_WIDTH, height: int = THUMBNAIL_HEIGHT) -> bytes:
     key = config_value("nvidia_api_key")
     if not key:
-        raise HTTPException(status_code=409, detail="Configure a chave NVIDIA em Configurações para gerar thumbnails.")
+        raise HTTPException(status_code=409, detail="Configure a chave NVIDIA em Configurações para gerar imagens.")
     model = config_value("nvidia_image_model") or NVIDIA_DEFAULT_IMAGE_MODEL
-    body = {"prompt": prompt[:2000], "width": THUMBNAIL_WIDTH, "height": THUMBNAIL_HEIGHT, "steps": 30, "cfg_scale": 3.5}
+    body = {"prompt": prompt[:2000], "width": width, "height": height, "steps": 30, "cfg_scale": 3.5}
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(30, read=120)) as client:
             response = await send_with_retry(client, "POST", f"{NVIDIA_GENAI_BASE_URL}/{model}", headers={"Authorization": f"Bearer {key}"}, json=body)
@@ -1656,7 +1730,7 @@ async def create_thumbnail(job_id: str, input: ThumbnailInput | None = None) -> 
     prompt = input.prompt.strip() or (
         f"YouTube thumbnail, bold eye-catching composition, cinematic lighting, no text or letters, about: {title or job['subject']}"
     )
-    image = await generate_thumbnail_image(prompt)
+    image = await generate_image(prompt)
     path = thumbnail_path(job_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(image)

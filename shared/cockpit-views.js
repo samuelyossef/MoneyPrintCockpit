@@ -1116,7 +1116,7 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
         <div class="dr-sec" style="margin-top:0">Filmagens e stock</div>
         <div class="card-note" style="margin:6px 0 14px;font-family:inherit">Fonte padrão usada para buscar as filmagens. Configure a chave de quem for usar antes de selecionar.</div>
         <div class="grid2" style="margin-top:10px">
-          ${field("Fonte de vídeo padrão", "pexels", { select: true, id: "cfgVideoSource", opts: [["pexels", "Pexels"], ["pixabay", "Pixabay"], ["coverr", "Coverr"]] })}
+          ${field("Fonte de vídeo padrão", "pexels", { select: true, id: "cfgVideoSource", opts: [["pexels", "Pexels"], ["pixabay", "Pixabay"], ["coverr", "Coverr"], ["ai_images", "Imagens geradas por IA (NVIDIA FLUX)"]] })}
           ${field("Duração padrão do clipe (s)", "5", { id: "cfgDuration", type: "number" })}
           ${field("Cenas por vídeo (padrão)", "5", { id: "cfgParagraphs", type: "number" })}
         </div>
@@ -1288,6 +1288,11 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
               </div>
             </details>
             <div>
+              <label class="dr-sec" style="margin:0 0 7px">Gerar com</label>
+              <select class="set-select" id="genVideoSource" style="width:100%"><option value="" selected>Filmagens de banco (Pexels)</option><option value="ai_images">Imagens geradas por IA (NVIDIA FLUX)</option></select>
+              <div class="card-note" style="margin-top:6px">Imagens de IA: uma imagem por trecho narrado, com zoom lento, na ordem do roteiro. Leva alguns minutos a mais e usa a cota NVIDIA.</div>
+            </div>
+            <div id="genTermsRow">
               <div style="display:flex;justify-content:space-between;align-items:center;margin:0 0 7px"><label class="dr-sec" style="margin:0">Palavras-chave das filmagens (opcional)</label><button class="btn sm" type="button" id="genTermsAiBtn">Gerar palavras-chave</button></div>
               <input class="np-input" id="genTermsInput" style="width:100%" placeholder="deep ocean, ocean life — separadas por vírgula (em inglês o Pexels acha mais)" />
             </div>

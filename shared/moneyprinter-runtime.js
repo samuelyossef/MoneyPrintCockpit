@@ -387,6 +387,7 @@
     set("#genFontSizeInput", defaults.font_size); set("#genTextColorInput", defaults.text_fore_color);
     set("#genStrokeColorInput", defaults.stroke_color); set("#genBgmSelect", defaults.bgm_type);
     set("#genSubtitlePosition", defaults.subtitle_position);
+    set("#genVideoSource", defaults.video_source === "ai_images" ? "ai_images" : "");
     const subtitle = body.querySelector("#genSubtitleEnabled");
     if (subtitle && defaults.subtitle_enabled !== undefined) subtitle.checked = !!defaults.subtitle_enabled;
     // Only fill these two if the field is still empty - an in-progress edit on screen (not yet
@@ -419,6 +420,9 @@
         subtitle_position: value(body, "#genSubtitlePosition", "bottom"),
         subtitle_enabled: !body.querySelector("#genSubtitleEnabled") || body.querySelector("#genSubtitleEnabled").checked,
         video_script_prompt: value(body, "#genScriptRequirements", "").trim(), custom_system_prompt: value(body, "#genSystemPrompt", "").trim(),
+        // "Filmagens de banco" keeps whichever stock source Configurações picked; it only resets one that was "ai_images".
+        ...(value(body, "#genVideoSource", "") === "ai_images" ? { video_source: "ai_images" }
+          : (cachedDefaults[format] || {}).video_source === "ai_images" ? { video_source: "pexels" } : {}),
       } }) });
       notify(`Padrões de ${format === "long" ? "vídeo longo" : "Shorts"} salvos.`);
     };
@@ -587,6 +591,11 @@
       stats.textContent = words ? `${words} palavras · ≈ ${seconds > 90 ? `${Math.round(seconds / 6) / 10} min` : `${seconds} s`} de narração${outOfRange ? ` — ${outOfRange} para um Short (60–90 s)` : ""}` : "";
       stats.style.color = outOfRange ? "var(--warn)" : "";
     };
+    // Keyword search only applies to stock footage; with AI images the scenes come from the script.
+    const sourceSelect = body.querySelector("#genVideoSource"), termsRow = body.querySelector("#genTermsRow");
+    const syncSource = () => { if (termsRow) termsRow.hidden = sourceSelect && sourceSelect.value === "ai_images"; };
+    if (sourceSelect) sourceSelect.addEventListener("change", syncSource);
+    syncSource();
     restoreDraft(body);
     updateStats();
     body.querySelectorAll("#genTopicInput, #genScriptInput, #genTermsInput, #genLanguageSelect, #genVoiceSelect, #genScriptRequirements, #genSystemPrompt").forEach(input => input.addEventListener("input", () => saveDraft(body)));
@@ -595,7 +604,8 @@
       const subject = value(body, "#genTopicInput", "").trim();
       if (!subject) { notify("Informe o tema do vídeo."); body.querySelector("#genTopicInput").focus(); return; }
       button.disabled = true;
-      button.textContent = "Enviando para o Turbo…";
+      const aiImages = value(body, "#genVideoSource", "") === "ai_images";
+      button.textContent = aiImages ? "Gerando imagens com IA…" : "Enviando para o Turbo…";
       try {
         const project = await projectFor(body);
         const number = (selector, fallback) => { const n = Number.parseFloat(value(body, selector, fallback)); return Number.isFinite(n) ? n : fallback; };
@@ -608,12 +618,18 @@
           video_count: integer(value(body, "#genVideoCount", 1), 1), video_clip_speed: number("#genClipSpeed", 1),
           video_concat_mode: value(body, "#genConcatMode", "random"), video_transition_mode: value(body, "#genTransition", ""),
           video_terms: value(body, "#genTermsInput", "").trim(),
+          // Stock footage: a saved "ai_images" default is overridden; otherwise Configurações' source stays in charge.
+          ...(aiImages ? { video_source: "ai_images" } : (cachedDefaults[format] || {}).video_source === "ai_images" ? { video_source: "pexels" } : {}),
           voice_rate: number("#genVoiceRate", 1), voice_volume: number("#genVoiceVolume", 1),
+          // The gateway trims the narration to this target, whoever wrote the script.
+          ...(body.querySelector("#genTargetMinutes") ? { target_minutes: integer(value(body, "#genTargetMinutes", 8), 8) } : {}),
           subtitle_enabled: subtitle ? subtitle.checked : true, subtitle_position: value(body, "#genSubtitlePosition", "bottom"),
           font_size: integer(value(body, "#genFontSizeInput", 56), 56), text_fore_color: value(body, "#genTextColorInput", "#FFFFFF"),
           stroke_color: value(body, "#genStrokeColorInput", "#000000"), stroke_width: number("#genStrokeWidth", 1.5),
           bgm_type: value(body, "#genBgmSelect", ""), bgm_volume: number("#genBgmVolume", 0.2),
         } }) });
+        const typed = value(body, "#genScriptInput", "").trim();
+        if (typed && job.script && job.script !== typed) notify("Roteiro cortado para caber na duração alvo.");
         const slot = body.querySelector("#gen-preview"); if (slot) slot.innerHTML = "";
         const download = body.querySelector("#genDownloadBtn"); if (download) download.disabled = true;
         watch(body, job, notify);

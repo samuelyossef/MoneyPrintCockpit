@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -725,6 +726,107 @@ class GatewayContractTests(unittest.TestCase):
         self.assertLess(len(job["script"].split()), 500)
         self.assertLessEqual(len(job["script"].split()), self.main.short_script_max_words(5))
 
+    def _ai_images_job(self, fail_indexes=(), max_images=None, clip_duration=5):
+        from unittest.mock import patch
+        from fastapi import HTTPException
+        self._completed_job()
+        self._connected(("yt", "youtube"))
+        script = " ".join(f"palavra{i}" for i in range(50))  # 50 words = 20 s of narration at 150 wpm
+        calls = {"uploads": [], "sizes": [], "video": None}
+
+        async def fake_chat(prompt, json_mode=False):
+            count = int(re.search(r"exatamente (\d+)", prompt).group(1))
+            return json.dumps({"style": "watercolor", "scenes": [f"scene {i}" for i in range(count)]})
+
+        async def fake_image(prompt, width, height):
+            calls["sizes"].append((width, height))
+            index = int(re.search(r"scene (\d+)", prompt).group(1))
+            if index in fail_indexes:
+                raise HTTPException(status_code=502, detail="CONTENT_FILTERED")
+            return f"img{index}".encode()
+
+        async def fake_turbo(method, path, **kwargs):
+            if path == "/api/v1/video_materials":
+                name = kwargs["files"]["file"][1].decode()
+                calls["uploads"].append(name)
+                return type("Response", (), {"json": lambda self: {"data": {"file": f"{name}.jpg"}}})()
+            calls["video"] = kwargs["json"]
+            return type("Response", (), {"json": lambda self: {"data": {"task_id": "t1"}}})()
+
+        patches = [patch.object(self.main, "llm_chat", new=fake_chat), patch.object(self.main, "generate_image", new=fake_image),
+                   patch.object(self.main, "turbo_request", new=fake_turbo), patch.object(self.main, "config_value", side_effect=lambda key: "nv-key" if key == "nvidia_api_key" else "")]
+        if max_images:
+            patches.append(patch.object(self.main, "MAX_AI_IMAGES", max_images))
+        for active in patches:
+            active.start()
+        try:
+            asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="tema", script=script, format="short", channel_ids=["yt"],
+                                                                        settings={"video_source": "ai_images", "video_clip_duration": clip_duration, "video_terms": "old"})))
+        finally:
+            for active in patches:
+                active.stop()
+        return calls
+
+    def test_create_job_with_ai_images_sends_one_image_per_chunk_in_order(self):
+        calls = self._ai_images_job(fail_indexes={1})
+        video = calls["video"]
+        self.assertEqual(video["video_source"], "local")
+        self.assertEqual(video["video_concat_mode"], "sequential")
+        self.assertNotIn("video_terms", video)
+        # 20 s at 5 s per clip = 4 images; the refused scene 1 borrows its neighbour 0.
+        self.assertEqual([m["url"] for m in video["video_materials"]], ["img0.jpg", "img0.jpg", "img2.jpg", "img3.jpg"])
+        self.assertEqual({m["duration"] for m in video["video_materials"]}, {5})
+        self.assertEqual(set(calls["sizes"]), {(768, 1344)})
+
+    def test_create_job_with_ai_images_stretches_clips_when_capped(self):
+        calls = self._ai_images_job(max_images=2)
+        self.assertEqual(len(calls["video"]["video_materials"]), 2)
+        self.assertEqual(calls["video"]["video_clip_duration"], 10)
+
+    def test_create_job_with_ai_images_fails_when_every_image_fails(self):
+        from fastapi import HTTPException
+        with self.assertRaises(HTTPException) as blocked:
+            self._ai_images_job(fail_indexes={0, 1, 2, 3})
+        self.assertEqual(blocked.exception.status_code, 502)
+
+    def test_create_job_with_ai_images_requires_a_nvidia_key_before_calling_turbo(self):
+        from unittest.mock import AsyncMock, patch
+        from fastapi import HTTPException
+        self._completed_job()
+        self._connected(("yt", "youtube"))
+        turbo = AsyncMock()
+        with patch.object(self.main, "turbo_request", new=turbo), self.assertRaises(HTTPException) as blocked:
+            asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="tema", script="uma frase.", format="short", channel_ids=["yt"], settings={"video_source": "ai_images"})))
+        self.assertEqual(blocked.exception.status_code, 409)
+        turbo.assert_not_called()
+
+    def test_create_job_trims_a_pasted_script_to_the_chosen_duration(self):
+        from unittest.mock import patch
+        self._completed_job()
+        self._connected(("yt", "youtube"))
+        oversized = " ".join(f"palavra{i}." for i in range(600))
+        sent = {}
+
+        async def fake_turbo(method, path, **kwargs):
+            if path == "/api/v1/videos":
+                sent["video"] = kwargs["json"]
+                return type("Response", (), {"json": lambda self: {"data": {"task_id": "t1"}}})()
+            return type("Response", (), {"json": lambda self: {"data": {"video_script": ""}}})()
+
+        with patch.object(self.main, "turbo_request", new=fake_turbo), patch.object(self.main, "visual_terms", new=self._async_return((["term"], 5.0))):
+            short = asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="tema", script=oversized, format="short", channel_ids=["yt"], settings={"paragraph_number": 4, "video_concat_mode": "random"})))  # the cap applies in every clip mode
+            long = asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="tema", script=oversized, format="long", channel_ids=["yt"], settings={"target_minutes": 2})))
+        self.assertLessEqual(len(short["script"].split()), self.main.short_script_max_words(4))  # 60 s Short
+        self.assertLessEqual(len(long["script"].split()), 2 * self.main.WORDS_PER_MINUTE)
+        self.assertEqual(sent["video"]["video_script"], long["script"])
+        self.assertNotIn("target_minutes", sent["video"])  # Cockpit-only setting, never sent to Turbo
+
+    def test_ai_images_follow_the_chosen_clip_duration(self):
+        # 50 words is 20 s of narration; at 4 s per clip that has to be 5 images, not a stretched few.
+        calls = self._ai_images_job(clip_duration=4)
+        self.assertEqual(len(calls["video"]["video_materials"]), 5)
+        self.assertEqual(calls["video"]["video_clip_duration"], 4)
+
     def test_long_script_never_exceeds_the_chosen_minutes(self):
         from unittest.mock import patch
         outline = json.dumps({"title": "T", "sections": [{"heading": f"S{i}", "points": ["p"]} for i in range(4)]})
@@ -773,7 +875,7 @@ class GatewayContractTests(unittest.TestCase):
             asyncio.run(self.main.review_job("job-1"))
         self.assertEqual(blocked.exception.status_code, 409)
 
-    def test_generate_thumbnail_image_decodes_the_base64_artifact(self):
+    def test_generate_image_decodes_the_base64_artifact(self):
         from unittest.mock import AsyncMock, patch
         config_dir = self.main.DATA_DIR / "moneyprinter"
         config_dir.mkdir(parents=True, exist_ok=True)
@@ -781,17 +883,17 @@ class GatewayContractTests(unittest.TestCase):
         payload = {"artifacts": [{"base64": base64.b64encode(b"fake-jpeg-bytes").decode(), "finishReason": "SUCCESS", "seed": 1}]}
         fake_response = type("R", (), {"status_code": 200, "json": lambda self: payload})()
         with patch.object(self.main, "send_with_retry", new=AsyncMock(return_value=fake_response)) as send:
-            image = asyncio.run(self.main.generate_thumbnail_image("a coffee shop"))
+            image = asyncio.run(self.main.generate_image("a coffee shop"))
         self.assertEqual(image, b"fake-jpeg-bytes")
         self.assertTrue(send.call_args.args[2].startswith(self.main.NVIDIA_GENAI_BASE_URL))
 
-    def test_generate_thumbnail_image_requires_a_configured_nvidia_key(self):
+    def test_generate_image_requires_a_configured_nvidia_key(self):
         from fastapi import HTTPException
         with self.assertRaises(HTTPException) as blocked:
-            asyncio.run(self.main.generate_thumbnail_image("x"))
+            asyncio.run(self.main.generate_image("x"))
         self.assertEqual(blocked.exception.status_code, 409)
 
-    def test_generate_thumbnail_image_rejects_a_filtered_result(self):
+    def test_generate_image_rejects_a_filtered_result(self):
         from unittest.mock import AsyncMock, patch
         from fastapi import HTTPException
         config_dir = self.main.DATA_DIR / "moneyprinter"
@@ -801,14 +903,14 @@ class GatewayContractTests(unittest.TestCase):
         fake_response = type("R", (), {"status_code": 200, "json": lambda self: payload})()
         with patch.object(self.main, "send_with_retry", new=AsyncMock(return_value=fake_response)):
             with self.assertRaises(HTTPException) as blocked:
-                asyncio.run(self.main.generate_thumbnail_image("x"))
+                asyncio.run(self.main.generate_image("x"))
         self.assertEqual(blocked.exception.status_code, 502)
 
     def test_create_thumbnail_writes_the_file_and_exposes_its_update_time(self):
         from unittest.mock import patch
         self._completed_job()
         self.main.put_metadata("job-1", self.main.MetadataInput(title="Meu Título", description="d", tags="a,b,c"))
-        with patch.object(self.main, "generate_thumbnail_image", new=self._async_return(b"fake-jpeg")):
+        with patch.object(self.main, "generate_image", new=self._async_return(b"fake-jpeg")):
             job = asyncio.run(self.main.create_thumbnail("job-1"))
         self.assertIsNotNone(job["thumbnail_updated_at"])
         self.assertEqual(self.main.thumbnail_path("job-1").read_bytes(), b"fake-jpeg")
