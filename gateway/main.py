@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import html
 import json
 import logging
-import math
 import os
 import re
 import sqlite3
@@ -115,9 +113,6 @@ def initialize_database() -> None:
             CREATE TABLE IF NOT EXISTS video_analytics (
               publication_id TEXT PRIMARY KEY, captured_at TEXT NOT NULL, metrics_json TEXT NOT NULL, score INTEGER NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS job_reviews (
-              job_id TEXT PRIMARY KEY REFERENCES video_jobs(id), value_json TEXT NOT NULL, created_at TEXT NOT NULL
-            );
             """
         )
         job_columns = {column["name"] for column in db.execute("PRAGMA table_info(video_jobs)")}
@@ -142,23 +137,40 @@ def initialize_database() -> None:
                 "FROM video_jobs AS jobs JOIN channels ON channels.id = jobs.channel_id WHERE jobs.deleted_at IS NULL",
                 (now(), now()),
             )
-        existing = db.execute("SELECT 1 FROM settings WHERE key = 'generation-defaults'").fetchone()
+        existing = db.execute("SELECT value_json FROM settings WHERE key = 'generation-defaults'").fetchone()
         if not existing:
             db.execute(
                 "INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)",
                 ("generation-defaults", json.dumps(default_generation_settings()), now()),
             )
+        else:
+            # Backfill: instalações existentes ganham as chaves novas sem perder o que o usuário já salvou.
+            stored = json.loads(existing["value_json"])
+            missing = {key: value for key, value in default_generation_settings().items() if key not in stored}
+            if missing:
+                db.execute(
+                    "UPDATE settings SET value_json=?, updated_at=? WHERE key='generation-defaults'",
+                    (json.dumps({**stored, **missing}), now()),
+                )
 
 
 def default_generation_settings() -> dict[str, Any]:
+    """Base compartilhada (Configurações): equilíbrio entre velocidade e qualidade
+    com stock-only (Pexels/Pixabay/Coverr). Os presets por formato refinam por cima."""
     return {
         "video_language": "pt-BR",
         "video_aspect": "9:16",
         "video_source": "pexels",
         "voice_name": "pt-BR-FranciscaNeural",
+        "voice_rate": 1.0,
+        "voice_volume": 1.0,
+        "video_clip_speed": 1.0,
         "subtitle_enabled": True,
         "subtitle_provider": "edge",
+        "stroke_width": 1.5,
         "bgm_type": "",
+        "bgm_volume": 0.2,
+        "video_transition_mode": "",
         "video_count": 1,
         "video_clip_duration": 5,
         "video_concat_mode": "script",
@@ -171,9 +183,14 @@ def default_generation_settings() -> dict[str, Any]:
 
 # Locked values are applied last, so neither saved defaults nor a stray setting can turn a Short into 16:9.
 FORMAT_LOCKED: dict[str, dict[str, Any]] = {"long": {"video_aspect": "16:9", "video_count": 1}, "short": {"video_aspect": "9:16"}}
+# Presets "final" por formato: Short dinâmico (cortes de 4 s) e longo calmo (cortes de
+# 6 s), legenda legível em cada aspecto. Para rascunho rápido, escolha no Gerador
+# duração menor (Short 60 s) e clipe de 6 s, sem transição/BGM.
 FORMAT_PRESETS: dict[str, dict[str, Any]] = {
-    "long": {**FORMAT_LOCKED["long"], "video_clip_duration": 6, "subtitle_position": "bottom", "font_size": 48},
-    "short": {**FORMAT_LOCKED["short"], "video_clip_duration": 3, "paragraph_number": 5, "subtitle_position": "center", "font_size": 64},
+    "long": {**FORMAT_LOCKED["long"], "video_clip_duration": 6, "subtitle_position": "bottom", "font_size": 48,
+             "video_transition_mode": "", "bgm_type": "", "voice_rate": 1.0},
+    "short": {**FORMAT_LOCKED["short"], "video_clip_duration": 4, "paragraph_number": 5, "subtitle_position": "center", "font_size": 64,
+              "video_transition_mode": "", "bgm_type": "", "voice_rate": 1.0},
 }
 
 
@@ -219,15 +236,11 @@ def row_as_job(row: sqlite3.Row, db: sqlite3.Connection | None = None) -> dict[s
     result = {key: row[key] for key in row.keys() if key not in {"request_json", "turbo_payload_json"}}
     result["request"] = json.loads(row["request_json"])
     result["turbo"] = json.loads(row["turbo_payload_json"])
-    thumb = thumbnail_path(row["id"])
-    result["thumbnail_updated_at"] = thumb.stat().st_mtime if thumb.is_file() else None
     if db:
         result["artifacts"] = [dict(item) for item in db.execute("SELECT * FROM artifacts WHERE job_id = ?", (row["id"],))]
         result["publications"] = [dict(item) for item in db.execute("SELECT * FROM publications WHERE job_id = ?", (row["id"],))]
         metadata = db.execute("SELECT value_json FROM job_metadata WHERE job_id = ?", (row["id"],)).fetchone()
         result["metadata"] = json.loads(metadata["value_json"]) if metadata else None
-        review = db.execute("SELECT value_json FROM job_reviews WHERE job_id = ?", (row["id"],)).fetchone()
-        result["review"] = json.loads(review["value_json"]) if review else None
     return result
 
 
@@ -453,6 +466,9 @@ def generation_defaults(format: Literal["long", "short"] | None = None) -> dict[
             "SELECT key, value_json FROM settings WHERE key IN (?, ?)", ("generation-defaults", settings_key(format))
         )}
     base = rows.get("generation-defaults", default_generation_settings())
+    if base.get("video_source") not in {"pexels", "pixabay", "coverr"}:
+        # Fontes de IA removidas (só stock): um padrão antigo salvo cai para o Pexels.
+        base = {**base, "video_source": "pexels"}
     if not format:
         return base
     return {**base, **FORMAT_PRESETS[format], **rows.get(settings_key(format), {}), **FORMAT_LOCKED[format]}
@@ -488,8 +504,6 @@ def provider_readiness() -> dict[str, Any]:
         "moonshot_model": model_match.group(1) if model_match else "",
         "llm_provider": _config_string(value, "cockpit_llm_provider") or "moonshot",
         "nvidia_text_model": _config_string(value, "nvidia_text_model") or NVIDIA_DEFAULT_TEXT_MODEL,
-        "nvidia_vision_model": _config_string(value, "nvidia_vision_model") or NVIDIA_DEFAULT_VISION_MODEL,
-        "nvidia_image_model": _config_string(value, "nvidia_image_model") or NVIDIA_DEFAULT_IMAGE_MODEL,
     }
 
 
@@ -509,8 +523,6 @@ class ProviderCredentials(BaseModel):
     moonshot_model_name: str | None = Field(default=None, max_length=100)
     nvidia_api_key: str | None = Field(default=None, max_length=500)
     nvidia_text_model: str | None = Field(default=None, max_length=200)
-    nvidia_vision_model: str | None = Field(default=None, max_length=200)
-    nvidia_image_model: str | None = Field(default=None, max_length=200)
     pexels_api_key: str | None = Field(default=None, max_length=500)
     pixabay_api_key: str | None = Field(default=None, max_length=500)
     coverr_api_key: str | None = Field(default=None, max_length=500)
@@ -526,11 +538,6 @@ class ProviderValidation(BaseModel):
 MOONSHOT_ENDPOINTS = {"china": "https://api.moonshot.cn/v1", "global": "https://api.moonshot.ai/v1"}
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
 NVIDIA_DEFAULT_TEXT_MODEL = "google/gemma-4-31b-it"
-NVIDIA_DEFAULT_VISION_MODEL = "google/diffusiongemma-26b-a4b-it"
-# Image generation is a separate NVIDIA host/path from the chat-completions one above.
-NVIDIA_GENAI_BASE_URL = "https://ai.api.nvidia.com/v1/genai"
-NVIDIA_DEFAULT_IMAGE_MODEL = "black-forest-labs/flux.1-dev"
-THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT = 1344, 768  # closest FLUX-supported size to YouTube's 16:9
 
 
 async def detect_moonshot_region(client: httpx.AsyncClient, api_key: str) -> str | None:
@@ -612,10 +619,6 @@ async def update_providers(input: ProviderCredentials) -> dict[str, Any]:
         text = _toml_set(text, "nvidia_api_key", f'"{_toml_escape(input.nvidia_api_key)}"')
     if input.nvidia_text_model:
         text = _toml_set(text, "nvidia_text_model", f'"{_toml_escape(input.nvidia_text_model)}"')
-    if input.nvidia_vision_model:
-        text = _toml_set(text, "nvidia_vision_model", f'"{_toml_escape(input.nvidia_vision_model)}"')
-    if input.nvidia_image_model:
-        text = _toml_set(text, "nvidia_image_model", f'"{_toml_escape(input.nvidia_image_model)}"')
     if input.llm_provider:
         text = _toml_set(text, "cockpit_llm_provider", f'"{input.llm_provider}"')
         if input.llm_provider == "nvidia":
@@ -702,11 +705,8 @@ async def create_job(project_id: str, input: JobCreate) -> dict[str, Any]:
     # Turbo's encoder defaults to 2 threads; this container sees the same Docker VM CPUs as Turbo.
     merged.setdefault("n_threads", os.cpu_count() or 2)
     script_text = input.script.strip()
-    ai_images = merged.get("video_source") == "ai_images"
-    if ai_images and not config_value("nvidia_api_key"):
-        raise HTTPException(status_code=409, detail="Configure a chave NVIDIA em Configurações para gerar vídeos com imagens de IA.")
     follow_script = merged.get("video_concat_mode") == "script"
-    if follow_script or ai_images:
+    if follow_script:
         # "Seguir o roteiro": one visual search term per script chunk, downloaded in that
         # order, instead of Turbo's handful of generic terms shared across the whole video
         # (see visual_terms()) - that's what made footage look unrelated to the narration.
@@ -723,13 +723,7 @@ async def create_job(project_id: str, input: JobCreate) -> dict[str, Any]:
     max_words = job_max_words(input.format, merged)
     if script_text and max_words:
         script_text = trim_to_words(script_text, max_words)
-    if ai_images:
-        if not script_text:
-            raise HTTPException(status_code=409, detail="Escreva ou gere o roteiro antes de gerar o vídeo com imagens de IA.")
-        materials, clip = await ai_image_materials(input.subject, script_text, input.format, float(merged.get("video_clip_duration") or 5), float(merged.get("voice_rate") or 1))
-        merged.pop("video_terms", None)
-        merged.update(video_source="local", video_materials=materials, video_clip_duration=clip, match_materials_to_script=False)
-    elif follow_script and script_text and not str(merged.get("video_terms", "")).strip():
+    if follow_script and script_text and not str(merged.get("video_terms", "")).strip():
         terms, clip_seconds = await visual_terms(input.subject, script_text, float(merged.get("video_clip_duration") or 5), float(merged.get("voice_rate") or 1))
         merged["video_terms"], merged["video_clip_duration"] = ", ".join(terms), max(1, round(clip_seconds))
     request_payload = build_turbo_payload(input.subject, script_text, merged)
@@ -1221,53 +1215,6 @@ async def visual_terms(subject: str, script: str, clip_seconds: float, voice_rat
     return _fill_visual_terms(raw_terms, len(chunks)), effective_clip_seconds
 
 
-# High enough that "Duração de cada clipe" is honoured even on a 15-minute video (180 images at 5 s);
-# ponytail: it is a safety stop against a runaway NVIDIA bill, not a quality setting.
-MAX_AI_IMAGES = 200
-AI_IMAGE_SIZES = {"short": (768, 1344), "long": (1344, 768)}  # FLUX.1-dev accepts 768-1344 in steps of 64
-
-
-async def ai_image_materials(subject: str, script: str, format: str, clip_seconds: float, voice_rate: float = 1.0) -> tuple[list[dict[str, Any]], int]:
-    """One FLUX image per narration chunk, uploaded to Turbo as local materials in narration order.
-    Turbo turns each image into a slow-zoom clip (video_source="local")."""
-    seconds = narration_seconds(script, voice_rate)
-    count = max(1, min(math.ceil(seconds / max(clip_seconds, 1)), MAX_AI_IMAGES))
-    clip = max(1, math.ceil(seconds / count))  # rounded up so the images cover the whole narration; Turbo trims the rest
-    chunks = split_script(script, count) or [subject]
-    numbered = "\n".join(f"{index + 1}. {chunk}" for index, chunk in enumerate(chunks))
-    generated = parse_json_object(await llm_chat(
-        f"Tema do vídeo: {subject}\nTrechos numerados da narração, na ordem em que aparecem:\n{numbered}\n"
-        "Cada trecho vira uma imagem gerada por IA, e as imagens em sequência contam a história do vídeo. "
-        'Defina um estilo visual único para todas ("style", em INGLÊS: técnica, paleta, iluminação) e, para cada trecho, '
-        "descreva em INGLÊS uma cena concreta que ilustre o que é dito (sujeito, ação, lugar, enquadramento), sem texto na imagem.\n"
-        f'Responda apenas JSON: {{"style": string, "scenes": lista com exatamente {len(chunks)} strings, na mesma ordem dos trechos}}',
-        json_mode=True,
-    ))
-    style = str(generated.get("style") or "cinematic digital illustration, rich colors").strip()
-    scenes = _fill_visual_terms([str(scene).strip() for scene in generated.get("scenes") or [] if str(scene).strip()], len(chunks))
-    width, height = AI_IMAGE_SIZES[format]
-    batch, limit = uuid4().hex, asyncio.Semaphore(4)
-
-    async def render(index: int, scene: str) -> str | None:
-        async with limit:
-            for attempt in range(2):  # one retry: NIM occasionally times out a single image under a burst
-                try:
-                    image = await generate_image(f"{style}. {scene}. No text, no letters.", width, height)
-                    response = await turbo_request("POST", "/api/v1/video_materials", files={"file": (f"{batch}-{index:03}.jpg", image, "image/jpeg")})
-                    return str((unwrap(response.json()) or {}).get("file") or "") or None
-                except HTTPException as exc:
-                    logger.warning("AI image %s attempt %s failed: %s", index, attempt + 1, exc.detail)
-            return None
-
-    files = await asyncio.gather(*(render(index, scene) for index, scene in enumerate(scenes)))
-    good = [index for index, file in enumerate(files) if file]
-    if not good:
-        raise HTTPException(status_code=502, detail="Nenhuma imagem pôde ser gerada pela NVIDIA. Tente de novo ou use filmagens de banco.")
-    # A refused scene borrows its nearest good neighbour, so the rest stay aligned with the narration.
-    filled = [files[index] or files[min(good, key=lambda g: abs(g - index))] for index in range(len(files))]
-    return [{"provider": "local", "url": file, "duration": clip} for file in filled], clip
-
-
 class VisualTermsInput(BaseModel):
     subject: str = Field(min_length=1, max_length=500)
     script: str = Field(min_length=1, max_length=40000)
@@ -1569,7 +1516,7 @@ def youtube_description(metadata: dict[str, Any]) -> str:
     return description[:5000]
 
 
-def youtube_upload(credentials: Any, video_path: Path, metadata: dict[str, Any], thumbnail_file: Path | None = None) -> str:
+def youtube_upload(credentials: Any, video_path: Path, metadata: dict[str, Any]) -> str:
     from googleapiclient.discovery import build
     from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaFileUpload
@@ -1594,15 +1541,7 @@ def youtube_upload(credentials: Any, video_path: Path, metadata: dict[str, Any],
         if exc.resp.status < 500:
             raise PublishRejected(str(exc)) from exc
         raise
-    video_id = response["id"]
-    if thumbnail_file and thumbnail_file.is_file():
-        # A custom thumbnail is a nice-to-have on top of an already-published video - never fail
-        # the publish over it (e.g. the channel isn't phone-verified, which YouTube requires for this).
-        try:
-            youtube.thumbnails().set(videoId=video_id, media_body=MediaFileUpload(str(thumbnail_file), mimetype="image/jpeg")).execute()
-        except HttpError as exc:
-            logger.warning("Não foi possível definir a thumbnail do vídeo %s: %s", video_id, exc)
-    return video_id
+    return response["id"]
 
 
 async def download_turbo_file(remote_path: str, target: Path) -> None:
@@ -1613,156 +1552,6 @@ async def download_turbo_file(remote_path: str, target: Path) -> None:
             with target.open("wb") as file:
                 async for chunk in response.aiter_bytes():
                     file.write(chunk)
-
-
-REVIEW_FRAMES = 8  # calibration knob: frames sampled across the video for the vision-model review
-
-
-async def run_ffmpeg(*args: str) -> None:
-    process = await asyncio.create_subprocess_exec("ffmpeg", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    _, stderr = await process.communicate()
-    if process.returncode != 0:
-        raise HTTPException(status_code=502, detail=f"ffmpeg falhou: {stderr.decode(errors='replace')[-500:]}")
-
-
-async def extract_review_frames(video_path: Path, duration: float, count: int, out_dir: Path) -> list[Path]:
-    frames = []
-    for index in range(count):
-        timestamp = max(0.0, duration * (index + 0.5) / count)  # middle of each equal slice
-        frame_path = out_dir / f"frame-{index}.jpg"
-        await run_ffmpeg("-y", "-ss", f"{timestamp:.2f}", "-i", str(video_path), "-frames:v", "1", "-vf", "scale=512:-2", "-q:v", "5", str(frame_path))
-        frames.append(frame_path)
-    return frames
-
-
-async def nvidia_chat(content: list[dict[str, Any]], model: str) -> str:
-    key = config_value("nvidia_api_key")
-    if not key:
-        raise HTTPException(status_code=409, detail="Configure a chave NVIDIA em Configurações.")
-    body = {"model": model, "messages": [{"role": "user", "content": content}], "chat_template_kwargs": {"enable_thinking": False}, "max_tokens": 2048}
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30, read=180)) as client:
-            response = await send_with_retry(client, "POST", f"{NVIDIA_BASE_URL}/chat/completions", headers={"Authorization": f"Bearer {key}"}, json=body)
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=503, detail=f"NVIDIA indisponível: {exc}") from exc
-    if response.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"NVIDIA respondeu {response.status_code}: {response.text[:300]}")
-    try:
-        return response.json()["choices"][0]["message"]["content"] or ""
-    except (ValueError, KeyError, IndexError, TypeError) as exc:
-        raise HTTPException(status_code=502, detail="A NVIDIA devolveu uma resposta inesperada") from exc
-
-
-def normalize_review(parsed: dict[str, Any], frame_count: int) -> dict[str, Any]:
-    frames_result = []
-    for item in parsed.get("frames") or []:
-        if not isinstance(item, dict):
-            continue
-        try:
-            index = int(item.get("index"))
-        except (TypeError, ValueError):
-            continue
-        if not (0 <= index < frame_count):
-            continue
-        frames_result.append({"index": index, "matches": bool(item.get("matches")), "reason": str(item.get("reason") or "")[:300]})
-    return {"frames": frames_result, "summary": str(parsed.get("summary") or "")[:1000]}
-
-
-@app.post("/api/jobs/{job_id}/review")
-async def review_job(job_id: str) -> dict[str, Any]:
-    """Only ever advisory: never blocks approval, and doesn't touch cuts/terms automatically."""
-    with database() as db:
-        job = job_row_or_404(db, job_id)
-        artifact = db.execute("SELECT * FROM artifacts WHERE job_id=? AND kind='video' ORDER BY created_at LIMIT 1", (job_id,)).fetchone()
-    if job["state"] not in METADATA_STATES:
-        raise HTTPException(status_code=409, detail="Só é possível revisar vídeos concluídos")
-    if not artifact:
-        raise HTTPException(status_code=409, detail="O vídeo final não foi encontrado")
-    if not config_value("nvidia_api_key"):
-        raise HTTPException(status_code=409, detail="Configure a chave NVIDIA em Configurações para revisar imagens.")
-    vision_model = config_value("nvidia_vision_model") or NVIDIA_DEFAULT_VISION_MODEL
-    turbo_payload = json.loads(job["turbo_payload_json"])
-    script = job["script"] or turbo_payload.get("script") or ""
-    audio_duration = float(turbo_payload.get("audio_duration") or 0) or 30.0
-    chunks = split_script(script, REVIEW_FRAMES) if script.strip() else []
-    with tempfile.TemporaryDirectory() as folder:
-        video_path = Path(folder) / "video.mp4"
-        await download_turbo_file(artifact["remote_path"], video_path)
-        frames = await extract_review_frames(video_path, audio_duration, REVIEW_FRAMES, Path(folder))
-        content: list[dict[str, Any]] = [{"type": "text", "text": (
-            "Você está revisando um vídeo gerado automaticamente. Para cada imagem a seguir, diga se ela combina "
-            "com o trecho do roteiro narrado naquele momento (cena, objeto ou lugar relacionado). Responda apenas "
-            'JSON: {"frames": [{"index": número do quadro, "matches": true ou false, "reason": motivo curto}], "summary": resumo curto geral}'
-        )}]
-        for index, frame_path in enumerate(frames):
-            excerpt = chunks[index] if index < len(chunks) else ""
-            content.append({"type": "text", "text": f"Quadro {index}, trecho narrado: {excerpt}" if excerpt else f"Quadro {index}"})
-            content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64.b64encode(frame_path.read_bytes()).decode('ascii')}"}})
-        value = normalize_review(parse_json_object(await nvidia_chat(content, vision_model)), len(frames))
-    with database() as db:
-        db.execute(
-            "INSERT INTO job_reviews(job_id, value_json, created_at) VALUES (?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET value_json=excluded.value_json, created_at=excluded.created_at",
-            (job_id, json.dumps(value), now()),
-        )
-        return row_as_job(job_row_or_404(db, job_id), db)
-
-
-def thumbnail_path(job_id: str) -> Path:
-    return DATA_DIR / "thumbnails" / f"{job_id}.jpg"
-
-
-async def generate_image(prompt: str, width: int = THUMBNAIL_WIDTH, height: int = THUMBNAIL_HEIGHT) -> bytes:
-    key = config_value("nvidia_api_key")
-    if not key:
-        raise HTTPException(status_code=409, detail="Configure a chave NVIDIA em Configurações para gerar imagens.")
-    model = config_value("nvidia_image_model") or NVIDIA_DEFAULT_IMAGE_MODEL
-    body = {"prompt": prompt[:2000], "width": width, "height": height, "steps": 30, "cfg_scale": 3.5}
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30, read=120)) as client:
-            response = await send_with_retry(client, "POST", f"{NVIDIA_GENAI_BASE_URL}/{model}", headers={"Authorization": f"Bearer {key}"}, json=body)
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=503, detail=f"NVIDIA indisponível: {exc}") from exc
-    if response.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"NVIDIA respondeu {response.status_code}: {response.text[:300]}")
-    try:
-        artifact = response.json()["artifacts"][0]
-    except (ValueError, KeyError, IndexError, TypeError) as exc:
-        raise HTTPException(status_code=502, detail="A NVIDIA devolveu uma resposta inesperada") from exc
-    if artifact.get("finishReason") != "SUCCESS":
-        raise HTTPException(status_code=502, detail=f"A NVIDIA recusou a imagem: {artifact.get('finishReason')}")
-    return base64.b64decode(artifact["base64"])
-
-
-class ThumbnailInput(BaseModel):
-    prompt: str = Field(default="", max_length=2000)
-
-
-@app.post("/api/jobs/{job_id}/thumbnail")
-async def create_thumbnail(job_id: str, input: ThumbnailInput | None = None) -> dict[str, Any]:
-    input = input or ThumbnailInput()
-    with database() as db:
-        job = job_row_or_404(db, job_id)
-        stored = db.execute("SELECT value_json FROM job_metadata WHERE job_id=?", (job_id,)).fetchone()
-    if job["state"] not in METADATA_STATES:
-        raise HTTPException(status_code=409, detail="Só é possível gerar thumbnail para vídeos concluídos")
-    title = json.loads(stored["value_json"]).get("title") if stored else None
-    prompt = input.prompt.strip() or (
-        f"YouTube thumbnail, bold eye-catching composition, cinematic lighting, no text or letters, about: {title or job['subject']}"
-    )
-    image = await generate_image(prompt)
-    path = thumbnail_path(job_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(image)
-    with database() as db:
-        return row_as_job(job_row_or_404(db, job_id), db)
-
-
-@app.get("/api/jobs/{job_id}/thumbnail")
-def get_thumbnail(job_id: str) -> FileResponse:
-    path = thumbnail_path(job_id)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Nenhuma thumbnail gerada ainda")
-    return FileResponse(path, media_type="image/jpeg")
 
 
 async def tiktok_upload(username: str, video_path: Path, metadata: dict[str, Any]) -> tuple[str, str]:
@@ -1858,7 +1647,7 @@ async def publish_to_channel(job_id: str, channel: sqlite3.Row, video: Any, meta
     try:
         # ponytail: uploads run inside the request, one channel after another; move to a background task if long videos hit browser/proxy timeouts.
         if platform == "youtube":
-            external_id, state = await asyncio.to_thread(youtube_upload, credentials, video_path, metadata, thumbnail_path(job_id)), "published"
+            external_id, state = await asyncio.to_thread(youtube_upload, credentials, video_path, metadata), "published"
         else:
             external_id, state = await tiktok_upload(channel["external_id"], video_path, metadata)
     except PublishRejected as exc:
@@ -1952,8 +1741,8 @@ def cancel_schedule(job_id: str, channel_id: str | None = None) -> dict[str, Any
 logger = logging.getLogger("cockpit.agents")
 AGENT_LOOP_SECONDS = 60
 PROJECT_NAMES = {"long": "Vídeos longos", "short": "Shorts"}  # the same projects the Gerador and Shorts screens use
-REGION_BY_LANGUAGE = {"pt": "BR", "en": "US", "es": "ES"}
-VOICE_BY_LANGUAGE = {"pt": "pt-BR-FranciscaNeural", "en": "en-US-JennyNeural", "es": "es-ES-ElviraNeural"}
+REGION_BY_LANGUAGE = {"pt": "BR", "en": "US", "es": "ES", "de": "DE"}
+VOICE_BY_LANGUAGE = {"pt": "pt-BR-FranciscaNeural", "en": "en-US-JennyNeural", "es": "es-ES-ElviraNeural", "de": "de-DE-KatjaNeural"}
 OPERATOR_MINUTES = 8  # calibration knob: length of the long videos the operator writes
 ANALYTICS_METRICS = "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,likes,comments,subscribersGained"
 
@@ -2047,6 +1836,60 @@ PUBLISHED_YOUTUBE = (
     "LEFT JOIN job_metadata AS meta ON meta.job_id = jobs.id LEFT JOIN video_analytics AS stats ON stats.publication_id = p.id "
     "WHERE p.platform='youtube' AND p.state='published' AND p.channel_id IS NOT NULL AND jobs.deleted_at IS NULL"
 )
+
+
+@app.get("/api/analytics/overview")
+def analytics_platform_overview() -> dict[str, Any]:
+    """Operational numbers for the Analytics tab: only rows that exist in SQLite
+    plus YouTube Analytics snapshots. No estimates, no hardcoded totals."""
+    with database() as db:
+        channels = [row_as_channel(row) for row in db.execute("SELECT * FROM channels WHERE deleted_at IS NULL ORDER BY created_at DESC")]
+        job_counts = {row["state"]: row["n"] for row in db.execute("SELECT state, COUNT(*) AS n FROM video_jobs WHERE deleted_at IS NULL GROUP BY state")}
+        rows = db.execute(
+            "SELECT p.id, p.channel_id, channels.name AS channel_name, jobs.subject, json_extract(meta.value_json, '$.title') AS title, "
+            f"stats.metrics_json, stats.score, stats.captured_at {PUBLISHED_YOUTUBE} ORDER BY stats.score IS NULL, stats.score DESC"
+        ).fetchall()
+    videos: list[dict[str, Any]] = []
+    total_views = total_likes = total_comments = 0
+    retentions: list[float] = []
+    scores: list[float] = []
+    for row in rows:
+        metrics = json.loads(row["metrics_json"]) if row["metrics_json"] else None
+        videos.append({
+            "publication_id": row["id"], "channel_id": row["channel_id"], "channel_name": row["channel_name"],
+            "title": row["title"] or row["subject"], "metrics": metrics,
+            "score": row["score"], "captured_at": row["captured_at"],
+        })
+        if metrics:
+            total_views += int(metrics.get("views") or 0)
+            total_likes += int(metrics.get("likes") or 0)
+            total_comments += int(metrics.get("comments") or 0)
+            if metrics.get("averageViewPercentage") is not None:
+                retentions.append(float(metrics.get("averageViewPercentage") or 0))
+        if row["score"] is not None:
+            scores.append(float(row["score"]))
+    followers = sum(int((channel.get("stats") or {}).get("followers") or 0) for channel in channels)
+    return {
+        "channels": channels,
+        "jobs": {
+            "total": sum(job_counts.values()),
+            "completed": job_counts.get("completed", 0),
+            "active": job_counts.get("queued", 0) + job_counts.get("running", 0),
+            "failed": job_counts.get("failed", 0) + job_counts.get("interrupted", 0),
+            "by_state": job_counts,
+        },
+        "youtube": {
+            "videos_published": len(videos),
+            "videos_measured": sum(1 for video in videos if video["metrics"]),
+            "total_views": total_views,
+            "total_likes": total_likes,
+            "total_comments": total_comments,
+            "avg_retention": round(sum(retentions) / len(retentions), 1) if retentions else None,
+            "avg_score": round(sum(scores) / len(scores), 1) if scores else None,
+            "top": videos[:10],
+        },
+        "followers_total": followers,
+    }
 
 
 @app.get("/api/agents/analytics")

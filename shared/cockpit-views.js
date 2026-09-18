@@ -319,48 +319,15 @@ window.CKV = (function () {
   }
 
   /* ── Analytics ──────────────────────────────── */
+  /* Real data only: skeleton filled by MoneyPrinterRuntime.bindAnalytics
+     from GET /api/analytics/overview. No mocked totals or D.series() charts. */
   function custosIA(scope) {
-    const per = D.PERIODS.find(p => p.id === scope.period);
-    const n = per.n > 12 ? 9 : per.n;
-    const totalVideos = D.VIDEOS.vert.length + D.VIDEOS.horiz.length;
-    const totalFollowers = D.CHANNELS.reduce((s, c) => s + c.followers, 0);
-    const ytViews = D.CHANNELS.filter(c => c.platform.startsWith("YouTube")).length;
-    const tkViews = D.CHANNELS.filter(c => c.platform === "TikTok").length;
-    const platforms = [
-      ["YouTube", "#dc2626", Math.round(ytViews / (D.CHANNELS.length || 1) * 100)],
-      ["TikTok", "#000000", Math.round(tkViews / (D.CHANNELS.length || 1) * 100)],
-    ];
-    const top = D.CHANNELS.slice().sort((a, b) => b.followers - a.followers).slice(0, 6);
-    const totalRevenue = D.CHANNELS.reduce((s, c) => s + Number(String(c.revenue || "").replace(/\D/g, "") || 0), 0);
     return `
-      <div class="kpi-row">
-        <div class="kpi" style="cursor:default"><div class="kpi-label">Vídeos gerados</div><div class="kpi-value">${totalVideos}</div>
-          <div class="kpi-delta up">↑ 12,4% <span class="prior">vs período anterior</span></div>${spark(D.series(5, 14, 100, 0.4, 0.5), "var(--accent)")}</div>
-        <div class="kpi" style="cursor:default"><div class="kpi-label">Views totais</div><div class="kpi-value">33,6M</div>
-          <div class="kpi-delta up">↑ 9,1% <span class="prior">vs período anterior</span></div>${spark(D.series(9, 14, 100, 0.3, 0.4), "var(--ok)")}</div>
-        <div class="kpi" style="cursor:default"><div class="kpi-label">Seguidores totais</div><div class="kpi-value">${D.fmtInt(totalFollowers)}</div>
-          <div class="kpi-delta up">↑ 4,8% <span class="prior">vs período anterior</span></div>${spark(D.series(13, 14, 100, 0.35, 0.4), "var(--warn)")}</div>
-        <div class="kpi" style="cursor:default"><div class="kpi-label">Gasto com IA</div><div class="kpi-value">R$ 48.920</div>
-          <div class="kpi-delta down">↓ 3,6% <span class="prior">vs período anterior</span></div>${spark(D.series(21, 14, 100, -0.2, 0.3), "var(--muted)")}</div>
-        <div class="kpi" style="cursor:default"><div class="kpi-label">Receita total</div><div class="kpi-value">R$ ${D.fmtInt(totalRevenue)}</div>
-          <div class="kpi-delta up">↑ 6,7% <span class="prior">vs período anterior</span></div>${spark(D.series(27, 14, 100, 0.3, 0.4), "var(--ok)")}</div>
-      </div>
-      <div class="grid2">
-        ${chartCard("Vídeos gerados ao longo do tempo", `${per.label.toLowerCase()} · ${per.step}`,
-          area(D.series(31, n, 100, 0.36, 0.4), "var(--accent)"), xaxis(scope))}
-        ${chartCard("Views por dia", "todas as plataformas",
-          bars(D.series(47, n, 100, 0.3, 0.5), "var(--ok)"), xaxis(scope))}
-      </div>
-      <div class="grid2" style="margin-top:20px">
-        <div class="card" style="margin-bottom:0"><div class="card-hd"><span class="card-title">Desempenho por plataforma</span><span class="spacer"></span><span class="card-note">${per.label.toLowerCase()}</span></div>
-          <div class="card-bd" style="display:flex;flex-direction:column;gap:11px">${platforms.map(p => `
-            <div>
-              <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px"><span>${p[0]}</span><span class="mono" style="color:var(--muted)">${p[2]}%</span></div>
-              <div style="height:7px;border-radius:99px;background:var(--line)"><div style="height:100%;width:${p[2]}%;border-radius:99px;background:${p[1]}"></div></div>
-            </div>`).join("")}</div></div>
-        <div class="card" style="margin-bottom:0"><div class="card-hd"><span class="card-title">Canais com melhor desempenho</span><span class="spacer"></span><span class="card-note">top ${top.length}</span></div>
-          <table><thead><tr><th>Canal</th><th class="num">Seguidores</th><th class="num">Views</th><th class="num">Receita</th></tr></thead>
-          <tbody>${top.map(c => `<tr data-ch-row="${esc(c.name)}" style="cursor:pointer"><td style="font-weight:500;color:var(--ink)">${esc(c.name)}</td><td class="num mono">${D.fmtInt(c.followers)}</td><td class="num mono">${c.views}</td><td class="num mono">${esc(c.revenue)}</td></tr>`).join("")}</tbody></table></div>
+      <div id="analyticsBody">
+        <div class="card" style="margin-bottom:0"><div class="empty">
+          <div class="empty-t">Carregando métricas reais…</div>
+          <div class="empty-s">Canais, jobs e YouTube Analytics do gateway.</div>
+        </div></div>
       </div>`;
   }
 
@@ -454,7 +421,7 @@ window.CKV = (function () {
     </div>`;
   }
   const CH_STATUS = { connected: ["active", "Conectado"], pending: ["pending", "Aguardando login"], expired: ["past_due", "Expirado"] };
-  const CH_LANGS = [["pt-BR", "Português (Brasil)"], ["en-US", "English (US)"], ["es-ES", "Español"]];
+  const CH_LANGS = [["pt-BR", "Português (Brasil)"], ["en-US", "English (US)"], ["es-ES", "Español"], ["de-DE", "Deutsch"]];
   function chStatus(status) {
     const [dot, label] = CH_STATUS[status] || CH_STATUS.expired;
     return `<span class="status-pill"><span class="status-dot ${dot}"></span>${label}</span>`;
@@ -1099,24 +1066,19 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
             <div class="card-note" style="margin-top:6px;font-family:inherit">Ex.: kimi-k3, kimi-k2.6 — a lista exata depende do plano da sua conta.</div></div>
         </div>
         <div class="dr-sec" style="margin-top:20px">NVIDIA</div>
-        <div class="card-note" style="margin:6px 0 14px;font-family:inherit">O modelo de visão é usado em "Revisar imagens com IA" e o de imagem em "Gerar thumbnail com IA", ambos no painel de publicação.</div>
         <div class="grid2">
           <div><label class="dr-sec" style="margin:0 0 7px">Chave NVIDIA ${prov ? tag(!!prov.nvidia, prov.nvidia ? "Configurada" : "Não configurada") : ""}</label>
             <input class="np-input" id="cfgNvidiaKey" style="width:100%" type="password" placeholder="${prov && prov.nvidia ? "•••••••• (deixe em branco para manter)" : "nvapi-..."}" autocomplete="off" />
             <div class="card-note" id="cfgNvidiaKeyStatus" style="margin-top:5px;min-height:14px"></div></div>
           <div><label class="dr-sec" style="margin:0 0 7px">Modelo de texto</label>
             <input class="np-input" id="cfgNvidiaTextModel" style="width:100%" value="${esc(prov && prov.nvidia_text_model || "")}" placeholder="google/gemma-4-31b-it" autocomplete="off" /></div>
-          <div><label class="dr-sec" style="margin:0 0 7px">Modelo de visão (revisão de imagens)</label>
-            <input class="np-input" id="cfgNvidiaVisionModel" style="width:100%" value="${esc(prov && prov.nvidia_vision_model || "")}" placeholder="google/diffusiongemma-26b-a4b-it" autocomplete="off" /></div>
-          <div><label class="dr-sec" style="margin:0 0 7px">Modelo de imagem (thumbnail)</label>
-            <input class="np-input" id="cfgNvidiaImageModel" style="width:100%" value="${esc(prov && prov.nvidia_image_model || "")}" placeholder="black-forest-labs/flux.1-dev" autocomplete="off" /></div>
         </div>
         <div class="card-note" style="margin-top:10px;font-family:inherit">Salvar grava direto em <code>runtime/moneyprinter/config.toml</code>. Trocar o provedor de IA também reconfigura o roteiro do Short no Turbo. É preciso reiniciar o container para aplicar: <code>docker compose restart moneyprinterturbo</code>.</div>`,
       video: `
         <div class="dr-sec" style="margin-top:0">Filmagens e stock</div>
         <div class="card-note" style="margin:6px 0 14px;font-family:inherit">Fonte padrão usada para buscar as filmagens. Configure a chave de quem for usar antes de selecionar.</div>
         <div class="grid2" style="margin-top:10px">
-          ${field("Fonte de vídeo padrão", "pexels", { select: true, id: "cfgVideoSource", opts: [["pexels", "Pexels"], ["pixabay", "Pixabay"], ["coverr", "Coverr"], ["ai_images", "Imagens geradas por IA (NVIDIA FLUX)"]] })}
+          ${field("Fonte de vídeo padrão", "pexels", { select: true, id: "cfgVideoSource", opts: [["pexels", "Pexels"], ["pixabay", "Pixabay"], ["coverr", "Coverr"]] })}
           ${field("Duração padrão do clipe (s)", "5", { id: "cfgDuration", type: "number" })}
           ${field("Cenas por vídeo (padrão)", "5", { id: "cfgParagraphs", type: "number" })}
         </div>
@@ -1144,7 +1106,7 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
       sistema: `
         <div class="dr-sec" style="margin-top:0">Navegador e sistema</div>
         <div class="grid2" style="margin-top:10px">
-          ${field("Idioma da interface", "Português (Brasil)", { select: true, opts: [["pt-BR", "Português (Brasil)"], ["en-US", "English (US)"], ["es-ES", "Español"]] })}
+          ${field("Idioma da interface", "Português (Brasil)", { select: true, opts: [["pt-BR", "Português (Brasil)"], ["en-US", "English (US)"], ["es-ES", "Español"], ["de-DE", "Deutsch"]] })}
           ${field("Fuso horário", "América/São Paulo (GMT-3)", { select: true, opts: [["america_sp", "América/São Paulo (GMT-3)"], ["utc", "UTC"]] })}
           <div><label class="dr-sec" style="margin:0 0 7px">Tema</label><label style="display:flex;align-items:center;gap:7px;height:34px"><input type="checkbox" class="cbx" /> Modo escuro</label></div>
           ${field("Perfil do navegador (automação)", "Padrão do sistema")}
@@ -1153,8 +1115,8 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
         <div class="dr-sec" style="margin-top:0">Voz e legendas</div>
         <div class="card-note" style="margin:6px 0 14px;font-family:inherit">Edge TTS ${prov ? tag(!!prov.edge_tts, "Sempre disponível") : ""} — não exige chave.</div>
         <div class="grid2">
-          ${field("Idioma da narração padrão", "pt-BR", { select: true, id: "cfgLanguage", opts: [["pt-BR", "Português (Brasil)"], ["en-US", "English (US)"], ["es-ES", "Español"]] })}
-          ${field("Voz sintética padrão", "pt-BR-FranciscaNeural", { select: true, id: "cfgVoice", opts: [["pt-BR-FranciscaNeural", "Português (Brasil) — Feminina"], ["pt-BR-AntonioNeural", "Português (Brasil) — Masculina"]] })}
+          ${field("Idioma da narração padrão", "pt-BR", { select: true, id: "cfgLanguage", opts: [["pt-BR", "Português (Brasil)"], ["en-US", "English (US)"], ["es-ES", "Español"], ["de-DE", "Deutsch"]] })}
+          ${field("Voz sintética padrão", "pt-BR-FranciscaNeural", { select: true, id: "cfgVoice", opts: [["pt-BR-FranciscaNeural", "Português (Brasil) — Francisca (F)"], ["pt-BR-AntonioNeural", "Português (Brasil) — Antonio (M)"], ["en-US-JennyNeural", "English (US) — Jenny (F)"], ["en-US-GuyNeural", "English (US) — Guy (M)"], ["es-ES-ElviraNeural", "Español — Elvira (F)"], ["es-ES-AlvaroNeural", "Español — Álvaro (M)"], ["de-DE-KatjaNeural", "Deutsch — Katja (F)"], ["de-DE-ConradNeural", "Deutsch — Conrad (M)"]] })}
           ${field("Tamanho da legenda", "56", { id: "cfgFontSize", type: "number" })}
           ${field("Cor do texto", "#FFFFFF", { id: "cfgTextColor" })}
           ${field("Cor da borda", "#000000", { id: "cfgStrokeColor" })}
@@ -1287,11 +1249,6 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
                 </div>
               </div>
             </details>
-            <div>
-              <label class="dr-sec" style="margin:0 0 7px">Gerar com</label>
-              <select class="set-select" id="genVideoSource" style="width:100%"><option value="" selected>Filmagens de banco (Pexels)</option><option value="ai_images">Imagens geradas por IA (NVIDIA FLUX)</option></select>
-              <div class="card-note" style="margin-top:6px">Imagens de IA: uma imagem por trecho narrado, com zoom lento, na ordem do roteiro. Leva alguns minutos a mais e usa a cota NVIDIA.</div>
-            </div>
             <div id="genTermsRow">
               <div style="display:flex;justify-content:space-between;align-items:center;margin:0 0 7px"><label class="dr-sec" style="margin:0">Palavras-chave das filmagens (opcional)</label><button class="btn sm" type="button" id="genTermsAiBtn">Gerar palavras-chave</button></div>
               <input class="np-input" id="genTermsInput" style="width:100%" placeholder="deep ocean, ocean life — separadas por vírgula (em inglês o Pexels acha mais)" />
@@ -1351,12 +1308,6 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
                     <label class="card-note" style="font-family:inherit;display:flex;align-items:center;gap:6px">Agendar para <input class="np-input" type="datetime-local" id="genPublishAt" style="padding:4px 6px" /></label>
                     <span class="card-note" id="genPublishStatus" role="status" style="font-family:inherit"></span>
                   </div>
-                  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px">
-                    <button class="btn sm" id="genReviewBtn" type="button">Revisar imagens com IA</button>
-                    <button class="btn sm" id="genThumbBtn" type="button">Gerar thumbnail com IA</button>
-                  </div>
-                  <div id="genReviewResult" style="margin-top:6px"></div>
-                  <img id="genThumbImg" alt="Thumbnail gerada" style="margin-top:8px;width:100%;max-width:320px;border-radius:8px;display:block" hidden />
                 </div>
               </div></div>
           </div>
@@ -1373,12 +1324,13 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
         <div class="card-bd" style="display:flex;flex-direction:column;gap:16px">
           <div class="grid2" style="margin:0">
             <div><label class="dr-sec" style="margin:0 0 7px">Idioma da narração</label>
-              <select class="set-select" id="genLanguageSelect" style="width:100%"><option value="pt-BR">Português (Brasil)</option><option value="en-US">English (US)</option><option value="es-ES">Español</option></select></div>
+              <select class="set-select" id="genLanguageSelect" style="width:100%"><option value="pt-BR">Português (Brasil)</option><option value="en-US">English (US)</option><option value="es-ES">Español</option><option value="de-DE">Deutsch</option></select></div>
             <div><label class="dr-sec" style="margin:0 0 7px">Voz sintética</label>
               <select class="set-select" id="genVoiceSelect" style="width:100%">
                 <optgroup label="Português (Brasil)"><option value="pt-BR-FranciscaNeural">Francisca — Feminina</option><option value="pt-BR-AntonioNeural">Antonio — Masculina</option></optgroup>
                 <optgroup label="English (US)"><option value="en-US-JennyNeural">Jenny — Female</option><option value="en-US-GuyNeural">Guy — Male</option></optgroup>
                 <optgroup label="Español"><option value="es-ES-ElviraNeural">Elvira — Femenina</option><option value="es-ES-AlvaroNeural">Álvaro — Masculino</option></optgroup>
+                <optgroup label="Deutsch"><option value="de-DE-KatjaNeural">Katja — Weiblich</option><option value="de-DE-ConradNeural">Conrad — Männlich</option></optgroup>
               </select></div>
           </div>
           <div class="grid2" style="margin:0">

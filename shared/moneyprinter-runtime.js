@@ -165,45 +165,8 @@
     const picker = $("#genChannelSelect") || $("#genChannelList");
     if (picker) picker.onchange = () => setTimeout(states); // after the one-per-platform listener adjusts the boxes
     if (publishAt) publishAt.oninput = states;
-    const renderReview = () => {
-      const result = $("#genReviewResult");
-      if (!result) return;
-      const review = job.review;
-      if (!review) { result.textContent = ""; return; }
-      const mismatches = (review.frames || []).filter(frame => !frame.matches);
-      result.innerHTML = `<div class="card-note" style="font-family:inherit">${esc(review.summary || "")}</div>`
-        + (mismatches.length ? `<ul style="margin:6px 0 0 18px;display:flex;flex-direction:column;gap:4px">${mismatches.map(frame =>
-            `<li>Quadro ${frame.index + 1}: ${esc(frame.reason || "não combina com o roteiro")}</li>`).join("")}</ul>`
-          : `<div class="card-note" style="font-family:inherit;color:var(--ok)">Todos os quadros combinam com o roteiro.</div>`);
-    };
-    const reviewBtn = $("#genReviewBtn");
-    if (reviewBtn) reviewBtn.onclick = async () => {
-      reviewBtn.disabled = true;
-      const label = reviewBtn.textContent;
-      reviewBtn.textContent = "Revisando…";
-      try { job = await request(`/jobs/${job.id}/review`, { method: "POST" }); renderReview(); }
-      catch (error) { window.alert(error.message); }
-      finally { reviewBtn.disabled = false; reviewBtn.textContent = label; }
-    };
-    const renderThumb = () => {
-      const img = $("#genThumbImg");
-      if (!img) return;
-      if (job.thumbnail_updated_at) { img.src = `${API}/jobs/${job.id}/thumbnail?t=${job.thumbnail_updated_at}`; img.hidden = false; }
-      else { img.hidden = true; img.src = ""; }
-    };
-    const thumbBtn = $("#genThumbBtn");
-    if (thumbBtn) thumbBtn.onclick = async () => {
-      thumbBtn.disabled = true;
-      const label = thumbBtn.textContent;
-      thumbBtn.textContent = "Gerando…";
-      try { job = await request(`/jobs/${job.id}/thumbnail`, { method: "POST" }); renderThumb(); }
-      catch (error) { window.alert(error.message); }
-      finally { thumbBtn.disabled = false; thumbBtn.textContent = label; }
-    };
     fill();
     states();
-    renderReview();
-    renderThumb();
   }
 
   // One project per screen, created on first use - the picker is gone, so there is nothing left to name.
@@ -397,7 +360,6 @@
     set("#genFontSizeInput", defaults.font_size); set("#genTextColorInput", defaults.text_fore_color);
     set("#genStrokeColorInput", defaults.stroke_color); set("#genBgmSelect", defaults.bgm_type);
     set("#genSubtitlePosition", defaults.subtitle_position);
-    set("#genVideoSource", defaults.video_source === "ai_images" ? "ai_images" : "");
     const subtitle = body.querySelector("#genSubtitleEnabled");
     if (subtitle && defaults.subtitle_enabled !== undefined) subtitle.checked = !!defaults.subtitle_enabled;
     // Only fill these two if the field is still empty - an in-progress edit on screen (not yet
@@ -430,9 +392,6 @@
         subtitle_position: value(body, "#genSubtitlePosition", "bottom"),
         subtitle_enabled: !body.querySelector("#genSubtitleEnabled") || body.querySelector("#genSubtitleEnabled").checked,
         video_script_prompt: value(body, "#genScriptRequirements", "").trim(), custom_system_prompt: value(body, "#genSystemPrompt", "").trim(),
-        // "Filmagens de banco" keeps whichever stock source Configurações picked; it only resets one that was "ai_images".
-        ...(value(body, "#genVideoSource", "") === "ai_images" ? { video_source: "ai_images" }
-          : (cachedDefaults[format] || {}).video_source === "ai_images" ? { video_source: "pexels" } : {}),
       } }) });
       notify(`Padrões de ${format === "long" ? "vídeo longo" : "Shorts"} salvos.`);
     };
@@ -515,8 +474,6 @@
         const uploadUser = body.querySelector("#cfgUploadPostUser"); if (uploadUser && uploadUser.value) credentials.upload_post_username = uploadUser.value;
         const moonshotModel = body.querySelector("#cfgMoonshotModel"); if (moonshotModel && moonshotModel.value) credentials.moonshot_model_name = moonshotModel.value;
         const nvidiaTextModel = body.querySelector("#cfgNvidiaTextModel"); if (nvidiaTextModel && nvidiaTextModel.value) credentials.nvidia_text_model = nvidiaTextModel.value;
-        const nvidiaVisionModel = body.querySelector("#cfgNvidiaVisionModel"); if (nvidiaVisionModel && nvidiaVisionModel.value) credentials.nvidia_vision_model = nvidiaVisionModel.value;
-        const nvidiaImageModel = body.querySelector("#cfgNvidiaImageModel"); if (nvidiaImageModel && nvidiaImageModel.value) credentials.nvidia_image_model = nvidiaImageModel.value;
         // A <select> always has a value, unlike the text fields above - only send it when it actually changed,
         // so saving unrelated settings doesn't needlessly re-trigger the "restart the container" notice.
         const providerSelect = body.querySelector("#cfgLlmProvider");
@@ -612,11 +569,6 @@
       stats.textContent = words ? `${words} palavras · ≈ ${seconds > 90 ? `${Math.round(seconds / 6) / 10} min` : `${seconds} s`} de narração${outOfRange ? ` — ${outOfRange} para um Short (60–90 s)` : ""}` : "";
       stats.style.color = outOfRange ? "var(--warn)" : "";
     };
-    // Keyword search only applies to stock footage; with AI images the scenes come from the script.
-    const sourceSelect = body.querySelector("#genVideoSource"), termsRow = body.querySelector("#genTermsRow");
-    const syncSource = () => { if (termsRow) termsRow.hidden = sourceSelect && sourceSelect.value === "ai_images"; };
-    if (sourceSelect) sourceSelect.addEventListener("change", syncSource);
-    syncSource();
     restoreDraft(body);
     updateStats();
     body.querySelectorAll("#genTopicInput, #genScriptInput, #genTermsInput, #genLanguageSelect, #genVoiceSelect, #genScriptRequirements, #genSystemPrompt").forEach(input => input.addEventListener("input", () => saveDraft(body)));
@@ -625,8 +577,7 @@
       const subject = value(body, "#genTopicInput", "").trim();
       if (!subject) { notify("Informe o tema do vídeo."); body.querySelector("#genTopicInput").focus(); return; }
       button.disabled = true;
-      const aiImages = value(body, "#genVideoSource", "") === "ai_images";
-      button.textContent = aiImages ? "Gerando imagens com IA…" : "Enviando para o Turbo…";
+      button.textContent = "Enviando para o Turbo…";
       try {
         const project = await projectFor(body);
         const number = (selector, fallback) => { const n = Number.parseFloat(value(body, selector, fallback)); return Number.isFinite(n) ? n : fallback; };
@@ -639,8 +590,6 @@
           video_count: integer(value(body, "#genVideoCount", 1), 1), video_clip_speed: number("#genClipSpeed", 1),
           video_concat_mode: value(body, "#genConcatMode", "random"), video_transition_mode: value(body, "#genTransition", ""),
           video_terms: value(body, "#genTermsInput", "").trim(),
-          // Stock footage: a saved "ai_images" default is overridden; otherwise Configurações' source stays in charge.
-          ...(aiImages ? { video_source: "ai_images" } : (cachedDefaults[format] || {}).video_source === "ai_images" ? { video_source: "pexels" } : {}),
           voice_rate: number("#genVoiceRate", 1), voice_volume: number("#genVoiceVolume", 1),
           // The gateway trims the narration to this target, whoever wrote the script.
           ...(body.querySelector("#genTargetMinutes") ? { target_minutes: integer(value(body, "#genTargetMinutes", 8), 8) } : {}),
@@ -977,5 +926,43 @@
     };
   }
 
-  window.MoneyPrinterRuntime = { bindGenerator, deleteJob, retryJob, stopJob, bindConfigSettings, bindYoutubeLibraryPublish, connectChannel, channelAction, saveChannel, bindAgents, bindJobsWorkers };
+  /* ── Analytics tab: real gateway data only, no mocked totals. ── */
+  function bindAnalytics(body, notify) {
+    const root = body.querySelector("#analyticsBody");
+    if (!root || root.dataset.bound) return;
+    root.dataset.bound = "true";
+    const fmt = n => Math.round(Number(n) || 0).toLocaleString("pt-BR");
+    const empty = (title, text) => `<div class="card" style="margin-bottom:0"><div class="empty"><div class="empty-t">${title}</div><div class="empty-s">${text}</div></div></div>`;
+    const kpi = (label, val, sub) => `<div class="kpi" style="cursor:default"><div class="kpi-label">${label}</div><div class="kpi-value">${val}</div><div class="card-note" style="font-family:inherit">${sub}</div></div>`;
+    const render = data => {
+      const channels = data.channels || [], jobs = data.jobs || {}, yt = data.youtube || {};
+      const top = yt.top || [];
+      const topChannels = channels.slice().sort((a, b) => ((b.stats || {}).views || 0) - ((a.stats || {}).views || 0)).slice(0, 6);
+      root.innerHTML = `
+      <div class="kpi-row">
+        ${kpi("Vídeos gerados", fmt(jobs.total), `${fmt(jobs.completed)} concluídos · ${fmt(jobs.active)} em andamento`)}
+        ${kpi("Views no YouTube", fmt(yt.total_views), `${fmt(yt.videos_measured)} de ${fmt(yt.videos_published)} vídeos medidos`)}
+        ${kpi("Seguidores totais", fmt(data.followers_total), `${channels.length} ${channels.length === 1 ? "canal conectado" : "canais conectados"}`)}
+        ${kpi("Nota média", yt.avg_score != null ? String(yt.avg_score) : "—", yt.avg_retention != null ? `retenção média ${yt.avg_retention}%` : "sem medições ainda")}
+      </div>
+      ${jobs.failed ? `<div class="card-note" style="font-family:inherit;color:var(--warn);margin:0 0 12px">${fmt(jobs.failed)} job(s) com falha ou interrompidos — veja em Jobs e workers.</div>` : ""}
+      <div class="grid2">
+        <div class="card" style="margin-bottom:0"><div class="card-hd"><span class="card-title">Vídeos por nota</span><span class="spacer"></span><span class="card-note">YouTube Analytics real</span></div>
+          ${top.length ? `<table><thead><tr><th>Vídeo</th><th>Canal</th><th class="num">Views</th><th class="num">Retenção</th><th class="num">Nota</th></tr></thead><tbody>${top.map(v => {
+            const m = v.metrics || {};
+            return `<tr><td style="font-weight:500;color:var(--ink)">${esc(v.title)}</td><td>${esc(v.channel_name || "")}</td><td class="num mono">${m.views != null ? fmt(m.views) : "—"}</td><td class="num mono">${m.averageViewPercentage != null ? Math.round(m.averageViewPercentage) + "%" : "—"}</td><td class="num mono">${v.score ?? "—"}</td></tr>`;
+          }).join("")}</tbody></table>` : empty("Nenhum vídeo publicado no YouTube ainda", "As métricas aparecem aqui depois da primeira publicação. Para atualizar, use Agentes → Analytics → Atualizar métricas.")}</div>
+        <div class="card" style="margin-bottom:0"><div class="card-hd"><span class="card-title">Canais por views</span><span class="spacer"></span><span class="card-note">top ${topChannels.length}</span></div>
+          ${topChannels.length ? `<table><thead><tr><th>Canal</th><th>Plataforma</th><th class="num">Seguidores</th><th class="num">Views</th></tr></thead><tbody>${topChannels.map(c => `<tr><td style="font-weight:500;color:var(--ink)">${esc(c.name)}<div class="card-note" style="font-weight:400">${esc(c.handle || "")}</div></td><td>${esc(c.platform)}</td><td class="num mono">${fmt((c.stats || {}).followers)}</td><td class="num mono">${fmt((c.stats || {}).views)}</td></tr>`).join("")}</tbody></table>` : empty("Nenhum canal conectado", "Conecte um canal do YouTube ou TikTok em Canais.")}</div>
+      </div>`;
+    };
+    request("/analytics/overview").then(render).catch(error => {
+      root.innerHTML = `<div class="card" style="margin-bottom:0"><div class="empty"><div class="empty-t">Não foi possível carregar o Analytics</div><div class="empty-s">${esc(error.message)}</div><button class="btn sm" type="button" id="analyticsRetry" style="margin-top:10px">Tentar de novo</button></div></div>`;
+      const retry = root.querySelector("#analyticsRetry");
+      if (retry) retry.addEventListener("click", () => { delete root.dataset.bound; bindAnalytics(body, notify); });
+      if (notify) notify(error.message);
+    });
+  }
+
+  window.MoneyPrinterRuntime = { bindGenerator, deleteJob, retryJob, stopJob, bindConfigSettings, bindYoutubeLibraryPublish, connectChannel, channelAction, saveChannel, bindAgents, bindAnalytics, bindJobsWorkers };
 }());
