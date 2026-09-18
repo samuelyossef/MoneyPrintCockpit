@@ -668,7 +668,7 @@ class GatewayContractTests(unittest.TestCase):
                 return type("Response", (), {"json": lambda self: {"data": {"task_id": "t1"}}})()
             return type("Response", (), {"json": lambda self: {"data": {"video_script": "uma frase de teste bem curta"}}})()
 
-        async def fake_visual_terms(subject, script, clip_seconds, voice_rate=1.0):
+        async def fake_visual_terms(subject, script, clip_seconds, voice_rate=1.0, visual_style=""):
             sent["visual_terms_args"] = (subject, script, clip_seconds)
             return ["term one", "term two"], 4.0
 
@@ -680,6 +680,27 @@ class GatewayContractTests(unittest.TestCase):
         self.assertEqual(sent["video"]["video_clip_duration"], 4)
         self.assertEqual(sent["visual_terms_args"][1], "uma frase de teste bem curta")  # the script Turbo just wrote, not blank
         self.assertEqual(job["script"], "uma frase de teste bem curta")
+
+    def test_channel_persona_and_visual_style_reach_the_prompts(self):
+        from unittest.mock import patch
+        self._completed_job()
+        self._connected(("yt", "youtube"))
+        self.main.update_channel("yt", persona="Narrador sarcástico", visual_style="neon noir")
+        sent, prompts = {}, []
+
+        async def fake_turbo(method, path, **kwargs):
+            if path == "/api/v1/videos":
+                sent["video"] = kwargs["json"]
+            return type("Response", (), {"json": lambda self: {"data": {"task_id": "t1"}}})()
+
+        async def fake_llm(prompt, json_mode=False):
+            prompts.append(prompt)
+            return '{"terms": ["a"]}'
+
+        with patch.object(self.main, "turbo_request", new=fake_turbo), patch.object(self.main, "llm_chat", new=fake_llm):
+            asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="tema", script="uma frase.", format="short", channel_ids=["yt"])))
+        self.assertIn("Narrador sarcástico", sent["video"]["video_script_prompt"])
+        self.assertTrue(any("neon noir" in prompt for prompt in prompts))
 
     def test_create_job_random_mode_skips_alignment(self):
         from unittest.mock import patch

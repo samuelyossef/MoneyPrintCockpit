@@ -678,6 +678,7 @@
     run("#genScriptAiBtn", "Gerar roteiro com IA", async subject => {
       const result = await request("/scripts/short", { method: "POST", body: JSON.stringify({
         subject, language: value(body, "#genLanguageSelect", "pt-BR"), paragraph_number: integer(value(body, "#genParagraphInput", 5), 5),
+        persona: ((channelById(selectedChannels(body)[0]) || {}).persona) || "",
         script_prompt: value(body, "#genScriptRequirements", "").trim(), system_prompt: value(body, "#genSystemPrompt", "").trim(),
       }) });
       body.querySelector("#genScriptInput").value = result.script || "";
@@ -699,7 +700,7 @@
     run("#genLongScriptBtn", "Escrever roteiro longo com IA", async subject => {
       const channel = channelById(selectedChannels(body)[0]);
       const result = await request("/scripts/long", { method: "POST", body: JSON.stringify({
-        subject, language: value(body, "#genLanguageSelect", "pt-BR"), minutes: integer(value(body, "#genTargetMinutes", 8), 8), niche: (channel && channel.niche) || "",
+        subject, language: value(body, "#genLanguageSelect", "pt-BR"), minutes: integer(value(body, "#genTargetMinutes", 8), 8), niche: (channel && channel.niche) || "", persona: (channel && channel.persona) || "",
         requirements: value(body, "#genScriptRequirements", "").trim(), system_prompt: value(body, "#genSystemPrompt", "").trim(),
       }) });
       body.querySelector("#genScriptInput").value = result.script || "";
@@ -766,7 +767,7 @@
   function mapChannel(c) {
     const stats = c.stats || {};
     return { id: c.id, name: c.name, platform: c.platform === "tiktok" ? "TikTok" : "YouTube", handle: c.handle, status: c.status,
-      niche: c.niche, language: c.language, followers: stats.followers || 0, videos: stats.videos || 0, views: stats.views || 0, last: "—" };
+      niche: c.niche, language: c.language, persona: c.persona || "", visual_style: c.visual_style || "", followers: stats.followers || 0, videos: stats.videos || 0, views: stats.views || 0, last: "—" };
   }
 
   /* Refills the channel selects in place: re-rendering Gerador would wipe what the user typed. */

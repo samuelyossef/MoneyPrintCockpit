@@ -488,7 +488,7 @@ window.CKV = (function () {
     return D.CHANNELS.find(x => x.id === id) || null;
   }
   function newCanalRec() {
-    return { platform: "YouTube", niche: "", language: "pt-BR" };
+    return { platform: "YouTube", niche: "", language: "pt-BR", persona: "", visual_style: "" };
   }
   function canal(c, tab, editing, isNew) {
     editing = editing || isNew;
@@ -500,6 +500,9 @@ window.CKV = (function () {
     const sel = (f, v, opts) => editing
       ? `<select class="set-select" style="width:100%" data-cfield="${f}">${opts.map(([val, label]) => `<option value="${val}" ${val === v ? "selected" : ""}>${label}</option>`).join("")}</select>`
       : esc((opts.find(o => o[0] === v) || [v, v])[1]);
+    const area = (f, v, ph) => editing
+      ? `<textarea class="np-input" rows="5" style="width:100%;resize:vertical" data-cfield="${f}" placeholder="${ph}">${esc(v)}</textarea>`
+      : `<div style="white-space:pre-wrap">${esc(v || "—")}</div>`;
     const kpi = (label, value) => `<div class="kpi" style="cursor:default"><div class="kpi-label">${label}</div><div class="kpi-value">${D.fmtInt(value || 0)}</div></div>`;
     const panes = {
       dados: isNew ? `
@@ -526,6 +529,13 @@ window.CKV = (function () {
               <dt>Idioma</dt><dd>${sel("language", c.language, CH_LANGS)}</dd>
               <dt>Status</dt><dd>${chStatus(c.status)}</dd>
             </dl></div></div>
+          <div class="card" style="margin-bottom:0;grid-column:1/-1">
+            <div class="card-hd"><span class="card-title">Identidade do canal</span></div>
+            <div class="card-bd" style="display:flex;flex-direction:column;gap:16px">
+              <div class="card-note" style="font-family:inherit">Aplicada automaticamente em todo vídeo gerado para este canal (roteiro, imagens de IA, buscas de filmagem e thumbnail), por cima do que estiver na tela do Gerador.</div>
+              <div class="md-field"><label>Persona e tom (roteiro)</label>${area("persona", c.persona, "Ex: Narrador direto e bem-humorado, fala com o público como um amigo, frases curtas, sem jargão, sempre abre com uma pergunta.")}</div>
+              <div class="md-field"><label>Estilo visual (em inglês)</label>${area("visual_style", c.visual_style, "Ex: dark moody cinematic, teal and orange palette, soft rim lighting, 35mm film grain.")}</div>
+            </div></div>
           ${c.platform === "YouTube" ? kpi("Inscritos", c.followers) + kpi("Vídeos", c.videos) + kpi("Views totais", c.views) : ""}
         </div>`,
       conexao: `

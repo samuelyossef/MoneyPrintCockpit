@@ -370,7 +370,7 @@
     const rec = V.canalRec(S.channelId);
     if (!rec) return;
     collectChannel(rec);
-    window.MoneyPrinterRuntime.saveChannel(rec.id, { niche: rec.niche, language: rec.language })
+    window.MoneyPrinterRuntime.saveChannel(rec.id, { niche: rec.niche, language: rec.language, persona: rec.persona || "", visual_style: rec.visual_style || "" })
       .then(() => { S.chEditing = 0; save(); renderView(); showToast("Canal salvo"); })
       .catch(error => showToast(error.message));
   }

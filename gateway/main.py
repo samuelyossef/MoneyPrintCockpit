@@ -120,6 +120,10 @@ def initialize_database() -> None:
             );
             """
         )
+        channel_columns = {column["name"] for column in db.execute("PRAGMA table_info(channels)")}
+        for column in ("persona", "visual_style"):
+            if column not in channel_columns:
+                db.execute(f"ALTER TABLE channels ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
         job_columns = {column["name"] for column in db.execute("PRAGMA table_info(video_jobs)")}
         if "channel_id" not in job_columns:
             db.execute("ALTER TABLE video_jobs ADD COLUMN channel_id TEXT REFERENCES channels(id)")
@@ -679,6 +683,12 @@ def build_turbo_payload(subject: str, script: str, settings: dict[str, Any]) -> 
     return payload
 
 
+def persona_prompt(persona: str, extra: str = "") -> str:
+    """The channel's standing identity goes first, then this video's own requirements."""
+    persona = persona.strip()
+    return (f"Identidade do canal, siga em tudo o que escrever: {persona}. " if persona else "") + extra.strip()
+
+
 def job_max_words(format: str, settings: dict[str, Any]) -> int | None:
     """The narration budget the screen asked for: the Short's "Duração alvo" select, or the long
     video's target in minutes. None means no target was sent, so nothing is trimmed."""
@@ -701,6 +711,9 @@ async def create_job(project_id: str, input: JobCreate) -> dict[str, Any]:
     merged = {**generation_defaults(input.format), **project["defaults"], **input.settings, **FORMAT_LOCKED[input.format]}
     # Turbo's encoder defaults to 2 threads; this container sees the same Docker VM CPUs as Turbo.
     merged.setdefault("n_threads", os.cpu_count() or 2)
+    # ponytail: one script per job, so the first channel's identity wins; merge personas if that ever matters.
+    persona, visual_style = (channels[0]["persona"], channels[0]["visual_style"]) if channels else ("", "")
+    merged["video_script_prompt"] = persona_prompt(persona, str(merged.get("video_script_prompt", "")))
     script_text = input.script.strip()
     ai_images = merged.get("video_source") == "ai_images"
     if ai_images and not config_value("nvidia_api_key"):
@@ -726,11 +739,11 @@ async def create_job(project_id: str, input: JobCreate) -> dict[str, Any]:
     if ai_images:
         if not script_text:
             raise HTTPException(status_code=409, detail="Escreva ou gere o roteiro antes de gerar o vídeo com imagens de IA.")
-        materials, clip = await ai_image_materials(input.subject, script_text, input.format, float(merged.get("video_clip_duration") or 5), float(merged.get("voice_rate") or 1))
+        materials, clip = await ai_image_materials(input.subject, script_text, input.format, float(merged.get("video_clip_duration") or 5), float(merged.get("voice_rate") or 1), visual_style)
         merged.pop("video_terms", None)
         merged.update(video_source="local", video_materials=materials, video_clip_duration=clip, match_materials_to_script=False)
     elif follow_script and script_text and not str(merged.get("video_terms", "")).strip():
-        terms, clip_seconds = await visual_terms(input.subject, script_text, float(merged.get("video_clip_duration") or 5), float(merged.get("voice_rate") or 1))
+        terms, clip_seconds = await visual_terms(input.subject, script_text, float(merged.get("video_clip_duration") or 5), float(merged.get("voice_rate") or 1), visual_style)
         merged["video_terms"], merged["video_clip_duration"] = ", ".join(terms), max(1, round(clip_seconds))
     request_payload = build_turbo_payload(input.subject, script_text, merged)
     response = await turbo_request("POST", "/api/v1/videos", json=request_payload)
@@ -1085,6 +1098,7 @@ class ShortScriptInput(BaseModel):
     paragraph_number: int = Field(default=5, ge=1, le=10)
     script_prompt: str = Field(default="", max_length=2000)
     system_prompt: str = Field(default="", max_length=4000)
+    persona: str = Field(default="", max_length=2000)
 
 
 @app.post("/api/scripts/short")
@@ -1092,7 +1106,7 @@ async def short_script(input: ShortScriptInput) -> dict[str, Any]:
     response = await turbo_request("POST", "/api/v1/scripts", json={
         "video_subject": input.subject, "video_language": clean_language(input.language),
         "paragraph_number": input.paragraph_number,
-        "video_script_prompt": input.script_prompt, "custom_system_prompt": input.system_prompt,
+        "video_script_prompt": persona_prompt(input.persona, input.script_prompt), "custom_system_prompt": input.system_prompt,
     })
     script = str((unwrap(response.json()) or {}).get("video_script", "")).strip()
     trimmed = trim_to_words(script, short_script_max_words(input.paragraph_number))
@@ -1106,6 +1120,7 @@ class LongScriptInput(BaseModel):
     niche: str = Field(default="", max_length=200)
     requirements: str = Field(default="", max_length=2000)
     system_prompt: str = Field(default="", max_length=4000)
+    persona: str = Field(default="", max_length=2000)
 
 
 def clean_narration(text: str) -> str:
@@ -1129,6 +1144,7 @@ async def long_script(input: LongScriptInput) -> dict[str, Any]:
     # stay narration-only, or the multi-step pipeline breaks. It's folded in as an extra, higher-weight
     # instruction on every call instead, same mechanism as `requirements` but framed as a standing rule.
     style = (f" Instruções de estilo do sistema, siga em tudo o que escrever: {system_prompt}." if system_prompt else "")
+    style = f" {persona_prompt(input.persona)}" + style if input.persona.strip() else style
     outline = parse_json_object(await llm_chat(
         f"Planeje um vídeo de YouTube de {input.minutes} minutos no idioma {language} sobre: {input.subject}."
         + (f" Nicho do canal: {input.niche}." if input.niche else "")
@@ -1199,7 +1215,7 @@ def _fill_visual_terms(terms: list[str], count: int) -> list[str]:
     return result[:count]
 
 
-async def visual_terms(subject: str, script: str, clip_seconds: float, voice_rate: float = 1.0) -> tuple[list[str], float]:
+async def visual_terms(subject: str, script: str, clip_seconds: float, voice_rate: float = 1.0, visual_style: str = "") -> tuple[list[str], float]:
     """One stock-footage search term per script chunk, in narration order. Combined with Turbo's
     match_materials_to_script + sequential mode, this makes the footage follow what's being said
     instead of cycling a handful of subject-wide terms across the whole video."""
@@ -1214,6 +1230,7 @@ async def visual_terms(subject: str, script: str, clip_seconds: float, voice_rat
         "Para cada trecho, gere uma busca de banco de vídeos em INGLÊS (1 a 3 palavras) que mostre algo filmável e "
         "concreto do que é dito naquele trecho: uma cena, objeto, ação ou lugar. Nada abstrato, sem nomes próprios, "
         "sem texto na tela. Os termos devem ser diferentes entre si - não repita o tema geral em todos.\n"
+        + (f"Estilo visual do canal, escolha filmagens compatíveis com ele: {visual_style}.\n" if visual_style.strip() else "") +
         f'Responda apenas JSON: {{"terms": lista com exatamente {len(chunks)} strings, na mesma ordem dos trechos}}',
         json_mode=True,
     ))
@@ -1227,7 +1244,7 @@ MAX_AI_IMAGES = 200
 AI_IMAGE_SIZES = {"short": (768, 1344), "long": (1344, 768)}  # FLUX.1-dev accepts 768-1344 in steps of 64
 
 
-async def ai_image_materials(subject: str, script: str, format: str, clip_seconds: float, voice_rate: float = 1.0) -> tuple[list[dict[str, Any]], int]:
+async def ai_image_materials(subject: str, script: str, format: str, clip_seconds: float, voice_rate: float = 1.0, visual_style: str = "") -> tuple[list[dict[str, Any]], int]:
     """One FLUX image per narration chunk, uploaded to Turbo as local materials in narration order.
     Turbo turns each image into a slow-zoom clip (video_source="local")."""
     seconds = narration_seconds(script, voice_rate)
@@ -1238,6 +1255,7 @@ async def ai_image_materials(subject: str, script: str, format: str, clip_second
     generated = parse_json_object(await llm_chat(
         f"Tema do vídeo: {subject}\nTrechos numerados da narração, na ordem em que aparecem:\n{numbered}\n"
         "Cada trecho vira uma imagem gerada por IA, e as imagens em sequência contam a história do vídeo. "
+        + (f'O estilo visual do canal é obrigatório: use-o como base de "style": {visual_style.strip()}.\n' if visual_style.strip() else "") +
         'Defina um estilo visual único para todas ("style", em INGLÊS: técnica, paleta, iluminação) e, para cada trecho, '
         "descreva em INGLÊS uma cena concreta que ilustre o que é dito (sujeito, ação, lugar, enquadramento), sem texto na imagem.\n"
         f'Responda apenas JSON: {{"style": string, "scenes": lista com exatamente {len(chunks)} strings, na mesma ordem dos trechos}}',
@@ -1338,7 +1356,7 @@ def job_language(db: sqlite3.Connection, job: sqlite3.Row) -> str:
 
 
 def row_as_channel(row: sqlite3.Row) -> dict[str, Any]:
-    result = {key: row[key] for key in ("id", "platform", "name", "handle", "external_id", "status", "niche", "language", "created_at", "updated_at")}
+    result = {key: row[key] for key in ("id", "platform", "name", "handle", "external_id", "status", "niche", "language", "persona", "visual_style", "created_at", "updated_at")}
     result["stats"] = json.loads(row["stats_json"])
     return result
 
@@ -1379,6 +1397,8 @@ def list_channels() -> list[dict[str, Any]]:
 class ChannelPatch(BaseModel):
     niche: str | None = Field(default=None, max_length=200)
     language: str | None = Field(default=None, max_length=20)
+    persona: str | None = Field(default=None, max_length=2000)
+    visual_style: str | None = Field(default=None, max_length=1000)
 
 
 class ChannelConnect(BaseModel):
@@ -1743,11 +1763,16 @@ async def create_thumbnail(job_id: str, input: ThumbnailInput | None = None) -> 
     with database() as db:
         job = job_row_or_404(db, job_id)
         stored = db.execute("SELECT value_json FROM job_metadata WHERE job_id=?", (job_id,)).fetchone()
+        channel = db.execute(
+            "SELECT channels.visual_style FROM publications JOIN channels ON channels.id = publications.channel_id "
+            "WHERE publications.job_id=? AND publications.platform='youtube'", (job_id,),
+        ).fetchone()
     if job["state"] not in METADATA_STATES:
         raise HTTPException(status_code=409, detail="Só é possível gerar thumbnail para vídeos concluídos")
     title = json.loads(stored["value_json"]).get("title") if stored else None
+    style = f", style: {channel['visual_style'].strip()}" if channel and channel["visual_style"].strip() else ""
     prompt = input.prompt.strip() or (
-        f"YouTube thumbnail, bold eye-catching composition, cinematic lighting, no text or letters, about: {title or job['subject']}"
+        f"YouTube thumbnail, bold eye-catching composition, cinematic lighting, no text or letters{style}, about: {title or job['subject']}"
     )
     image = await generate_image(prompt)
     path = thumbnail_path(job_id)
@@ -2227,7 +2252,7 @@ async def run_operator(channel_id: str) -> dict[str, Any]:
             settings["voice_name"] = VOICE_BY_LANGUAGE[prefix]
         script = ""
         if format == "long":
-            written = await long_script(LongScriptInput(subject=topic, language=language, minutes=OPERATOR_MINUTES, niche=channel["niche"]))
+            written = await long_script(LongScriptInput(subject=topic, language=language, minutes=OPERATOR_MINUTES, niche=channel["niche"], persona=channel["persona"]))
             script = written["script"]
         project = get_or_create_project(PROJECT_NAMES[format], language)
         job = await create_job(project["id"], JobCreate(subject=topic, script=script, format=format, channel_ids=[channel_id], settings=settings))
