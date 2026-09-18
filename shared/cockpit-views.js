@@ -1308,7 +1308,7 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
         </div>
         <div style="display:flex;flex-direction:column;gap:20px">
           <div class="card" style="margin-bottom:0">
-            <div class="card-hd"><span class="card-title">Pipeline em tempo real</span><span class="spacer"></span><span class="card-note" id="genPipelineNote">Pronto para gerar</span></div>
+            <div class="card-hd"><span class="card-title">Pipeline em tempo real</span><span class="spacer"></span><button class="btn sm" id="genStopBtn" style="display:none">Parar</button><span class="card-note" id="genPipelineNote">Pronto para gerar</span></div>
             <div class="card-bd">
               <div id="genVideoTitle" style="font-size:13px;font-weight:500;color:var(--ink);margin-bottom:10px;min-height:18px"></div>
               <div style="height:7px;border-radius:99px;background:var(--line);overflow:hidden;margin-bottom:14px">

@@ -53,6 +53,8 @@
     const stage = pct >= 50 ? "Renderizando o vídeo (etapa mais demorada, pode levar 10–25 min)" : pct >= 40 ? "Baixando filmagens do Pexels" : pct >= 20 ? "Gerando narração e legendas" : pct >= 10 ? "Gerando palavras-chave" : "Escrevendo o roteiro com IA";
     const minutes = job.created_at ? Math.max(0, Math.floor((Date.now() - Date.parse(job.created_at)) / 60000)) : null;
     const running = job.state === "queued" || job.state === "running";
+    const stopBtn = body.querySelector("#genStopBtn");
+    if (stopBtn) { stopBtn.style.display = running ? "" : "none"; stopBtn.dataset.jobId = job.id; }
     if (fill) fill.style.width = pct + "%";
     if (percent) percent.textContent = pct + "%";
     if (title) title.textContent = job.subject || "Geração de vídeo";
@@ -280,6 +282,7 @@
           <div style="font-size:11.5px;color:var(--muted)">${esc(j.projectName)} · ${esc(formatLabels[j.format] || j.format)} · ${esc(labels[j.state] || j.state)}${j.error ? " — " + esc(j.error) : ""}</div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0">
+          ${j.state === "queued" || j.state === "running" ? `<button class="btn sm" data-stop-job="${esc(j.id)}">Parar</button>` : ""}
           ${j.state === "failed" || j.state === "interrupted" ? `<button class="btn sm" data-retry-job="${esc(j.id)}">Repetir</button>
           <button class="btn sm" data-delete-job="${esc(j.id)}">Deletar</button>` : ""}
         </div>
@@ -289,7 +292,13 @@
     box.addEventListener("click", async event => {
       const retry = event.target.closest("[data-retry-job]");
       const del = event.target.closest("[data-delete-job]");
-      if (retry) {
+      const stop = event.target.closest("[data-stop-job]");
+      if (stop) {
+        if (!window.confirm("Parar esta geração? O vídeo em andamento será perdido.")) return;
+        stop.disabled = true;
+        try { await stopJob(stop.dataset.stopJob); if (lastNotify) lastNotify("Geração interrompida."); }
+        catch (error) { stop.disabled = false; if (lastNotify) lastNotify(error.message); }
+      } else if (retry) {
         retry.disabled = true;
         try { await retryJob(retry.dataset.retryJob); if (lastNotify) lastNotify("Job reenviado para o Turbo"); }
         catch (error) { retry.disabled = false; if (lastNotify) lastNotify(error.message); }
@@ -372,6 +381,7 @@
 
   async function deleteJob(jobId) { await request(`/jobs/${jobId}`, { method: "DELETE" }); await syncVideos(); }
   async function retryJob(jobId) { await request(`/jobs/${jobId}/retry`, { method: "POST" }); await syncVideos(); }
+  async function stopJob(jobId) { await request(`/jobs/${jobId}/cancel`, { method: "POST" }); await syncVideos(); }
 
   const cachedDefaults = {}; // "long" / "short" per screen, "base" for Configurações
   function applyDefaults(body, defaults) {
@@ -568,6 +578,17 @@
         if (!tab) return;
         genTabs.querySelectorAll("[data-gentab]").forEach(b => b.classList.toggle("is-active", b === tab));
         body.querySelectorAll("[data-genpane]").forEach(pane => { pane.hidden = pane.dataset.genpane !== tab.dataset.gentab; });
+      });
+    }
+    const stopBtn = body.querySelector("#genStopBtn");
+    if (stopBtn && !stopBtn.dataset.bound) {
+      stopBtn.dataset.bound = "true";
+      stopBtn.addEventListener("click", async () => {
+        if (!stopBtn.dataset.jobId || !window.confirm("Parar esta geração? O vídeo em andamento será perdido.")) return;
+        stopBtn.disabled = true;
+        try { await stopJob(stopBtn.dataset.jobId); notify("Geração interrompida."); }
+        catch (error) { notify(error.message); }
+        finally { stopBtn.disabled = false; }
       });
     }
     const button = body.querySelector("#genStartBtn");
@@ -956,5 +977,5 @@
     };
   }
 
-  window.MoneyPrinterRuntime = { bindGenerator, deleteJob, retryJob, bindConfigSettings, bindYoutubeLibraryPublish, connectChannel, channelAction, saveChannel, bindAgents, bindJobsWorkers };
+  window.MoneyPrinterRuntime = { bindGenerator, deleteJob, retryJob, stopJob, bindConfigSettings, bindYoutubeLibraryPublish, connectChannel, channelAction, saveChannel, bindAgents, bindJobsWorkers };
 }());

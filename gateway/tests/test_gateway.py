@@ -225,6 +225,25 @@ class GatewayContractTests(unittest.TestCase):
         self.assertEqual(row["state"], "interrupted")
         self.assertTrue(row["error"])
 
+    def test_cancel_job_stops_only_active_jobs(self):
+        from unittest.mock import AsyncMock, patch
+        from fastapi import HTTPException
+        with self.main.database() as db:
+            db.execute("INSERT INTO projects VALUES ('p1', 'Projeto', '', 'pt-BR', '', '{}', '{}', ?, ?, NULL)", (self.main.now(), self.main.now()))
+            db.execute(
+                "INSERT INTO video_jobs(id, project_id, turbo_task_id, subject, request_json, state, progress, created_at, updated_at) VALUES ('job-1', 'p1', 'task-1', 'assunto', '{}', 'running', 40, ?, ?)",
+                (self.main.now(), self.main.now()),
+            )
+        fake_response = type("FakeResponse", (), {"status_code": 200, "json": lambda self: {}, "text": ""})()
+        with patch("httpx.AsyncClient.send", new=AsyncMock(return_value=fake_response)):
+            result = asyncio.run(self.main.cancel_job("job-1"))
+        self.assertEqual(result["state"], "interrupted")
+        self.assertEqual(result["error"], "Cancelado pelo usuário")
+        # already interrupted (or any non-active state) can't be cancelled again
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(self.main.cancel_job("job-1"))
+        self.assertEqual(ctx.exception.status_code, 409)
+
     def test_youtube_metadata_is_cleaned_and_validated(self):
         value, errors, warnings = self.main.normalize_youtube_metadata({
             "title": "<b>" + "x" * 150, "description": "linha 1\nlinha 2\x00", "tags": ["#ia", "IA", "fatos curtos", "", "ciência"],
