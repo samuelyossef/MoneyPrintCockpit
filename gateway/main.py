@@ -785,6 +785,25 @@ async def retry_job(job_id: str) -> dict[str, Any]:
         return row_as_job(db.execute("SELECT * FROM video_jobs WHERE id=?", (job_id,)).fetchone(), db)
 
 
+@app.post("/api/jobs/{job_id}/cancel", status_code=202)
+async def cancel_job(job_id: str) -> dict[str, Any]:
+    with database() as db:
+        row = db.execute("SELECT * FROM video_jobs WHERE id=? AND deleted_at IS NULL", (job_id,)).fetchone()
+    if not row or row["state"] not in {"queued", "running"}:
+        raise HTTPException(status_code=409, detail="Apenas trabalhos na fila ou em geração podem ser parados")
+    if row["turbo_task_id"]:
+        try:
+            await turbo_request("DELETE", f"/api/v1/tasks/{row['turbo_task_id']}")
+        except HTTPException:
+            pass
+    with database() as db:
+        db.execute(
+            "UPDATE video_jobs SET state='interrupted', error=COALESCE(error, 'Cancelado pelo usuário'), updated_at=? WHERE id=?",
+            (now(), job_id),
+        )
+        return row_as_job(db.execute("SELECT * FROM video_jobs WHERE id=?", (job_id,)).fetchone(), db)
+
+
 @app.delete("/api/jobs/{job_id}", status_code=204, response_model=None)
 async def delete_job(job_id: str) -> None:
     with database() as db:
