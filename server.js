@@ -12,8 +12,10 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-// Definição da porta inicial (prioriza a variável de ambiente PORT ou 3000)
-let port = parseInt(process.env.PORT || '3000', 10);
+// Definição da porta inicial (prioriza a variável de ambiente PORT ou 3100).
+// A 3000 é do Gateway no Docker: ele escuta só em 127.0.0.1, então no Windows este servidor
+// conseguiria abrir a mesma porta (em ::) sem EADDRINUSE e "roubar" o localhost dele.
+let port = parseInt(process.env.PORT || '3100', 10);
 const ROOT_DIR = __dirname;
 
 /**
