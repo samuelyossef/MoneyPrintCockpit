@@ -86,20 +86,39 @@ def _patch_material(material):
     material._download_videos_by_script_order = ordered
 
 
-class _MaterialHook(importlib.abc.MetaPathFinder):
-    """Patches app.services.material right after Turbo imports it (it doesn't exist yet at startup)."""
+def _patch_video(video):
+    """The final concat is a raw `ffmpeg -f concat -c:v libx264` call with no -preset (so x264's
+    "medium"), which bypasses the moviepy patch above: 297 s of a 20 min Short. Same trade as there."""
+    real_run = video.subprocess.run
+
+    def run(command, *args, **kwargs):
+        if isinstance(command, list) and "concat" in command and "libx264" in command and "-preset" not in command:
+            command = list(command)
+            command[command.index("libx264") + 1:1 + command.index("libx264")] = ["-preset", PRESET]
+        return real_run(command, *args, **kwargs)
+
+    # A namespace stand-in, so only this module's subprocess.run changes, not the interpreter's.
+    video.subprocess = type("subprocess", (), {**vars(video.subprocess), "run": staticmethod(run)})
+
+
+PATCHES = {"app.services.material": _patch_material, "app.services.video": _patch_video}
+
+
+class _ImportHook(importlib.abc.MetaPathFinder):
+    """Patches Turbo's modules right after it imports them (they don't exist yet at startup)."""
 
     def find_spec(self, name, path, target=None):
-        if name != "app.services.material":
+        if name not in PATCHES:
             return None
         sys.meta_path.remove(self)
         spec = importlib.util.find_spec(name)
+        sys.meta_path.insert(0, self)
         exec_module = spec.loader.exec_module
 
         def patched_exec(module):
             exec_module(module)
             try:
-                _patch_material(module)
+                PATCHES[name](module)
             except Exception:  # a Turbo upgrade that renames these must not break rendering
                 pass
 
@@ -107,4 +126,4 @@ class _MaterialHook(importlib.abc.MetaPathFinder):
         return spec
 
 
-sys.meta_path.insert(0, _MaterialHook())
+sys.meta_path.insert(0, _ImportHook())
