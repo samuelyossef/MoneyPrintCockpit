@@ -1111,7 +1111,7 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
             <input class="np-input" id="cfgUploadPostKey" style="width:100%" type="password" placeholder="${prov && prov.upload_post ? "•••••••• (deixe em branco para manter)" : "cole a chave aqui"}" autocomplete="off" />
             <div class="card-note" id="cfgUploadPostKeyStatus" style="margin-top:5px;min-height:14px"></div></div>
           <div><label class="dr-sec" style="margin:0 0 7px">Usuário Upload-Post</label>
-        <div class="card-note" style="margin:6px 0 14px;font-family:inherit">O modelo de visão é usado em "Revisar imagens com IA" e o de imagem em "Gerar thumbnail com IA", ambos no painel de publicação.</div>
+        <div class="card-note" style="margin:6px 0 14px;font-family:inherit">O modelo de visão é usado em "Revisar imagens com IA" (painel de publicação) e o de imagem na aba "Thumbnail" de Shorts e Vídeos longos.</div>
             <input class="np-input" id="cfgUploadPostUser" style="width:100%" value="${esc(prov && prov.upload_post_username || "")}" placeholder="nome de usuário" autocomplete="off" /></div>
         </div>
         <div class="card-note" style="margin-top:10px;font-family:inherit">A chave Upload-Post é usada para conectar canais TikTok em <a href="#" data-view="clientes" style="color:var(--accent)">Canais</a>.</div>
@@ -1212,11 +1212,39 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
         </div>
       </div>`;
   }
+  /* Thumbnails get their own tab: the channel's standing prompt (kept on the channel, so each one keeps
+     its look) plus the video it is for. The rest of the prompt is composed in the gateway. */
+  function thumbnailPane(format) {
+    const isLong = format === "long";
+    const channels = D.CHANNELS.filter(c => c.status === "connected" && (!isLong || c.platform === "YouTube"));
+    return `
+      <div class="card" style="margin-bottom:0">
+        <div class="card-hd"><span class="card-title">Thumbnail com IA</span></div>
+        <div class="card-bd" style="display:flex;flex-direction:column;gap:16px">
+          <div class="card-note" style="font-family:inherit">Cada canal tem o seu prompt do sistema de thumbnail, aplicado em toda thumbnail gerada para ele, junto do estilo visual do canal. A thumbnail só pode ser gerada para vídeos já concluídos${isLong ? "" : "; se o canal for do YouTube, ela é enviada junto na publicação"}.</div>
+          <div class="grid2" style="margin:0">
+            <div class="md-field"><label>Canal</label><select class="set-select" style="width:100%" id="thbChannel"><option value="">Selecione um canal…</option>${channels.map(c => `<option value="${esc(c.id)}">${esc(c.name)} · ${esc(c.platform)}</option>`).join("")}</select></div>
+            <div class="md-field"><label>Vídeo</label><select class="set-select" style="width:100%" id="thbVideo"><option value="">Selecione um vídeo concluído…</option></select></div>
+          </div>
+          <div class="md-field"><label>Prompt do sistema da thumbnail (deste canal)</label>
+            <textarea class="np-input" id="thbSystemPrompt" rows="8" maxlength="1000" style="width:100%;resize:vertical" placeholder="Ex: Rosto em close com expressão de surpresa, fundo amarelo saturado, alto contraste, sem texto."></textarea>
+            <div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn sm" id="thbSaveBtn" type="button">Salvar no canal</button><span class="card-note" id="thbSaveNote" role="status" style="font-family:inherit"></span></div></div>
+          <div class="md-field"><label>Ideia desta thumbnail (opcional)</label>
+            <input class="np-input" id="thbIdea" maxlength="1000" style="width:100%" placeholder="Deixe vazio para gerar a partir do título do vídeo" /></div>
+          <button class="btn primary" id="thbGenBtn" type="button" style="width:100%;padding:11px">Gerar thumbnail</button>
+          <div id="thbResult" hidden>
+            <img id="thbImg" alt="Thumbnail gerada" style="width:100%;max-width:480px;border-radius:8px;display:block" />
+            <a class="btn sm" id="thbDownload" style="margin-top:8px;display:inline-block" download="thumbnail.jpg">Baixar</a>
+          </div>
+        </div>
+      </div>`;
+  }
   function gerador(scope) {
     return screenTabs([
       ["gerar", "Gerador", studioCreative(scope, "long")],
       ["parametros", "Parâmetros de vídeo", studioParams("long")],
       ["prompt", "Prompt do sistema", systemPromptPane("long")],
+      ["thumbnail", "Thumbnail", thumbnailPane("long")],
       ["biblioteca", "Biblioteca", libraryCard("long")],
     ]);
   }
@@ -1225,6 +1253,7 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
       ["gerar", "Gerador", studioCreative(scope, "short")],
       ["parametros", "Parâmetros de vídeo", studioParams("short")],
       ["prompt", "Prompt do sistema", systemPromptPane("short")],
+      ["thumbnail", "Thumbnail", thumbnailPane("short")],
       ["biblioteca", "Biblioteca", libraryCard("short")],
     ]);
   }
@@ -1330,6 +1359,10 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
                     <label class="card-note" style="font-family:inherit;display:flex;align-items:center;gap:6px">Agendar para <input class="np-input" type="datetime-local" id="genPublishAt" style="padding:4px 6px" /></label>
                     <span class="card-note" id="genPublishStatus" role="status" style="font-family:inherit"></span>
                   </div>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px">
+                    <button class="btn sm" id="genReviewBtn" type="button">Revisar imagens com IA</button>
+                  </div>
+                  <div id="genReviewResult" style="margin-top:6px"></div>
                 </div>
               </div></div>
           </div>
@@ -1363,12 +1396,6 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
           </div>
           <div class="grid2" style="margin:0">
             <div><label class="dr-sec" style="margin:0 0 7px">Duração alvo</label>
-                  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px">
-                    <button class="btn sm" id="genReviewBtn" type="button">Revisar imagens com IA</button>
-                    <button class="btn sm" id="genThumbBtn" type="button">Gerar thumbnail com IA</button>
-                  </div>
-                  <div id="genReviewResult" style="margin-top:6px"></div>
-                  <img id="genThumbImg" alt="Thumbnail gerada" style="margin-top:8px;width:100%;max-width:320px;border-radius:8px;display:block" hidden />
               ${isLong
                 ? `<select class="set-select" id="genTargetMinutes" style="width:100%">${[5, 8, 10, 15].map(m => `<option value="${m}" ${m === 8 ? "selected" : ""}>${m} minutos</option>`).join("")}</select>
               <div class="card-note" style="margin-top:6px">Usada pelo roteiro longo. O render leva de 30 a 90 min.</div>`

@@ -1053,6 +1053,34 @@ class GatewayContractTests(unittest.TestCase):
         self.assertIsNotNone(job["thumbnail_updated_at"])
         self.assertEqual(self.main.thumbnail_path("job-1").read_bytes(), b"fake-jpeg")
 
+    def test_thumbnail_prompt_puts_the_channel_rules_first_and_the_topic_last(self):
+        from unittest.mock import patch
+        self._completed_job()
+        self.main.put_metadata("job-1", self.main.MetadataInput(title="Meu Título", description="d", tags="a,b,c"))
+        self._connected(("yt", "youtube"), ("other", "youtube"))
+        self.main.update_channel("yt", thumbnail_prompt="Rosto grande, fundo amarelo.", visual_style="neon noir")
+        self.main.update_channel("other", thumbnail_prompt="Minimalista.")
+        seen = []
+
+        async def fake_image(prompt, *size):
+            seen.append(prompt)
+            return b"jpeg"
+
+        with patch.object(self.main, "generate_image", new=fake_image):
+            asyncio.run(self.main.create_thumbnail("job-1", self.main.ThumbnailInput(channel_id="yt")))
+            asyncio.run(self.main.create_thumbnail("job-1", self.main.ThumbnailInput(channel_id="yt", prompt="um polvo surpreso")))
+            asyncio.run(self.main.create_thumbnail("job-1", self.main.ThumbnailInput(channel_id="other")))
+        self.assertTrue(seen[0].startswith("Rosto grande, fundo amarelo. Visual style: neon noir."))
+        self.assertTrue(seen[0].endswith("about: Meu Título"))                                   # topic last, so the 2000-char cut never eats it
+        self.assertTrue(seen[1].endswith("Visual style: neon noir. um polvo surpreso"))           # the idea replaces only the default wording
+        self.assertTrue(seen[2].startswith("Minimalista. YouTube thumbnail") and "neon" not in seen[2])  # channel_id picks whose rules apply
+
+    def test_thumbnail_prompt_is_capped_on_the_channel(self):
+        self._connected(("yt", "youtube"))
+        self.assertEqual(self.main.patch_channel("yt", self.main.ChannelPatch(thumbnail_prompt="x" * 1000))["thumbnail_prompt"], "x" * 1000)
+        with self.assertRaises(Exception):
+            self.main.ChannelPatch(thumbnail_prompt="x" * 1001)
+
     def test_get_thumbnail_404s_before_one_exists(self):
         from fastapi import HTTPException
         self._completed_job()

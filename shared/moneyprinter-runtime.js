@@ -185,25 +185,9 @@
       catch (error) { window.alert(error.message); }
       finally { reviewBtn.disabled = false; reviewBtn.textContent = label; }
     };
-    const renderThumb = () => {
-      const img = $("#genThumbImg");
-      if (!img) return;
-      if (job.thumbnail_updated_at) { img.src = `${API}/jobs/${job.id}/thumbnail?t=${job.thumbnail_updated_at}`; img.hidden = false; }
-      else { img.hidden = true; img.src = ""; }
-    };
-    const thumbBtn = $("#genThumbBtn");
-    if (thumbBtn) thumbBtn.onclick = async () => {
-      thumbBtn.disabled = true;
-      const label = thumbBtn.textContent;
-      thumbBtn.textContent = "Gerando…";
-      try { job = await request(`/jobs/${job.id}/thumbnail`, { method: "POST" }); renderThumb(); }
-      catch (error) { window.alert(error.message); }
-      finally { thumbBtn.disabled = false; thumbBtn.textContent = label; }
-    };
     fill();
     states();
     renderReview();
-    renderThumb();
   }
 
   // One project per screen, created on first use - the picker is gone, so there is nothing left to name.
@@ -663,6 +647,67 @@
       finally { button.disabled = false; button.textContent = label; }
     });
     bindAiHelpers(body, notify);
+    bindThumbnailTab(body, notify);
+  }
+
+  /* "Thumbnail" tab: the channel's standing prompt is stored on the channel (so each keeps its look);
+     the gateway composes the rest (channel style + this video's title or the idea typed here). */
+  function bindThumbnailTab(body, notify) {
+    const $ = selector => body.querySelector(selector);
+    const channelSelect = $("#thbChannel"), videoSelect = $("#thbVideo");
+    if (!channelSelect || !videoSelect || channelSelect.dataset.bound) return;
+    channelSelect.dataset.bound = "true";
+    const videos = () => window.CK.VIDEOS[screenFormat(body) === "long" ? "horiz" : "vert"];
+    // syncVideos only repaints the video grid, so the list is refilled whenever the tab is opened.
+    const fillVideos = () => {
+      const chosen = videoSelect.value;
+      videoSelect.innerHTML = `<option value="">Selecione um vídeo concluído…</option>` + videos().map(v => `<option value="${esc(v[4])}">${esc(v[2])}</option>`).join("");
+      videoSelect.value = videos().some(v => v[4] === chosen) ? chosen : "";
+    };
+    const showThumb = job => {
+      const result = $("#thbResult");
+      result.hidden = !(job && job.thumbnail_updated_at);
+      if (result.hidden) return;
+      const url = `${API}/jobs/${job.id}/thumbnail?t=${job.thumbnail_updated_at}`;
+      $("#thbImg").src = url; $("#thbDownload").href = url;
+    };
+    const note = text => { $("#thbSaveNote").textContent = text; };
+    let loadedFor = null; // a channel re-sync fires "change" again; it must not overwrite what is being typed
+    channelSelect.addEventListener("change", () => {
+      if (channelSelect.value === loadedFor) return;
+      loadedFor = channelSelect.value;
+      $("#thbSystemPrompt").value = (channelById(loadedFor) || {}).thumbnail_prompt || "";
+      note("");
+    });
+    videoSelect.addEventListener("change", async () => {
+      try { showThumb(videoSelect.value ? await request(`/jobs/${videoSelect.value}`) : null); } catch (_) { showThumb(null); }
+    });
+    const saveToChannel = async () => {
+      const channel = channelById(channelSelect.value), text = $("#thbSystemPrompt").value.trim();
+      if (!channel) throw new Error("Selecione o canal.");
+      if (text !== (channel.thumbnail_prompt || "")) await saveChannel(channel.id, { thumbnail_prompt: text });
+    };
+    const guarded = (selector, label, task) => {
+      const button = $(selector);
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        const text = button.textContent; button.textContent = label;
+        try { await task(); } catch (error) { notify(error.message); }
+        finally { button.disabled = false; button.textContent = text; }
+      });
+    };
+    guarded("#thbSaveBtn", "Salvando…", async () => { await saveToChannel(); note("Salvo no canal."); });
+    guarded("#thbGenBtn", "Gerando…", async () => {
+      if (!channelSelect.value) throw new Error("Selecione o canal.");
+      if (!videoSelect.value) throw new Error("Selecione um vídeo concluído.");
+      await saveToChannel();
+      const job = await request(`/jobs/${videoSelect.value}/thumbnail`, { method: "POST", body: JSON.stringify({ channel_id: channelSelect.value, prompt: $("#thbIdea").value.trim() }) });
+      showThumb(job);
+      notify("Thumbnail gerada.");
+    });
+    const tab = $('[data-gentab="thumbnail"]');
+    if (tab) tab.addEventListener("click", fillVideos);
+    fillVideos();
   }
 
   /* Mirrors the WebUI's "generate script" / "generate keywords" buttons via
@@ -773,7 +818,7 @@
   function mapChannel(c) {
     const stats = c.stats || {};
     return { id: c.id, name: c.name, platform: c.platform === "tiktok" ? "TikTok" : "YouTube", handle: c.handle, status: c.status,
-      niche: c.niche, language: c.language, persona: c.persona || "", visual_style: c.visual_style || "", image_source: c.image_source || "", followers: stats.followers || 0, videos: stats.videos || 0, views: stats.views || 0, last: "—" };
+      niche: c.niche, language: c.language, persona: c.persona || "", visual_style: c.visual_style || "", image_source: c.image_source || "", thumbnail_prompt: c.thumbnail_prompt || "", followers: stats.followers || 0, videos: stats.videos || 0, views: stats.views || 0, last: "—" };
   }
 
   /* Refills the channel selects in place: re-rendering Gerador would wipe what the user typed. */
@@ -782,7 +827,7 @@
     const youtube = connected.filter(c => c.platform === "YouTube");
     const option = c => `<option value="${esc(c.id)}">${esc(c.name)} · ${esc(c.platform)}</option>`;
     // Long videos only go to YouTube; Shorts to any connected channel.
-    [["#genChannelSelect", youtube, "Escolher depois"], ["#ytLibChannelSelect", screenFormat(document) === "long" ? youtube : connected, "Selecione um canal…"], ["#agStrategyChannel", connected, "Selecione um canal…"]].forEach(([selector, list, empty]) => {
+    [["#genChannelSelect", youtube, "Escolher depois"], ["#ytLibChannelSelect", screenFormat(document) === "long" ? youtube : connected, "Selecione um canal…"], ["#thbChannel", screenFormat(document) === "long" ? youtube : connected, "Selecione um canal…"], ["#agStrategyChannel", connected, "Selecione um canal…"]].forEach(([selector, list, empty]) => {
       const select = document.querySelector(selector);
       if (!select) return;
       const current = select.value;

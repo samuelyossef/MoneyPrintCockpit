@@ -121,7 +121,7 @@ def initialize_database() -> None:
             """
         )
         channel_columns = {column["name"] for column in db.execute("PRAGMA table_info(channels)")}
-        for column in ("persona", "visual_style", "image_source"):
+        for column in ("persona", "visual_style", "image_source", "thumbnail_prompt"):
             if column not in channel_columns:
                 db.execute(f"ALTER TABLE channels ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
         job_columns = {column["name"] for column in db.execute("PRAGMA table_info(video_jobs)")}
@@ -1412,7 +1412,7 @@ def job_language(db: sqlite3.Connection, job: sqlite3.Row) -> str:
 
 
 def row_as_channel(row: sqlite3.Row) -> dict[str, Any]:
-    result = {key: row[key] for key in ("id", "platform", "name", "handle", "external_id", "status", "niche", "language", "persona", "visual_style", "image_source", "created_at", "updated_at")}
+    result = {key: row[key] for key in ("id", "platform", "name", "handle", "external_id", "status", "niche", "language", "persona", "visual_style", "image_source", "thumbnail_prompt", "created_at", "updated_at")}
     result["stats"] = json.loads(row["stats_json"])
     return result
 
@@ -1456,6 +1456,8 @@ class ChannelPatch(BaseModel):
     persona: str | None = Field(default=None, max_length=2000)
     visual_style: str | None = Field(default=None, max_length=1000)
     image_source: Literal["", "stock", "ai_images"] | None = None  # "" = the Configurações default
+    # 1000, not 2000: generate_image cuts the prompt at 2000 characters, from the end, and the video topic goes last.
+    thumbnail_prompt: str | None = Field(default=None, max_length=1000)
 
 
 class ChannelConnect(BaseModel):
@@ -1811,7 +1813,8 @@ async def generate_image(prompt: str, width: int = THUMBNAIL_WIDTH, height: int 
 
 
 class ThumbnailInput(BaseModel):
-    prompt: str = Field(default="", max_length=2000)
+    prompt: str = Field(default="", max_length=1000)  # this thumbnail's own idea; replaces only the default wording
+    channel_id: str | None = None  # whose thumbnail prompt and style apply; default: the job's YouTube channel
 
 
 @app.post("/api/jobs/{job_id}/thumbnail")
@@ -1820,17 +1823,18 @@ async def create_thumbnail(job_id: str, input: ThumbnailInput | None = None) -> 
     with database() as db:
         job = job_row_or_404(db, job_id)
         stored = db.execute("SELECT value_json FROM job_metadata WHERE job_id=?", (job_id,)).fetchone()
-        channel = db.execute(
-            "SELECT channels.visual_style FROM publications JOIN channels ON channels.id = publications.channel_id "
+        channel = channel_row_or_404(db, input.channel_id) if input.channel_id else db.execute(
+            "SELECT channels.* FROM publications JOIN channels ON channels.id = publications.channel_id "
             "WHERE publications.job_id=? AND publications.platform='youtube'", (job_id,),
         ).fetchone()
     if job["state"] not in METADATA_STATES:
         raise HTTPException(status_code=409, detail="Só é possível gerar thumbnail para vídeos concluídos")
     title = json.loads(stored["value_json"]).get("title") if stored else None
-    style = f", style: {channel['visual_style'].strip()}" if channel and channel["visual_style"].strip() else ""
-    prompt = input.prompt.strip() or (
-        f"YouTube thumbnail, bold eye-catching composition, cinematic lighting, no text or letters{style}, about: {title or job['subject']}"
-    )
+    # The channel's standing rules always apply; only the wording after them is replaceable.
+    rules, style = (channel["thumbnail_prompt"].strip(), channel["visual_style"].strip()) if channel else ("", "")
+    head = " ".join(part for part in (rules, f"Visual style: {style}." if style else "") if part)
+    body = input.prompt.strip() or f"YouTube thumbnail, bold eye-catching composition, cinematic lighting, no text or letters, about: {title or job['subject']}"
+    prompt = f"{head} {body}".strip()
     image = await generate_image(prompt)
     path = thumbnail_path(job_id)
     path.parent.mkdir(parents=True, exist_ok=True)
