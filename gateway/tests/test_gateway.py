@@ -873,6 +873,38 @@ class GatewayContractTests(unittest.TestCase):
                 active.stop()
         return calls
 
+    def test_channel_image_source_picks_ai_or_stock_unless_the_screen_overrides(self):
+        import re
+        from unittest.mock import patch
+        self._completed_job()
+        self._connected(("yt", "youtube"))
+        self.main.update_channel("yt", image_source="ai_images")
+        sent = {}
+
+        async def fake_chat(prompt, json_mode=False):
+            count = int(re.search(r"exatamente (\d+)", prompt).group(1))
+            return json.dumps({"style": "s", "scenes": ["x"] * count, "terms": ["a"] * count})
+
+        async def fake_image(prompt, width, height):
+            return b"img"
+
+        async def fake_turbo(method, path, **kwargs):
+            if path == "/api/v1/video_materials":
+                return type("Response", (), {"json": lambda self: {"data": {"file": "f.jpg"}}})()
+            sent["video"] = kwargs["json"]
+            return type("Response", (), {"json": lambda self: {"data": {"task_id": "t1"}}})()
+
+        def run(settings):
+            with patch.object(self.main, "llm_chat", new=fake_chat), patch.object(self.main, "generate_image", new=fake_image),                     patch.object(self.main, "turbo_request", new=fake_turbo),                     patch.object(self.main, "config_value", side_effect=lambda key: "nv-key" if key == "nvidia_api_key" else ""):
+                asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="t", script="uma frase curta de teste.", format="short", channel_ids=["yt"], settings=settings)))
+            return sent["video"]["video_source"]
+
+        self.assertEqual(run({}), "local")                         # the channel's AI choice applies (images uploaded as local materials)
+        self.assertEqual(run({"video_source": "pexels"}), "pexels")  # an explicit screen choice wins
+        self.main.update_channel("yt", image_source="stock")
+        self.main.put_generation_defaults(self.main.SettingsPatch(value={"video_source": "ai_images"}))
+        self.assertEqual(run({}), "pexels")                        # "stock" replaces an AI default from Configurações
+
     def test_create_job_with_ai_images_sends_one_image_per_chunk_in_order(self):
         calls = self._ai_images_job(fail_indexes={1})
         video = calls["video"]

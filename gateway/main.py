@@ -121,7 +121,7 @@ def initialize_database() -> None:
             """
         )
         channel_columns = {column["name"] for column in db.execute("PRAGMA table_info(channels)")}
-        for column in ("persona", "visual_style"):
+        for column in ("persona", "visual_style", "image_source"):
             if column not in channel_columns:
                 db.execute(f"ALTER TABLE channels ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
         job_columns = {column["name"] for column in db.execute("PRAGMA table_info(video_jobs)")}
@@ -739,6 +739,13 @@ async def create_job(project_id: str, input: JobCreate) -> dict[str, Any]:
     merged = {**generation_defaults(input.format), **project["defaults"], **input.settings, **FORMAT_LOCKED[input.format]}
     # Turbo's encoder defaults to 2 threads; this container sees the same Docker VM CPUs as Turbo.
     merged.setdefault("n_threads", os.cpu_count() or 2)
+    # The channel's own choice of image source applies unless the screen named one explicitly.
+    channel_source = channels[0]["image_source"] if channels else ""
+    if channel_source and "video_source" not in input.settings:
+        if channel_source == "ai_images":
+            merged["video_source"] = "ai_images"
+        elif merged.get("video_source") == "ai_images":  # "stock": leave a stock default alone, replace an AI one
+            merged["video_source"] = "pexels"
     # ponytail: one script per job, so the first channel's identity wins; merge personas if that ever matters.
     persona, visual_style = (channels[0]["persona"], channels[0]["visual_style"]) if channels else ("", "")
     merged["video_script_prompt"] = persona_prompt(persona, str(merged.get("video_script_prompt", "")))
@@ -1405,7 +1412,7 @@ def job_language(db: sqlite3.Connection, job: sqlite3.Row) -> str:
 
 
 def row_as_channel(row: sqlite3.Row) -> dict[str, Any]:
-    result = {key: row[key] for key in ("id", "platform", "name", "handle", "external_id", "status", "niche", "language", "persona", "visual_style", "created_at", "updated_at")}
+    result = {key: row[key] for key in ("id", "platform", "name", "handle", "external_id", "status", "niche", "language", "persona", "visual_style", "image_source", "created_at", "updated_at")}
     result["stats"] = json.loads(row["stats_json"])
     return result
 
@@ -1448,6 +1455,7 @@ class ChannelPatch(BaseModel):
     language: str | None = Field(default=None, max_length=20)
     persona: str | None = Field(default=None, max_length=2000)
     visual_style: str | None = Field(default=None, max_length=1000)
+    image_source: Literal["", "stock", "ai_images"] | None = None  # "" = the Configurações default
 
 
 class ChannelConnect(BaseModel):

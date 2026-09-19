@@ -384,6 +384,8 @@
   async function stopJob(jobId) { await request(`/jobs/${jobId}/cancel`, { method: "POST" }); await syncVideos(); }
 
   const cachedDefaults = {}; // "long" / "short" per screen, "base" for Configurações
+  // The stock provider Configurações picked; an explicit "banco" must name one to beat a channel that prefers AI images.
+  const stockSource = format => { const source = (cachedDefaults[format] || cachedDefaults.base || {}).video_source; return source && source !== "ai_images" ? source : "pexels"; };
   function applyDefaults(body, defaults) {
     const set = (selector, val) => {
       const el = body.querySelector(selector);
@@ -430,9 +432,9 @@
         subtitle_position: value(body, "#genSubtitlePosition", "bottom"),
         subtitle_enabled: !body.querySelector("#genSubtitleEnabled") || body.querySelector("#genSubtitleEnabled").checked,
         video_script_prompt: value(body, "#genScriptRequirements", "").trim(), custom_system_prompt: value(body, "#genSystemPrompt", "").trim(),
-        // "Filmagens de banco" keeps whichever stock source Configurações picked; it only resets one that was "ai_images".
+        // "Seguir o canal" leaves the saved default alone; "banco" clears an "ai_images" default.
         ...(value(body, "#genVideoSource", "") === "ai_images" ? { video_source: "ai_images" }
-          : (cachedDefaults[format] || {}).video_source === "ai_images" ? { video_source: "pexels" } : {}),
+          : value(body, "#genVideoSource", "") === "stock" ? { video_source: stockSource(format) } : {}),
       } }) });
       notify(`Padrões de ${format === "long" ? "vídeo longo" : "Shorts"} salvos.`);
     };
@@ -625,7 +627,10 @@
       const subject = value(body, "#genTopicInput", "").trim();
       if (!subject) { notify("Informe o tema do vídeo."); body.querySelector("#genTopicInput").focus(); return; }
       button.disabled = true;
-      const aiImages = value(body, "#genVideoSource", "") === "ai_images";
+      // "Seguir o canal": the gateway applies the channel's own choice, so the label has to predict it.
+      const picked = value(body, "#genVideoSource", "");
+      const followed = channelById(selectedChannels(body)[0]);
+      const aiImages = picked === "ai_images" || (picked === "" && !!followed && followed.image_source === "ai_images");
       button.textContent = aiImages ? "Gerando imagens com IA…" : "Enviando para o Turbo…";
       try {
         const project = await projectFor(body);
@@ -640,7 +645,7 @@
           video_concat_mode: value(body, "#genConcatMode", "random"), video_transition_mode: value(body, "#genTransition", ""),
           video_terms: value(body, "#genTermsInput", "").trim(),
           // Stock footage: a saved "ai_images" default is overridden; otherwise Configurações' source stays in charge.
-          ...(aiImages ? { video_source: "ai_images" } : (cachedDefaults[format] || {}).video_source === "ai_images" ? { video_source: "pexels" } : {}),
+          ...(picked === "ai_images" ? { video_source: "ai_images" } : picked === "stock" ? { video_source: stockSource(format) } : {}),
           voice_rate: number("#genVoiceRate", 1), voice_volume: number("#genVoiceVolume", 1),
           // The gateway trims the narration to this target, whoever wrote the script.
           ...(body.querySelector("#genTargetMinutes") ? { target_minutes: integer(value(body, "#genTargetMinutes", 8), 8) } : {}),
@@ -768,7 +773,7 @@
   function mapChannel(c) {
     const stats = c.stats || {};
     return { id: c.id, name: c.name, platform: c.platform === "tiktok" ? "TikTok" : "YouTube", handle: c.handle, status: c.status,
-      niche: c.niche, language: c.language, persona: c.persona || "", visual_style: c.visual_style || "", followers: stats.followers || 0, videos: stats.videos || 0, views: stats.views || 0, last: "—" };
+      niche: c.niche, language: c.language, persona: c.persona || "", visual_style: c.visual_style || "", image_source: c.image_source || "", followers: stats.followers || 0, videos: stats.videos || 0, views: stats.views || 0, last: "—" };
   }
 
   /* Refills the channel selects in place: re-rendering Gerador would wipe what the user typed. */

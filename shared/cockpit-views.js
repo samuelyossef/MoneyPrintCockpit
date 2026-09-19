@@ -421,6 +421,7 @@ window.CKV = (function () {
     </div>`;
   }
   const CH_STATUS = { connected: ["active", "Conectado"], pending: ["pending", "Aguardando login"], expired: ["past_due", "Expirado"] };
+  const IMAGE_SOURCES = [["", "Padrão das Configurações"], ["stock", "Banco de imagens (Pexels, Pixabay ou Coverr)"], ["ai_images", "Gerador de imagens da NVIDIA (FLUX)"]];
   const CH_LANGS = [["pt-BR", "Português (Brasil)"], ["en-US", "English (US)"], ["es-ES", "Español"], ["de-DE", "Deutsch"]];
   function chStatus(status) {
     const [dot, label] = CH_STATUS[status] || CH_STATUS.expired;
@@ -455,7 +456,7 @@ window.CKV = (function () {
     return D.CHANNELS.find(x => x.id === id) || null;
   }
   function newCanalRec() {
-    return { platform: "YouTube", niche: "", language: "pt-BR", persona: "", visual_style: "" };
+    return { platform: "YouTube", niche: "", language: "pt-BR", persona: "", visual_style: "", image_source: "" };
   }
   function canal(c, tab, editing, isNew) {
     editing = editing || isNew;
@@ -501,6 +502,7 @@ window.CKV = (function () {
             <div class="card-bd" style="display:flex;flex-direction:column;gap:16px">
               <div class="card-note" style="font-family:inherit">Aplicada automaticamente em todo vídeo gerado para este canal (roteiro, imagens de IA, buscas de filmagem e thumbnail), por cima do que estiver na tela do Gerador.</div>
               <div class="md-field"><label>Persona e tom (roteiro)</label>${area("persona", c.persona, "Ex: Narrador direto e bem-humorado, fala com o público como um amigo, frases curtas, sem jargão, sempre abre com uma pergunta.")}</div>
+              <div class="md-field"><label>Origem das imagens do vídeo</label>${sel("image_source", c.image_source || "", IMAGE_SOURCES)}</div>
               <div class="md-field"><label>Estilo visual (em inglês)</label>${area("visual_style", c.visual_style, "Ex: dark moody cinematic, teal and orange palette, soft rim lighting, 35mm film grain.")}</div>
             </div></div>
           ${c.platform === "YouTube" ? kpi("Inscritos", c.followers) + kpi("Vídeos", c.videos) + kpi("Views totais", c.views) : ""}
@@ -1299,7 +1301,7 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
               </div>
             <div>
               <label class="dr-sec" style="margin:0 0 7px">Gerar com</label>
-              <select class="set-select" id="genVideoSource" style="width:100%"><option value="" selected>Filmagens de banco (Pexels)</option><option value="ai_images">Imagens geradas por IA (NVIDIA FLUX)</option></select>
+              <select class="set-select" id="genVideoSource" style="width:100%"><option value="" selected>Seguir o canal escolhido</option><option value="stock">Filmagens de banco (Pexels/Pixabay/Coverr)</option><option value="ai_images">Imagens geradas por IA (NVIDIA FLUX)</option></select>
               <div class="card-note" style="margin-top:6px">Imagens de IA: uma imagem por trecho narrado, com zoom lento, na ordem do roteiro. Leva alguns minutos a mais e usa a cota NVIDIA.</div>
             </div>
             </div>
