@@ -684,6 +684,7 @@
       body.querySelector("#genScriptInput").value = result.script || "";
       body.querySelector("#genScriptInput").dispatchEvent(new Event("input")); // saves the draft and refreshes the word count
       if (result.trimmed) notify("Roteiro cortado para caber na duração alvo do Short.");
+      else if (result.too_short) notify(`Roteiro com ${result.words} palavras (≈ ${Math.round(result.words / 2.5)} s) — curto para 60–90 s. Gere de novo ou complete o texto.`);
     });
     // One search term per script chunk, in narration order, instead of a handful of generic
     // terms shared by the whole video - see visual_terms() in the gateway.
@@ -978,5 +979,43 @@
     };
   }
 
-  window.MoneyPrinterRuntime = { bindGenerator, deleteJob, retryJob, stopJob, bindConfigSettings, bindYoutubeLibraryPublish, connectChannel, channelAction, saveChannel, bindAgents, bindJobsWorkers };
+  /* ── Analytics tab: real gateway data only, no mocked totals. ── */
+  function bindAnalytics(body, notify) {
+    const root = body.querySelector("#analyticsBody");
+    if (!root || root.dataset.bound) return;
+    root.dataset.bound = "true";
+    const fmt = n => Math.round(Number(n) || 0).toLocaleString("pt-BR");
+    const empty = (title, text) => `<div class="card" style="margin-bottom:0"><div class="empty"><div class="empty-t">${title}</div><div class="empty-s">${text}</div></div></div>`;
+    const kpi = (label, val, sub) => `<div class="kpi" style="cursor:default"><div class="kpi-label">${label}</div><div class="kpi-value">${val}</div><div class="card-note" style="font-family:inherit">${sub}</div></div>`;
+    const render = data => {
+      const channels = data.channels || [], jobs = data.jobs || {}, yt = data.youtube || {};
+      const top = yt.top || [];
+      const topChannels = channels.slice().sort((a, b) => ((b.stats || {}).views || 0) - ((a.stats || {}).views || 0)).slice(0, 6);
+      root.innerHTML = `
+      <div class="kpi-row">
+        ${kpi("Vídeos gerados", fmt(jobs.total), `${fmt(jobs.completed)} concluídos · ${fmt(jobs.active)} em andamento`)}
+        ${kpi("Views no YouTube", fmt(yt.total_views), `${fmt(yt.videos_measured)} de ${fmt(yt.videos_published)} vídeos medidos`)}
+        ${kpi("Seguidores totais", fmt(data.followers_total), `${channels.length} ${channels.length === 1 ? "canal conectado" : "canais conectados"}`)}
+        ${kpi("Nota média", yt.avg_score != null ? String(yt.avg_score) : "—", yt.avg_retention != null ? `retenção média ${yt.avg_retention}%` : "sem medições ainda")}
+      </div>
+      ${jobs.failed ? `<div class="card-note" style="font-family:inherit;color:var(--warn);margin:0 0 12px">${fmt(jobs.failed)} job(s) com falha ou interrompidos — veja em Jobs e workers.</div>` : ""}
+      <div class="grid2">
+        <div class="card" style="margin-bottom:0"><div class="card-hd"><span class="card-title">Vídeos por nota</span><span class="spacer"></span><span class="card-note">YouTube Analytics real</span></div>
+          ${top.length ? `<table><thead><tr><th>Vídeo</th><th>Canal</th><th class="num">Views</th><th class="num">Retenção</th><th class="num">Nota</th></tr></thead><tbody>${top.map(v => {
+            const m = v.metrics || {};
+            return `<tr><td style="font-weight:500;color:var(--ink)">${esc(v.title)}</td><td>${esc(v.channel_name || "")}</td><td class="num mono">${m.views != null ? fmt(m.views) : "—"}</td><td class="num mono">${m.averageViewPercentage != null ? Math.round(m.averageViewPercentage) + "%" : "—"}</td><td class="num mono">${v.score ?? "—"}</td></tr>`;
+          }).join("")}</tbody></table>` : empty("Nenhum vídeo publicado no YouTube ainda", "As métricas aparecem aqui depois da primeira publicação. Para atualizar, use Agentes → Analytics → Atualizar métricas.")}</div>
+        <div class="card" style="margin-bottom:0"><div class="card-hd"><span class="card-title">Canais por views</span><span class="spacer"></span><span class="card-note">top ${topChannels.length}</span></div>
+          ${topChannels.length ? `<table><thead><tr><th>Canal</th><th>Plataforma</th><th class="num">Seguidores</th><th class="num">Views</th></tr></thead><tbody>${topChannels.map(c => `<tr><td style="font-weight:500;color:var(--ink)">${esc(c.name)}<div class="card-note" style="font-weight:400">${esc(c.handle || "")}</div></td><td>${esc(c.platform)}</td><td class="num mono">${fmt((c.stats || {}).followers)}</td><td class="num mono">${fmt((c.stats || {}).views)}</td></tr>`).join("")}</tbody></table>` : empty("Nenhum canal conectado", "Conecte um canal do YouTube ou TikTok em Canais.")}</div>
+      </div>`;
+    };
+    request("/analytics/overview").then(render).catch(error => {
+      root.innerHTML = `<div class="card" style="margin-bottom:0"><div class="empty"><div class="empty-t">Não foi possível carregar o Analytics</div><div class="empty-s">${esc(error.message)}</div><button class="btn sm" type="button" id="analyticsRetry" style="margin-top:10px">Tentar de novo</button></div></div>`;
+      const retry = root.querySelector("#analyticsRetry");
+      if (retry) retry.addEventListener("click", () => { delete root.dataset.bound; bindAnalytics(body, notify); });
+      if (notify) notify(error.message);
+    });
+  }
+
+  window.MoneyPrinterRuntime = { bindGenerator, deleteJob, retryJob, stopJob, bindConfigSettings, bindYoutubeLibraryPublish, connectChannel, channelAction, saveChannel, bindAgents, bindAnalytics, bindJobsWorkers };
 }());

@@ -41,3 +41,30 @@ Você também pode abrir diretamente o arquivo **`index.html`** ou **`Cockpit.ht
    - `Plans.html`
    - `Settings.html`
    - `Login.html` / `Signup.html`
+
+
+
+Na pasta do worktree, com o Docker Desktop aberto:
+
+```bash
+docker compose -p moneyprintlayout restart
+```
+
+Isso só reinicia os containers, sem reconstruir a imagem. Serve para o caso de travamento, mas não pega mudanças de código.
+
+Se você mudou código (`gateway/` ou `shared/`), reconstrua:
+
+```bash
+docker compose -p moneyprintlayout up -d --build --wait
+```
+
+Para parar tudo e subir do zero:
+
+```bash
+docker compose -p moneyprintlayout down
+docker compose -p moneyprintlayout up -d --wait
+```
+
+O `-p moneyprintlayout` mantém o mesmo nome de projeto que já usei, para não criar containers duplicados. Se o Docker Desktop estiver fechado, abra-o primeiro. Depois acesse `http://localhost:3000`.
+
+Quer que eu reinicie agora?

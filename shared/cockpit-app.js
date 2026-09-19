@@ -597,6 +597,7 @@
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindConfigSettings(body, showToast);
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindYoutubeLibraryPublish(body, showToast);
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindAgents(body, showToast);
+    if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindAnalytics(body, showToast);
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindJobsWorkers(body, showToast);
 
     /* vídeos recentes: filtro por formato + modo de visualização + filtro avançado */

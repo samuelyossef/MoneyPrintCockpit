@@ -112,11 +112,11 @@ def initialize_database() -> None:
               channel_id TEXT PRIMARY KEY REFERENCES channels(id), enabled INTEGER NOT NULL DEFAULT 0, format TEXT NOT NULL DEFAULT 'short',
               cadence_hours INTEGER NOT NULL DEFAULT 24, next_run_at TEXT, last_run_at TEXT, last_error TEXT, updated_at TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS video_analytics (
-              publication_id TEXT PRIMARY KEY, captured_at TEXT NOT NULL, metrics_json TEXT NOT NULL, score INTEGER NOT NULL
-            );
             CREATE TABLE IF NOT EXISTS job_reviews (
               job_id TEXT PRIMARY KEY REFERENCES video_jobs(id), value_json TEXT NOT NULL, created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS video_analytics (
+              publication_id TEXT PRIMARY KEY, captured_at TEXT NOT NULL, metrics_json TEXT NOT NULL, score INTEGER NOT NULL
             );
             """
         )
@@ -146,23 +146,40 @@ def initialize_database() -> None:
                 "FROM video_jobs AS jobs JOIN channels ON channels.id = jobs.channel_id WHERE jobs.deleted_at IS NULL",
                 (now(), now()),
             )
-        existing = db.execute("SELECT 1 FROM settings WHERE key = 'generation-defaults'").fetchone()
+        existing = db.execute("SELECT value_json FROM settings WHERE key = 'generation-defaults'").fetchone()
         if not existing:
             db.execute(
                 "INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)",
                 ("generation-defaults", json.dumps(default_generation_settings()), now()),
             )
+        else:
+            # Backfill: instalações existentes ganham as chaves novas sem perder o que o usuário já salvou.
+            stored = json.loads(existing["value_json"])
+            missing = {key: value for key, value in default_generation_settings().items() if key not in stored}
+            if missing:
+                db.execute(
+                    "UPDATE settings SET value_json=?, updated_at=? WHERE key='generation-defaults'",
+                    (json.dumps({**stored, **missing}), now()),
+                )
 
 
 def default_generation_settings() -> dict[str, Any]:
+    """Base compartilhada (Configurações): equilíbrio entre velocidade e qualidade
+    com stock-only (Pexels/Pixabay/Coverr). Os presets por formato refinam por cima."""
     return {
         "video_language": "pt-BR",
         "video_aspect": "9:16",
         "video_source": "pexels",
         "voice_name": "pt-BR-FranciscaNeural",
+        "voice_rate": 1.0,
+        "voice_volume": 1.0,
+        "video_clip_speed": 1.0,
         "subtitle_enabled": True,
         "subtitle_provider": "edge",
+        "stroke_width": 1.5,
         "bgm_type": "",
+        "bgm_volume": 0.2,
+        "video_transition_mode": "",
         "video_count": 1,
         "video_clip_duration": 5,
         "video_concat_mode": "script",
@@ -175,9 +192,14 @@ def default_generation_settings() -> dict[str, Any]:
 
 # Locked values are applied last, so neither saved defaults nor a stray setting can turn a Short into 16:9.
 FORMAT_LOCKED: dict[str, dict[str, Any]] = {"long": {"video_aspect": "16:9", "video_count": 1}, "short": {"video_aspect": "9:16"}}
+# Presets "final" por formato: Short dinâmico (cortes de 4 s) e longo calmo (cortes de
+# 6 s), legenda legível em cada aspecto. Para rascunho rápido, escolha no Gerador
+# duração menor (Short 60 s) e clipe de 6 s, sem transição/BGM.
 FORMAT_PRESETS: dict[str, dict[str, Any]] = {
-    "long": {**FORMAT_LOCKED["long"], "video_clip_duration": 6, "subtitle_position": "bottom", "font_size": 48},
-    "short": {**FORMAT_LOCKED["short"], "video_clip_duration": 3, "paragraph_number": 5, "subtitle_position": "center", "font_size": 64},
+    "long": {**FORMAT_LOCKED["long"], "video_clip_duration": 6, "subtitle_position": "bottom", "font_size": 48,
+             "video_transition_mode": "", "bgm_type": "", "voice_rate": 1.0},
+    "short": {**FORMAT_LOCKED["short"], "video_clip_duration": 4, "paragraph_number": 5, "subtitle_position": "center", "font_size": 64,
+              "video_transition_mode": "", "bgm_type": "", "voice_rate": 1.0},
 }
 
 
@@ -448,6 +470,9 @@ def settings_key(format: str | None) -> str:
     return f"generation-defaults:{format}" if format else "generation-defaults"
 
 
+VIDEO_SOURCES = {"pexels", "pixabay", "coverr", "ai_images"}  # ai_images = NVIDIA FLUX, one image per narration chunk
+
+
 @app.get("/api/settings/generation-defaults")
 def generation_defaults(format: Literal["long", "short"] | None = None) -> dict[str, Any]:
     """Without format: the shared base edited in Configurações. With format: base, then that
@@ -457,6 +482,9 @@ def generation_defaults(format: Literal["long", "short"] | None = None) -> dict[
             "SELECT key, value_json FROM settings WHERE key IN (?, ?)", ("generation-defaults", settings_key(format))
         )}
     base = rows.get("generation-defaults", default_generation_settings())
+    if base.get("video_source") not in VIDEO_SOURCES:
+        # Um valor salvo que já não existe cai para o Pexels.
+        base = {**base, "video_source": "pexels"}
     if not format:
         return base
     return {**base, **FORMAT_PRESETS[format], **rows.get(settings_key(format), {}), **FORMAT_LOCKED[format]}
@@ -728,7 +756,8 @@ async def create_job(project_id: str, input: JobCreate) -> dict[str, Any]:
             script_response = await turbo_request("POST", "/api/v1/scripts", json={
                 "video_subject": input.subject, "video_language": merged.get("video_language", "pt-BR"),
                 "paragraph_number": merged.get("paragraph_number", 5),
-                "video_script_prompt": merged.get("video_script_prompt", ""), "custom_system_prompt": merged.get("custom_system_prompt", ""),
+                "video_script_prompt": short_script_prompt(str(merged.get("video_script_prompt", "")), int(merged.get("paragraph_number", 5) or 5)),
+                "custom_system_prompt": merged.get("custom_system_prompt", ""),
             })
             script_text = str((unwrap(script_response.json()) or {}).get("video_script", "")).strip()
     # The chosen duration wins over whatever was written, pasted or generated, in every mode: a
@@ -1073,11 +1102,25 @@ async def generate_metadata(job_id: str) -> dict[str, Any]:
 
 WORDS_PER_MINUTE = 150  # calibration knob: Edge TTS narrates ~150 words/min at voice rate 1.0
 SHORT_TARGET_SECONDS = {4: 60, 5: 75, 6: 90}  # mirrors the Shorts "Duração alvo" select in cockpit-views.js
+SHORT_MIN_SECONDS = 60  # below this a Short is "curto demais" (see the word-count hint in moneyprinter-runtime.js)
 
 
 def short_script_max_words(paragraph_number: int) -> int:
     seconds = SHORT_TARGET_SECONDS.get(paragraph_number, max(SHORT_TARGET_SECONDS.values()))
     return round(seconds * WORDS_PER_MINUTE / 60)
+
+
+def short_script_min_words() -> int:
+    return round(SHORT_MIN_SECONDS * WORDS_PER_MINUTE / 60)
+
+
+def short_script_prompt(script_prompt: str, paragraph_number: int) -> str:
+    """Word-range rule Turbo's writer must hit (60–90 s of narration). Rides along with any
+    custom requirements instead of replacing them."""
+    max_words, min_words = short_script_max_words(paragraph_number), short_script_min_words()
+    length_rule = f"O roteiro deve ter entre {min_words} e {max_words} palavras (narração de 60 a 90 segundos)."
+    custom = (script_prompt or "").strip()
+    return f"{custom}\n{length_rule}".strip() if custom else length_rule
 
 
 def trim_to_words(script: str, max_words: int) -> str:
@@ -1103,14 +1146,20 @@ class ShortScriptInput(BaseModel):
 
 @app.post("/api/scripts/short")
 async def short_script(input: ShortScriptInput) -> dict[str, Any]:
+    max_words, min_words = short_script_max_words(input.paragraph_number), short_script_min_words()
+    # Turbo's writer only gets paragraph_number, so it often undershoots (e.g. 139 words ≈ 56 s
+    # for a 60–90 s Short). State the word range explicitly in the prompt it already reads.
     response = await turbo_request("POST", "/api/v1/scripts", json={
         "video_subject": input.subject, "video_language": clean_language(input.language),
         "paragraph_number": input.paragraph_number,
-        "video_script_prompt": persona_prompt(input.persona, input.script_prompt), "custom_system_prompt": input.system_prompt,
+        "video_script_prompt": persona_prompt(input.persona, short_script_prompt(input.script_prompt, input.paragraph_number)),
+        "custom_system_prompt": input.system_prompt,
     })
     script = str((unwrap(response.json()) or {}).get("video_script", "")).strip()
-    trimmed = trim_to_words(script, short_script_max_words(input.paragraph_number))
-    return {"script": trimmed, "words": len(trimmed.split()), "trimmed": trimmed != script}
+    trimmed = trim_to_words(script, max_words)
+    words = len(trimmed.split())
+    return {"script": trimmed, "words": words, "trimmed": trimmed != script,
+            "too_short": words < min_words, "min_words": min_words}
 
 
 class LongScriptInput(BaseModel):
@@ -1977,8 +2026,8 @@ def cancel_schedule(job_id: str, channel_id: str | None = None) -> dict[str, Any
 logger = logging.getLogger("cockpit.agents")
 AGENT_LOOP_SECONDS = 60
 PROJECT_NAMES = {"long": "Vídeos longos", "short": "Shorts"}  # the same projects the Gerador and Shorts screens use
-REGION_BY_LANGUAGE = {"pt": "BR", "en": "US", "es": "ES"}
-VOICE_BY_LANGUAGE = {"pt": "pt-BR-FranciscaNeural", "en": "en-US-JennyNeural", "es": "es-ES-ElviraNeural"}
+REGION_BY_LANGUAGE = {"pt": "BR", "en": "US", "es": "ES", "de": "DE"}
+VOICE_BY_LANGUAGE = {"pt": "pt-BR-FranciscaNeural", "en": "en-US-JennyNeural", "es": "es-ES-ElviraNeural", "de": "de-DE-KatjaNeural"}
 OPERATOR_MINUTES = 8  # calibration knob: length of the long videos the operator writes
 ANALYTICS_METRICS = "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,likes,comments,subscribersGained"
 
@@ -2072,6 +2121,60 @@ PUBLISHED_YOUTUBE = (
     "LEFT JOIN job_metadata AS meta ON meta.job_id = jobs.id LEFT JOIN video_analytics AS stats ON stats.publication_id = p.id "
     "WHERE p.platform='youtube' AND p.state='published' AND p.channel_id IS NOT NULL AND jobs.deleted_at IS NULL"
 )
+
+
+@app.get("/api/analytics/overview")
+def analytics_platform_overview() -> dict[str, Any]:
+    """Operational numbers for the Analytics tab: only rows that exist in SQLite
+    plus YouTube Analytics snapshots. No estimates, no hardcoded totals."""
+    with database() as db:
+        channels = [row_as_channel(row) for row in db.execute("SELECT * FROM channels WHERE deleted_at IS NULL ORDER BY created_at DESC")]
+        job_counts = {row["state"]: row["n"] for row in db.execute("SELECT state, COUNT(*) AS n FROM video_jobs WHERE deleted_at IS NULL GROUP BY state")}
+        rows = db.execute(
+            "SELECT p.id, p.channel_id, channels.name AS channel_name, jobs.subject, json_extract(meta.value_json, '$.title') AS title, "
+            f"stats.metrics_json, stats.score, stats.captured_at {PUBLISHED_YOUTUBE} ORDER BY stats.score IS NULL, stats.score DESC"
+        ).fetchall()
+    videos: list[dict[str, Any]] = []
+    total_views = total_likes = total_comments = 0
+    retentions: list[float] = []
+    scores: list[float] = []
+    for row in rows:
+        metrics = json.loads(row["metrics_json"]) if row["metrics_json"] else None
+        videos.append({
+            "publication_id": row["id"], "channel_id": row["channel_id"], "channel_name": row["channel_name"],
+            "title": row["title"] or row["subject"], "metrics": metrics,
+            "score": row["score"], "captured_at": row["captured_at"],
+        })
+        if metrics:
+            total_views += int(metrics.get("views") or 0)
+            total_likes += int(metrics.get("likes") or 0)
+            total_comments += int(metrics.get("comments") or 0)
+            if metrics.get("averageViewPercentage") is not None:
+                retentions.append(float(metrics.get("averageViewPercentage") or 0))
+        if row["score"] is not None:
+            scores.append(float(row["score"]))
+    followers = sum(int((channel.get("stats") or {}).get("followers") or 0) for channel in channels)
+    return {
+        "channels": channels,
+        "jobs": {
+            "total": sum(job_counts.values()),
+            "completed": job_counts.get("completed", 0),
+            "active": job_counts.get("queued", 0) + job_counts.get("running", 0),
+            "failed": job_counts.get("failed", 0) + job_counts.get("interrupted", 0),
+            "by_state": job_counts,
+        },
+        "youtube": {
+            "videos_published": len(videos),
+            "videos_measured": sum(1 for video in videos if video["metrics"]),
+            "total_views": total_views,
+            "total_likes": total_likes,
+            "total_comments": total_comments,
+            "avg_retention": round(sum(retentions) / len(retentions), 1) if retentions else None,
+            "avg_score": round(sum(scores) / len(scores), 1) if scores else None,
+            "top": videos[:10],
+        },
+        "followers_total": followers,
+    }
 
 
 @app.get("/api/agents/analytics")
@@ -2351,6 +2454,14 @@ async def no_cache_for_static_app(request: Request, call_next):
 @app.get("/")
 def root() -> FileResponse:
     return FileResponse(STATIC_ROOT / "Cockpit.html")
+
+
+@app.get("/.image-slots.state.json")
+def image_slots_state() -> JSONResponse:
+    """The <image-slot> scaffold fetches this sidecar on every page load. Outside the
+    omelette runtime nothing ever writes it, so serve an empty store instead of 404ing
+    (the component treats both the same, but the 404 litters the browser console)."""
+    return JSONResponse({})
 
 
 app.mount("/", StaticFiles(directory=STATIC_ROOT, html=True), name="static")

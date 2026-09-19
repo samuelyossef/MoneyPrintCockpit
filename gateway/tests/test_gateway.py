@@ -27,6 +27,48 @@ class GatewayContractTests(unittest.TestCase):
         self.assertEqual(defaults["bgm_type"], "")
         self.assertTrue(defaults["subtitle_enabled"])
         self.assertEqual(defaults["subtitle_provider"], "edge")
+        # Equilíbrio velocidade/qualidade: sem transição, voz e clipe neutros.
+        self.assertEqual(defaults["video_transition_mode"], "")
+        self.assertEqual(defaults["voice_rate"], 1.0)
+        self.assertEqual(defaults["video_source"], "pexels")
+        self.assertEqual(defaults["video_concat_mode"], "script")
+
+    def test_format_presets_balance_speed_and_quality(self):
+        short = self.main.FORMAT_PRESETS["short"]
+        long = self.main.FORMAT_PRESETS["long"]
+        self.assertEqual((short["video_clip_duration"], short["subtitle_position"], short["font_size"]), (4, "center", 64))
+        self.assertEqual((long["video_clip_duration"], long["subtitle_position"], long["font_size"]), (6, "bottom", 48))
+        self.assertEqual(short["bgm_type"], "")
+        self.assertEqual(long["video_transition_mode"], "")
+
+    def test_german_language_has_voice_and_region(self):
+        self.assertEqual(self.main.VOICE_BY_LANGUAGE["de"], "de-DE-KatjaNeural")
+        self.assertEqual(self.main.REGION_BY_LANGUAGE["de"], "DE")
+
+    def test_analytics_platform_overview_aggregates_only_real_rows(self):
+        channel_id = self._channel()
+        with self.main.database() as db:
+            db.execute("UPDATE channels SET stats_json=? WHERE id=?", (json.dumps({"followers": 100, "videos": 3, "views": 1000}), channel_id))
+        self._completed_job(channel_id)
+        with self.main.database() as db:
+            db.execute("UPDATE publications SET state='published', external_id='vid-1' WHERE job_id='job-1'")
+            db.execute(
+                "INSERT INTO video_analytics(publication_id, captured_at, metrics_json, score) VALUES ('pub-ch-1', ?, ?, 80)",
+                (self.main.now(), json.dumps({"views": 200, "likes": 10, "comments": 2, "averageViewPercentage": 50})),
+            )
+        overview = self.main.analytics_platform_overview()
+        self.assertEqual(overview["jobs"]["total"], 1)
+        self.assertEqual(overview["jobs"]["completed"], 1)
+        self.assertEqual(overview["followers_total"], 100)
+        self.assertEqual(overview["youtube"]["total_views"], 200)
+        self.assertEqual(overview["youtube"]["videos_measured"], 1)
+        self.assertNotIn("revenue", overview)
+        self.assertNotIn("revenue", json.dumps(overview))
+
+    def test_analytics_platform_overview_empty_database_has_no_hardcoded_totals(self):
+        overview = self.main.analytics_platform_overview()
+        self.assertEqual((overview["jobs"]["total"], overview["followers_total"], overview["youtube"]["total_views"]), (0, 0, 0))
+        self.assertEqual((overview["channels"], overview["youtube"]["top"]), ([], []))
 
     def test_turbo_state_mapping_does_not_fake_completion(self):
         self.assertEqual(self.main.map_turbo_state({"state": "queued", "progress": 0})[0], "queued")
@@ -747,6 +789,30 @@ class GatewayContractTests(unittest.TestCase):
         with patch.object(self.main, "turbo_request", new=fake_turbo_short):
             short_result = asyncio.run(self.main.short_script(self.main.ShortScriptInput(subject="tema", paragraph_number=5)))
         self.assertFalse(short_result["trimmed"])
+
+    def test_short_script_sends_word_range_and_flags_a_short_result(self):
+        from unittest.mock import patch
+        in_range = " ".join(f"palavra{i}." for i in range(170))  # 75 s target: 150–188 words
+        too_short = " ".join(f"palavra{i}." for i in range(139))  # the reported case: ≈ 56 s
+        sent = {}
+
+        async def fake_turbo(method, path, **kwargs):
+            sent.update(kwargs["json"])
+            script = too_short if sent.get("video_script_prompt", "").startswith("tom leve") else in_range
+            return type("Response", (), {"json": lambda self: {"data": {"video_script": script}}})()
+
+        with patch.object(self.main, "turbo_request", new=fake_turbo):
+            ok = asyncio.run(self.main.short_script(self.main.ShortScriptInput(subject="tema", paragraph_number=5)))
+        self.assertIn(str(self.main.short_script_min_words()), sent["video_script_prompt"])
+        self.assertIn(str(self.main.short_script_max_words(5)), sent["video_script_prompt"])
+        self.assertFalse(ok["too_short"])
+
+        with patch.object(self.main, "turbo_request", new=fake_turbo):
+            short = asyncio.run(self.main.short_script(self.main.ShortScriptInput(subject="tema", paragraph_number=5, script_prompt="tom leve")))
+        self.assertTrue(short["too_short"])
+        self.assertEqual(short["min_words"], self.main.short_script_min_words())
+        self.assertIn("tom leve", sent["video_script_prompt"])  # custom requirements are kept
+        self.assertIn(str(self.main.short_script_min_words()), sent["video_script_prompt"])
 
     def test_create_job_trims_an_oversized_auto_generated_short_script(self):
         from unittest.mock import patch
