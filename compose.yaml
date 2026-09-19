@@ -25,8 +25,12 @@ services:
   moneyprinterturbo:
     image: ghcr.io/harry0703/moneyprinterturbo:v1.3.7@sha256:999fbf91934e763a6405b4aecce9a2acaa84c76d0dcae39cf2cf170e9d530889
     command: ["python3", "main.py"]
+    environment:
+      # sitecustomize.py here gives moviepy a faster x264 preset; see turbo/sitecustomize.py.
+      PYTHONPATH: /opt/turbo-patch
     volumes:
       - ./runtime/moneyprinter/config.toml:/MoneyPrinterTurbo/config.toml:ro
+      - ./turbo:/opt/turbo-patch:ro
       - moneyprinter-storage:/MoneyPrinterTurbo/storage
     depends_on:
       redis:
