@@ -34,3 +34,77 @@ else:
         return _write_videofile(self, *args, **kwargs)
 
     VideoClip.write_videofile = write_videofile
+
+
+# ── Parallel stock-footage search + first-round download ────────────────────────────────────
+# _download_videos_by_script_order searches Pexels one term at a time, then downloads one clip at
+# a time; measured on a 17-term Short that was 166 s of search (two 30 s read timeouts among
+# them) plus 347 s of download, all waiting on the network. The searches don't depend on each
+# other, and the loop's first pass always takes each term's first unclaimed candidate, so both
+# can run concurrently. The original function still decides everything; it just finds the answers
+# already cached.
+# ponytail: 4 workers matches the 4 vCPUs Docker sees; Pexels' hourly quota is unchanged (same
+# number of searches), raise it if the network, not the CPU, is what's slow.
+import importlib.abc
+import importlib.util
+import sys
+from concurrent.futures import ThreadPoolExecutor
+
+FETCH_WORKERS = int(os.getenv("TURBO_FETCH_WORKERS", "4"))
+
+
+def _patch_material(material):
+    original, save_video = material._download_videos_by_script_order, material.save_video
+    prefetched = {}
+
+    def cached_save_video(video_url, save_dir=""):
+        future = prefetched.pop(video_url, None)
+        return future.result() if future else save_video(video_url=video_url, save_dir=save_dir)
+
+    def ordered(task_id, search_terms, search_videos, video_aspect, audio_duration, max_clip_duration, material_directory):
+        def search(term):
+            return search_videos(search_term=term, minimum_duration=max_clip_duration, video_aspect=video_aspect)
+
+        with ThreadPoolExecutor(FETCH_WORKERS) as pool:
+            results = dict(zip(search_terms, pool.map(search, search_terms)))
+            # Mirrors the original's url de-dup: every url of a term is claimed, its first new one is downloaded first.
+            claimed = set()
+            for term in search_terms:
+                fresh = [item for item in results[term] if item.url not in claimed]
+                claimed.update(item.url for item in results[term])
+                if fresh:
+                    prefetched[fresh[0].url] = pool.submit(save_video, video_url=fresh[0].url, save_dir=material_directory)
+            material.save_video = cached_save_video
+            try:
+                return original(task_id, search_terms, lambda search_term, **_: results[search_term], video_aspect, audio_duration, max_clip_duration, material_directory)
+            finally:
+                material.save_video = save_video
+                for future in prefetched.values():  # downloaded but never needed (the loop stopped early)
+                    future.cancel()
+                prefetched.clear()
+
+    material._download_videos_by_script_order = ordered
+
+
+class _MaterialHook(importlib.abc.MetaPathFinder):
+    """Patches app.services.material right after Turbo imports it (it doesn't exist yet at startup)."""
+
+    def find_spec(self, name, path, target=None):
+        if name != "app.services.material":
+            return None
+        sys.meta_path.remove(self)
+        spec = importlib.util.find_spec(name)
+        exec_module = spec.loader.exec_module
+
+        def patched_exec(module):
+            exec_module(module)
+            try:
+                _patch_material(module)
+            except Exception:  # a Turbo upgrade that renames these must not break rendering
+                pass
+
+        spec.loader.exec_module = patched_exec
+        return spec
+
+
+sys.meta_path.insert(0, _MaterialHook())
