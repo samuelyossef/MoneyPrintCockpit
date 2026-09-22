@@ -3,4 +3,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
+# Local runtime configuration can contain provider credentials.
+.env
+
 yta/

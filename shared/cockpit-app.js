@@ -14,6 +14,7 @@
   // Referências aos módulos de dados (CK) e templates visuais (CKV)
   const D = window.CK, V = window.CKV;
   const LS = "lattice-cockpit-v1"; // Chave de persistência no localStorage
+  const safe = value => String(value == null ? "" : value).replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 
   /**
    * Mapeamento de todas as telas (Views) do painel
@@ -23,17 +24,17 @@
    * - render: Função de template em `cockpit-views.js` responsável pelo HTML
    */
   const VIEWS = {
-    overview:  { title: "Visão geral", sub: "Sexta, 4 de setembro · estado da plataforma em tempo real", render: V.overview },
+    overview:  { title: "Visão geral", sub: "Estado do MoneyPrinter em tempo real", render: V.overview },
     clientes:  { title: "Canais", sub: "Contas conectadas, plataformas e métricas de publicação", render: V.canais },
-    usuarios:  { title: "Usuários", sub: "Acesso, papéis e permissões em todas as organizações", render: V.usuarios },
     logs:      { title: "Logs e traces", sub: "Fluxo de eventos, erros e latência por requisição", render: V.logs },
     notificacoes: { title: "Notificações", sub: "Alertas de geração, provedores e sistema", render: V.notificacoes },
-    billing:   { title: "Receita", sub: "MRR, faturas e planos", render: V.billing },
     custos:    { title: "Analytics", sub: "Desempenho da plataforma e dos canais conectados", render: V.custosIA },
     config:    { title: "Configurações", sub: "Preferências da conta, notificações e integrações", render: V.configuracoes },
     gerador:   { title: "Gerador de Vídeo", sub: "Vídeos longos 16:9 para YouTube", render: V.gerador },
     youtube:   { title: "Shorts", sub: "Vídeos verticais para YouTube Shorts e TikTok", render: V.youtubeShorts },
     agentes:   { title: "Agentes", sub: "Estratégia, analytics, agendamento e operador automático", render: V.agentes },
+    assistant: { title: "Assistente", sub: "Use linguagem natural para trabalhar com o MoneyPrinter", render: V.assistantChat },
+    growth:    { title: "Growth OS", sub: "Metas YPP, oportunidade e planejamento durável", render: V.growth },
     jobsWorkers: { title: "Jobs e workers", sub: "Trabalhos na fila, em andamento ou com falha", render: V.jobsWorkers },
   };
 
@@ -43,10 +44,10 @@
         { v: "overview", label: "Visão geral", icon: "grid" },
         { v: "clientes", label: "Canais", icon: "spark", get count() { return D.CHANNELS.length ? String(D.CHANNELS.length) : ""; } },
       ]},
-      { section: "Pessoas", items: [
-        { v: "notificacoes", label: "Notificações", icon: "bell", count: "4" },
-      ]},
+      { section: "Sistema", items: [{ v: "notificacoes", label: "Notificações", icon: "bell", count: "" }]},
       { section: "Studio", items: [
+        { v: "assistant", label: "Assistente", icon: "spark" },
+        { v: "growth", label: "Growth OS", icon: "activity" },
         { v: "gerador", label: "Gerador de Vídeo", icon: "spark" },
         { v: "youtube", label: "Shorts", icon: "yt" },
         { v: "agentes", label: "Agentes", icon: "spark" },
@@ -56,24 +57,7 @@
         { v: "logs", label: "Logs e traces", icon: "logs" },
         { v: "jobsWorkers", label: "Jobs e workers", icon: "activity", get count() { return D.PENDING_JOBS && D.PENDING_JOBS.length ? String(D.PENDING_JOBS.length) : ""; } },
       ]},
-      { section: "Conta", items: [
-        { v: "soon:Integrações", label: "Integrações", icon: "grid" },
-        { v: "config", label: "Configurações", icon: "settings" },
-      ]},
-    ],
-    org: [
-      { section: "Workspace", items: [
-        { v: "overview", label: "Visão geral", icon: "grid" },
-        { v: "soon:Projetos", label: "Projetos", icon: "building", count: "18" },
-        { v: "soon:Uso", label: "Uso", icon: "activity" },
-      ]},
-      { section: "Pessoas", items: [
-        { v: "notificacoes", label: "Notificações", icon: "bell", count: "4" },
-      ]},
-      { section: "Conta", items: [
-        { v: "logs", label: "Logs", icon: "logs" },
-        { v: "config", label: "Configurações", icon: "settings" },
-      ]},
+      { section: "Conta", items: [{ v: "config", label: "Configurações", icon: "settings" }]},
     ],
   };
 
@@ -93,6 +77,7 @@
     search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/>',
     moon: '<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/>',
+    logout: '<path d="M10 17l5-5-5-5"/><path d="M15 12H3"/><path d="M21 19V5a2 2 0 0 0-2-2h-6"/>',
   };
   const ic = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[n] || ""}</svg>`;
 
@@ -110,7 +95,9 @@
   /* ── sidebar ────────────────────────────────── */
   function renderSidebar() {
     const groups = NAV[S.persona];
-    const who = S.persona === "super" ? ["Avery Chen", "Super Admin · Plataforma", "AC"] : ["Samuel Yossef", "Org Admin · Copyxyz", "SY"];
+    const admin = D.__admin || {};
+    const initials = String(admin.name || "Admin").split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase();
+    const who = [admin.name || "Administrador local", admin.email || "Sessão local", initials || "AD"];
     document.getElementById("sidebar-root").innerHTML = `
       <div class="sb-brand"><span class="brand-label"></span>
         <button class="icon-btn sb-collapse" id="sbCollapse" aria-label="Recolher menu">
@@ -125,33 +112,25 @@
             </button>`).join("")}</div>`).join("")}
         </div>
       </div>
-      <div class="sb-foot"><span class="avatar">${who[2]}</span>
-        <div class="sb-label"><div class="who">${who[0]}</div><div class="plan">${who[1]}</div></div></div>`;
+      <div class="sb-foot"><span class="avatar">${safe(who[2])}</span>
+        <div class="sb-label"><div class="who">${safe(who[0])}</div><div class="plan">${safe(who[1])}</div></div>
+        <button class="sb-logout" id="logoutBtn" type="button" title="Sair da sessão" aria-label="Sair da sessão">${ic("logout")}<span class="sb-label">Sair</span></button></div>`;
   }
 
   /* ── topbar ─────────────────────────────────── */
   function renderTopbar() {
-    const org = D.ORGS.find(o => o.id === S.org);
+    const status = D.__status || {};
+    const active = status.active_job;
+    const llm = [status.llm_provider, status.llm_model].filter(Boolean).join(" · ") || "não configurado";
+    const task = active ? `${active.subject} · ${active.progress || 0}%${active.state === "running" ? " · gerando" : " · na fila"}` : "Sem tarefa ativa";
     document.getElementById("topbar-root").innerHTML = `
       <button class="icon-btn menu-toggle" id="menuToggle" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
-      <div class="ctx" hidden>
-        <button class="ctx-btn" data-pop="orgPop"><span class="org-dot" style="background:${org.color}">${org.short}</span>${org.id === "all" ? "Todas as orgs" : org.name}${ic("chev")}</button>
-        <div class="pop" id="orgPop"><div class="pop-label">Organização</div>
-          ${D.ORGS.map(o => `<button class="pop-item ${o.id === S.org ? "is-on" : ""}" data-set="org" data-val="${o.id}">
-            <span class="org-dot" style="background:${o.color}">${o.short}</span>
-            <span>${o.id === "all" ? "Todas as organizações" : o.name}<div class="sub">${o.plan}</div></span><span class="tick">✓</span></button>`).join("")}</div>
-      </div>
-      <span class="ctx-sep" hidden>/</span>
-      <div class="ctx" hidden>
-        <button class="ctx-btn" data-pop="wsPop">${S.ws}${ic("chev")}</button>
-        <div class="pop" id="wsPop"><div class="pop-label">Workspace</div>
-          ${D.WORKSPACES.map(w => `<button class="pop-item ${w === S.ws ? "is-on" : ""}" data-set="ws" data-val="${w}">${w}<span class="tick">✓</span></button>`).join("")}</div>
-      </div>
       <div class="top-right">
-        <span class="top-pill"><span class="dot"></span> ${S.env.toLowerCase()}</span>
-        ${D.__health ? `<span class="top-pill"><span class="dot" style="background:${D.__health.status === "ok" ? "var(--ok)" : D.__health.status === "degraded" ? "var(--warn)" : "var(--err)"}"></span> Gateway: ${D.__health.status === "ok" ? "online" : D.__health.status === "degraded" ? "parcial" : "offline"}</span>` : ""}
-        <span class="top-pill">LLM: <b style="font-weight:600">Claude Sonnet 4</b></span>
-        <span class="top-pill"><span class="dot" style="background:var(--ok)"></span> Tarefa: Concluída</span>
+        <span class="top-pill"><span class="dot"></span> ${safe((status.environment || "local").toLowerCase())}</span>
+        <span class="top-pill"><span class="dot" style="background:${status.turbo === "online" ? "var(--ok)" : "var(--warn)"}"></span> Gateway: ${safe(status.gateway || "verificando")}</span>
+        <span class="top-pill">LLM: <b style="font-weight:600">${safe(llm)}</b></span>
+        <span class="top-pill"><span class="dot" style="background:${active ? "var(--warn)" : "var(--ok)"}"></span> ${safe(task)}</span>
+        <button class="icon-btn assistant-panel-toggle" id="assistantPanelToggle" type="button" aria-label="Abrir chat do assistente" aria-expanded="false" title="Abrir chat do assistente">${ic("spark")}<span>Chat</span></button>
         <button class="icon-btn" id="themeBtn" aria-label="Alternar tema">${ic(S.theme === "dark" ? "sun" : "moon")}</button>
         <div class="ctx">
           <button class="icon-btn" data-pop="notifPop" aria-label="Notificações">${ic("bell")}</button>
@@ -257,10 +236,17 @@
       document.documentElement.setAttribute("data-theme", S.theme);
       save(); renderTopbar(); bindTopbar(); return;
     }
+    if (t.closest("#logoutBtn")) {
+      e.preventDefault();
+      window.MoneyPrinterRuntime.logout().catch(() => showToast("Não foi possível encerrar a sessão."));
+      return;
+    }
     if (t.closest("#sbCollapse")) { document.body.classList.toggle("sidebar-collapsed"); return; }
     if (t.closest("#menuToggle")) { document.body.classList.toggle("sidebar-open"); return; }
     if (t.closest(".sb-backdrop")) { document.body.classList.remove("sidebar-open"); return; }
     if (t.closest(".dr-backdrop") || t.closest("#drClose")) { closeDrawer(); return; }
+    if (t.closest("#assistantPanelToggle")) { setAssistantPanelOpen(!document.body.classList.contains("assistant-panel-open")); return; }
+    if (t.closest("#assistantPanelClose") || t.closest("#assistantPanelBackdrop")) { setAssistantPanelOpen(false); return; }
     if (t.closest("#newOrgBtn")) { draft = V.newOrgRec(); S.orgTab = "dados"; go("orgnew"); return; }
     if (t.closest("#newChBtn")) { draftCh = V.newCanalRec(); S.chTab = "dados"; go("canalnovo"); return; }
     const oo = t.closest("[data-open-org]");
@@ -330,6 +316,7 @@
 
   /* ── drawer ─────────────────────────────────── */
   function openDrawer(cfg) {
+    setAssistantPanelOpen(false);
     document.getElementById("drHead").innerHTML =
       `<div style="flex:1;min-width:0"><div class="dr-title">${cfg.title}</div><div class="dr-sub">${cfg.sub}</div></div>
        <button class="icon-btn" id="drClose" aria-label="Fechar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>`;
@@ -338,6 +325,21 @@
     document.body.classList.add("drawer-open");
   }
   function closeDrawer() { document.body.classList.remove("drawer-open"); }
+
+  function setAssistantPanelOpen(open) {
+    document.body.classList.toggle("assistant-panel-open", open);
+    const panel = document.getElementById("assistantPanel");
+    const backdrop = document.getElementById("assistantPanelBackdrop");
+    const toggle = document.getElementById("assistantPanelToggle");
+    if (panel) panel.setAttribute("aria-hidden", String(!open));
+    if (backdrop) backdrop.setAttribute("aria-hidden", String(!open));
+    if (toggle) { toggle.setAttribute("aria-expanded", String(open)); toggle.setAttribute("aria-label", open ? "Fechar chat do assistente" : "Abrir chat do assistente"); toggle.title = open ? "Fechar chat do assistente" : "Abrir chat do assistente"; }
+    if (open) {
+      closeDrawer();
+      window.setTimeout(() => document.getElementById("sideAssistantInput")?.focus(), 220);
+    }
+  }
+  document.addEventListener("keydown", event => { if (event.key === "Escape" && document.body.classList.contains("assistant-panel-open")) setAssistantPanelOpen(false); });
 
   /* ── organização: página, edição e criação ──── */
   let draft = null, orgSnapshot = null, draftCh = null, chSnapshot = null;
@@ -358,19 +360,31 @@
       const f = el.dataset.cfield;
       rec[f] = el.type === "checkbox" ? (el.checked ? 1 : 0) : el.value.trim();
     });
+    document.querySelectorAll("#viewBody [data-vfield]").forEach(el => {
+      const [format, field] = el.dataset.vfield.split(".");
+      rec.video_defaults = rec.video_defaults || {};
+      rec.video_defaults[format] = rec.video_defaults[format] || {};
+      rec.video_defaults[format][field] = el.value.trim();
+    });
   }
   function currentChannel() {
     if (S.view === "canalnovo") return draftCh;
     if (S.view === "canal" && S.chEditing) return V.canalRec(S.channelId);
     return null;
   }
-  function snapshotChannel() { chSnapshot = Object.assign({}, V.canalRec(S.channelId)); }
-  function restoreChannel() { const r = V.canalRec(S.channelId); if (r && chSnapshot) Object.assign(r, chSnapshot); }
+  function snapshotChannel() { chSnapshot = JSON.parse(JSON.stringify(V.canalRec(S.channelId))); }
+  function restoreChannel() { const r = V.canalRec(S.channelId); if (r && chSnapshot) Object.assign(r, JSON.parse(JSON.stringify(chSnapshot))); }
   function saveChannel() {
     const rec = V.canalRec(S.channelId);
     if (!rec) return;
     collectChannel(rec);
-    window.MoneyPrinterRuntime.saveChannel(rec.id, { niche: rec.niche, language: rec.language })
+    window.MoneyPrinterRuntime.saveChannel(rec.id, {
+      niche: rec.niche, language: rec.language, system_prompt: rec.system_prompt || "",
+      voice_name: rec.voice_name, voice_rate: Number(rec.voice_rate), voice_volume: Number(rec.voice_volume),
+      subtitle_enabled: !!rec.subtitle_enabled, subtitle_position: rec.subtitle_position,
+      font_size: Number(rec.font_size), text_fore_color: rec.text_fore_color, stroke_color: rec.stroke_color,
+      stroke_width: Number(rec.stroke_width), video_defaults: rec.video_defaults,
+    })
       .then(() => { S.chEditing = 0; save(); renderView(); showToast("Canal salvo"); })
       .catch(error => showToast(error.message));
   }
@@ -503,7 +517,9 @@
   function showToast(msg) {
     const wrap = document.getElementById("toasts");
     const el = document.createElement("div");
-    el.className = "toast"; el.innerHTML = `<span class="t-dot"></span>${msg}`;
+    el.className = "toast";
+    const dot = document.createElement("span"); dot.className = "t-dot";
+    el.append(dot, document.createTextNode(String(msg || "")));
     wrap.appendChild(el);
     setTimeout(() => { el.style.transition = "opacity .2s"; el.style.opacity = "0"; setTimeout(() => el.remove(), 220); }, 2600);
   }
@@ -513,25 +529,27 @@
   function bindTopbar() {
     const q = document.getElementById("gq"), res = document.getElementById("gres");
     if (!q) return;
-    const run = () => {
+    const run = async () => {
       const s = q.value.trim().toLowerCase();
       if (!s) { hideRes(); return; }
-      const users = D.USERS.filter(u => (u.name + u.email + u.role).toLowerCase().includes(s)).slice(0, 4);
-      const orgs = D.ORGS.filter(o => o.id !== "all" && o.name.toLowerCase().includes(s)).slice(0, 3);
-      const invs = D.INVOICES.filter(i => (i.id + i.org).toLowerCase().includes(s)).slice(0, 3);
-      const logs = D.LOGS.filter(l => (l.msg + l.svc + l.trace).toLowerCase().includes(s)).slice(0, 4);
-      let html = "";
-      if (users.length) html += `<div class="gres-group">Usuários</div>` + users.map(u =>
-        `<div class="gres-item" data-search-user="${u.email}"><span class="u-avatar" style="width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:10px;font-weight:600;color:#fff;background:${u.color}">${u.name.split(" ").map(w => w[0]).slice(0, 2).join("")}</span>
-          <span><span class="gr-name">${u.name}</span><div class="gr-sub">${u.email} · ${u.org}</div></span><span class="gr-kind">usuário</span></div>`).join("");
-      if (orgs.length) html += `<div class="gres-group">Organizações</div>` + orgs.map(o =>
-        `<div class="gres-item" data-search-org="${o.name}"><span class="org-dot" style="background:${o.color}">${o.short}</span>
-          <span><span class="gr-name">${o.name}</span><div class="gr-sub">${o.plan}</div></span><span class="gr-kind">org</span></div>`).join("");
-      if (invs.length) html += `<div class="gres-group">Faturas</div>` + invs.map(i =>
-        `<div class="gres-item" data-goto="billing"><span><span class="gr-name">${i.id}</span><div class="gr-sub">${i.org} · ${i.amount}</div></span><span class="gr-kind">fatura</span></div>`).join("");
-      if (logs.length) html += `<div class="gres-group">Logs</div>` + logs.map(l =>
-        `<div class="gres-item" data-goto="logs"><span><span class="gr-name">${l.msg}</span><div class="gr-sub">${l.svc} · ${l.trace}</div></span><span class="gr-kind">${l.lvl.toLowerCase()}</span></div>`).join("");
-      res.innerHTML = html || `<div class="gres-empty">Nada encontrado para “${q.value}”</div>`;
+      let projects = [], channels = [], notifications = [], jobs = [];
+      try {
+        [projects, channels, { items: notifications = [] }] = await Promise.all([
+          window.MoneyPrinterRuntime.request("/projects"), window.MoneyPrinterRuntime.request("/channels"), window.MoneyPrinterRuntime.request("/notifications")
+        ]);
+        jobs = (await Promise.all(projects.map(project => window.MoneyPrinterRuntime.request(`/projects/${project.id}/jobs`).catch(() => [])))).flat();
+      } catch (_) { return; }
+      if (q.value.trim().toLowerCase() !== s) return;
+      const hits = (items, text) => items.filter(item => text(item).toLowerCase().includes(s)).slice(0, 5);
+      const projectHits = hits(projects, p => `${p.name} ${p.niche}`), channelHits = hits(channels, c => `${c.name} ${c.handle}`);
+      const jobHits = hits(jobs, j => `${j.subject} ${j.state}`), noticeHits = hits(notifications, n => `${n.title} ${n.detail}`);
+      const render = (label, items, kind, text, view) => items.length ? `<div class="gres-group">${label}</div>${items.map(item => `<button type="button" class="gres-item" data-goto="${view}"><span><span class="gr-name">${safe(text(item)[0])}</span><div class="gr-sub">${safe(text(item)[1])}</div></span><span class="gr-kind">${kind}</span></button>`).join("")}` : "";
+      let html = render("Projetos", projectHits, "projeto", p => [p.name, p.niche || "Projeto"], "gerador");
+      html += render("Canais", channelHits, "canal", c => [c.name, c.handle || c.platform], "clientes");
+      html += render("Jobs", jobHits, "job", j => [j.subject, `${j.state} · ${j.progress || 0}%`], "jobsWorkers");
+      html += render("Notificações", noticeHits, "alerta", n => [n.title, n.detail], "notificacoes");
+      if (html) res.innerHTML = html;
+      else { const empty = document.createElement("div"); empty.className = "gres-empty"; empty.textContent = `Nada encontrado para “${q.value}”`; res.replaceChildren(empty); }
       res.classList.add("is-open");
     };
     q.addEventListener("input", run);
@@ -548,6 +566,41 @@
   /* ── comportamentos por view ────────────────── */
   function afterRender() {
     const body = document.getElementById("viewBody");
+    const channelLanguage = body.querySelector('[data-cfield="language"]');
+    const channelVoice = body.querySelector('[data-cfield="voice_name"]');
+    const syncChannelVoices = () => {
+      if (!channelLanguage || !channelVoice) return;
+      const prefix = `${channelLanguage.value.split("-")[0]}-`;
+      [...channelVoice.options].forEach(option => { option.hidden = !option.value.startsWith(prefix); });
+      if (!channelVoice.value.startsWith(prefix)) channelVoice.value = [...channelVoice.options].find(option => option.value.startsWith(prefix))?.value || "";
+    };
+    if (channelLanguage && channelVoice) {
+      syncChannelVoices();
+      channelLanguage.addEventListener("change", syncChannelVoices);
+    }
+    const channelVideoTabs = body.querySelector("[data-channel-video-tabs]");
+    if (channelVideoTabs) {
+      channelVideoTabs.addEventListener("click", event => {
+        const tab = event.target.closest("[data-channel-video-tab]");
+        if (!tab) return;
+        channelVideoTabs.querySelectorAll("[data-channel-video-tab]").forEach(item => item.classList.toggle("is-active", item === tab));
+        body.querySelectorAll("[data-channel-video-pane]").forEach(pane => { pane.hidden = pane.dataset.channelVideoPane !== tab.dataset.channelVideoTab; });
+      });
+    }
+    const channelPlatform = body.querySelector('[data-cfield="platform"]');
+    const syncChannelVideoFormats = () => {
+      if (!channelPlatform) return;
+      const isTikTok = channelPlatform.value === "TikTok";
+      body.querySelectorAll('[data-channel-video-tab="long"], [data-channel-video-pane="long"]').forEach(element => { element.hidden = isTikTok; });
+      if (isTikTok) {
+        const shortTab = body.querySelector('[data-channel-video-tab="short"]');
+        if (shortTab) shortTab.click();
+      }
+    };
+    if (channelPlatform) {
+      syncChannelVideoFormats();
+      channelPlatform.addEventListener("change", syncChannelVideoFormats);
+    }
     body.querySelectorAll("[data-ws-env]").forEach(s => s.addEventListener("change", () => {
       const r = V.orgRec(S.orgName), i = +s.dataset.wsEnv;
       r.workspaces[i].env = s.value; logAudit(r, `alterou o ambiente de ${r.workspaces[i].name} para ${s.value}`);
@@ -597,7 +650,11 @@
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindConfigSettings(body, showToast);
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindYoutubeLibraryPublish(body, showToast);
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindAgents(body, showToast);
+    if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindAssistantChat(body);
+    if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindGrowth(body, showToast);
+    if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindAnalytics(body, showToast);
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindJobsWorkers(body, showToast);
+    if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindLogs(body, showToast, log => openDrawer(V.logDrawer(log)));
 
     /* vídeos recentes: filtro por formato + modo de visualização + filtro avançado */
     const vidTabs = body.querySelector("#vidTabs"), vidView = body.querySelector("#vidView");
@@ -721,34 +778,25 @@
       });
     }
 
-    /* logs: filtros e drawer */
-    const logBody = body.querySelector("#logBody");
-    if (logBody) {
-      const q = body.querySelector("#lSearch"), lv = body.querySelector("#lLevel"), sv = body.querySelector("#lSvc");
-      const apply = () => {
-        const s = (q.value || "").toLowerCase();
-        const rows = D.LOGS.filter(l =>
-          (!s || (l.msg + l.svc + l.trace + l.org).toLowerCase().includes(s)) &&
-          (lv.value.startsWith("Todos") || l.lvl === lv.value) &&
-          (sv.value.startsWith("Todos") || l.svc === sv.value));
-        logBody.innerHTML = V.logRows(rows);
-        logBody.dataset.map = rows.map(r => D.LOGS.indexOf(r)).join(",");
-        body.querySelector("#lCount").textContent = rows.length + (rows.length === 1 ? " linha" : " linhas");
-      };
-      [q, lv, sv].forEach(el => el.addEventListener("input", apply));
-      logBody.addEventListener("click", e => {
-        const r = e.target.closest("[data-log]"); if (!r) return;
-        const map = logBody.dataset.map ? logBody.dataset.map.split(",").map(Number) : null;
-        const idx = map ? map[+r.dataset.log] : +r.dataset.log;
-        openDrawer(V.logDrawer(D.LOGS[idx]));
-      });
-    }
-
     /* clientes: drawer por organização */
     const orgRows = body.querySelectorAll("[data-org-row]");
     orgRows.forEach(tr => tr.addEventListener("click", () => openOrgPage(tr.dataset.orgRow)));
   }
 
   /* ── boot ───────────────────────────────────── */
-  renderSidebar(); renderTopbar(); bindTopbar(); renderView();
+  (async () => {
+    try {
+      await window.MoneyPrinterRuntime.establishSession();
+      D.__status = await window.MoneyPrinterRuntime.request("/status");
+    } catch (_) {
+      window.location.replace("/Login.html");
+      return;
+    }
+    renderSidebar(); renderTopbar(); bindTopbar(); renderView();
+    const assistantPanelContent = document.getElementById("assistantPanelContent");
+    if (assistantPanelContent) {
+      assistantPanelContent.innerHTML = V.assistantChat("sideAssistant");
+      window.MoneyPrinterRuntime.bindAssistantChat(assistantPanelContent, "sideAssistant");
+    }
+  })();
 })();

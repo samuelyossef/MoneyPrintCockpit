@@ -6,7 +6,21 @@ services:
     environment:
       APP_DATA_DIR: /runtime
       TURBO_BASE_URL: http://moneyprinterturbo:8080
+      GROWTH_DATABASE_URL: postgresql://${GROWTH_POSTGRES_USER:-moneyprinter}:${GROWTH_POSTGRES_PASSWORD:-moneyprinter-local}@postgresql:5432/${GROWTH_POSTGRES_DB:-moneyprinter}
+      TEMPORAL_ADDRESS: temporal:7233
+      GROWTH_TASK_QUEUE: ${GROWTH_TASK_QUEUE:-growth-intelligence}
+      OBJECT_STORAGE_ENDPOINT: minio:9000
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-moneyprinter-media}
+      OBJECT_STORAGE_SECURE: "0"
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-moneyprinter}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-moneyprinter-local-storage}
       MPT_API_KEY_FILE: /run/secrets/mpt_api_key
+      COCKPIT_ADMIN_FILE: /runtime/secrets/admin.json
+      APP_ENV: ${APP_ENV:-local}
+      ENABLE_API_DOCS: ${ENABLE_API_DOCS:-0}
+      SHORT_STALE_MINUTES: ${SHORT_STALE_MINUTES:-45}
+      LONG_STALE_MINUTES: ${LONG_STALE_MINUTES:-180}
+      QUEUE_STALE_MINUTES: ${QUEUE_STALE_MINUTES:-360}
     volumes:
       - ./runtime:/runtime
     secrets:
@@ -16,15 +30,28 @@ services:
     depends_on:
       moneyprinterturbo:
         condition: service_healthy
+      postgresql:
+        condition: service_healthy
+      minio:
+        condition: service_started
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/api/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/api/health/ready')"]
       interval: 15s
       timeout: 5s
       retries: 5
 
   moneyprinterturbo:
-    image: ghcr.io/harry0703/moneyprinterturbo:v1.3.7@sha256:999fbf91934e763a6405b4aecce9a2acaa84c76d0dcae39cf2cf170e9d530889
+    build:
+      context: ./turbo-accelerator
+      dockerfile: Dockerfile
+    image: moneyprintlayout-moneyprinterturbo-accelerated:local
     command: ["python3", "main.py"]
+    environment:
+      MATERIAL_PROVIDER_ORDER: ${MATERIAL_PROVIDER_ORDER:-pexels,pixabay,coverr}
+      MATERIAL_SEARCH_CONCURRENCY: ${MATERIAL_SEARCH_CONCURRENCY:-4}
+      MATERIAL_DOWNLOAD_CONCURRENCY: ${MATERIAL_DOWNLOAD_CONCURRENCY:-3}
+      MATERIAL_CACHE_MAX_BYTES: ${MATERIAL_CACHE_MAX_BYTES:-10737418240}
+      MATERIAL_CACHE_TTL_HOURS: ${MATERIAL_CACHE_TTL_HOURS:-336}
     volumes:
       - ./runtime/moneyprinter/config.toml:/MoneyPrinterTurbo/config.toml:ro
       - moneyprinter-storage:/MoneyPrinterTurbo/storage
@@ -48,6 +75,81 @@ services:
       timeout: 3s
       retries: 5
 
+  postgresql:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${GROWTH_POSTGRES_USER:-moneyprinter}
+      POSTGRES_PASSWORD: ${GROWTH_POSTGRES_PASSWORD:-moneyprinter-local}
+      POSTGRES_DB: ${GROWTH_POSTGRES_DB:-moneyprinter}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - growth-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${GROWTH_POSTGRES_USER:-moneyprinter} -d ${GROWTH_POSTGRES_DB:-moneyprinter}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  temporal:
+    image: temporalio/auto-setup:1.29.1
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: ${GROWTH_POSTGRES_USER:-moneyprinter}
+      POSTGRES_PWD: ${GROWTH_POSTGRES_PASSWORD:-moneyprinter-local}
+      POSTGRES_SEEDS: postgresql
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CLI_ADDRESS: temporal:7233
+    ports:
+      - "127.0.0.1:7233:7233"
+    depends_on:
+      postgresql:
+        condition: service_healthy
+
+  growth-worker:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    command: ["python", "-m", "gateway.growth.worker"]
+    environment:
+      GROWTH_DATABASE_URL: postgresql://${GROWTH_POSTGRES_USER:-moneyprinter}:${GROWTH_POSTGRES_PASSWORD:-moneyprinter-local}@postgresql:5432/${GROWTH_POSTGRES_DB:-moneyprinter}
+      TEMPORAL_ADDRESS: temporal:7233
+      GROWTH_TASK_QUEUE: ${GROWTH_TASK_QUEUE:-growth-intelligence}
+    depends_on:
+      temporal:
+        condition: service_started
+      postgresql:
+        condition: service_healthy
+    restart: unless-stopped
+
+  growth-outbox:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    command: ["python", "-m", "gateway.growth.outbox_worker"]
+    environment:
+      GROWTH_DATABASE_URL: postgresql://${GROWTH_POSTGRES_USER:-moneyprinter}:${GROWTH_POSTGRES_PASSWORD:-moneyprinter-local}@postgresql:5432/${GROWTH_POSTGRES_DB:-moneyprinter}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  minio:
+    image: quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-moneyprinter}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-moneyprinter-local-storage}
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - growth-object-storage:/data
+
 secrets:
   mpt_api_key:
     file: ./runtime/secrets/mpt_api_key.txt
@@ -55,3 +157,5 @@ secrets:
 volumes:
   moneyprinter-storage:
   redis-data:
+  growth-postgres-data:
+  growth-object-storage:

@@ -376,3 +376,97 @@ body.modal-open .modal { transform: none; opacity: 1; }
   .log-row { grid-template-columns: 62px 54px 1fr; }
   .log-row .log-svc { display: none; }
 }
+
+/* The channel profile is a full-width card on the account page.  Keep two
+   readable columns there even when the generic dashboard grids stack. */
+.channel-profile-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.channel-profile-grid > div > .dr-sec { display: block; }
+.channel-profile-value { min-height: 20px; color: var(--ink-2); overflow-wrap: anywhere; }
+@media (max-width: 640px) { .channel-profile-grid { grid-template-columns: 1fr; } }
+
+
+/* ── Assistente conversacional ───────────────── */
+.assistant-chat-shell {
+  display: flex; flex-direction: column; height: min(72vh, 820px); min-height: 470px;
+  margin-top: 16px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--r-lg);
+  background: var(--surface);
+}
+.assistant-chat-intro {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 17px 20px; border-bottom: 1px solid var(--border);
+}
+.assistant-chat-feed {
+  display: flex; flex: 1; flex-direction: column; gap: 16px; overflow-y: auto;
+  padding: 22px max(20px, calc((100% - 800px) / 2));
+}
+.assistant-chat-welcome { display: flex; align-items: flex-start; gap: 12px; max-width: 720px; color: var(--ink-2); }
+.assistant-chat-welcome p { margin: 6px 0 0; line-height: 1.6; }
+.assistant-avatar {
+  display: grid; flex: 0 0 34px; width: 34px; height: 34px; place-items: center;
+  border-radius: 50%; background: var(--accent-soft); color: var(--accent-ink); font-size: 11px; font-weight: 700;
+}
+.assistant-chat-row { display: flex; width: 100%; }
+.assistant-chat-row.is-user { justify-content: flex-end; }
+.assistant-chat-bubble {
+  max-width: min(82%, 760px); padding: 12px 15px; border: 1px solid var(--border);
+  border-radius: 14px; background: var(--rail-2); color: var(--ink); font-size: 13.5px;
+  line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.assistant-chat-row.is-user .assistant-chat-bubble {
+  border-color: color-mix(in oklab, var(--accent) 28%, var(--border)); background: var(--accent-soft);
+}
+.assistant-chat-compose {
+  display: flex; flex-direction: column; gap: 11px; padding: 14px 20px 16px;
+  border-top: 1px solid var(--border); background: var(--surface);
+}
+.assistant-chat-suggestions { display: flex; flex-wrap: wrap; gap: 7px; }
+.assistant-chat-channel { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+.assistant-chat-channel .set-select { width: auto; min-width: 220px; max-width: 100%; }
+.assistant-chat-form { display: flex; align-items: flex-end; gap: 10px; }
+.assistant-chat-form textarea {
+  flex: 1; min-height: 48px; max-height: 180px; resize: vertical; padding: 12px 14px;
+  border: 1px solid var(--border-strong); border-radius: 11px; background: var(--bg);
+  color: var(--ink); font: inherit; font-size: 13.5px; line-height: 1.45;
+}
+.assistant-chat-form textarea:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.assistant-chat-form .btn { min-height: 44px; }
+.assistant-chat-footnote { color: var(--muted); font-size: 11.5px; }
+.assistant-panel-backdrop {
+  position: fixed; inset: 0; z-index: 120; background: rgb(10 16 25 / 36%);
+  opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .22s ease, visibility .22s ease;
+}
+body.assistant-panel-open .assistant-panel-backdrop { opacity: 1; visibility: visible; pointer-events: auto; }
+.assistant-panel {
+  position: fixed; inset: 0 0 0 auto; z-index: 130; display: flex; flex-direction: column;
+  width: min(460px, 94vw); background: var(--surface); border-left: 1px solid var(--border);
+  box-shadow: -18px 0 52px rgb(10 16 25 / 18%); transform: translateX(102%); visibility: hidden;
+  transition: transform .24s ease, visibility .24s ease;
+}
+body.assistant-panel-open .assistant-panel { transform: translateX(0); visibility: visible; }
+.assistant-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 17px; border-bottom: 1px solid var(--border); }
+.assistant-panel-heading { display: flex; align-items: center; gap: 10px; min-width: 0; color: var(--ink); }
+.assistant-panel-caption { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.assistant-panel-content { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
+.assistant-panel-content .assistant-chat-shell { height: 100%; min-height: 0; margin: 0; border: 0; border-radius: 0; }
+.assistant-panel-content .assistant-chat-intro { padding: 13px 16px; }
+.assistant-panel-content .assistant-chat-intro .card-title { font-size: 14px; }
+.assistant-panel-content .assistant-chat-intro .card-note { font-size: 11px; }
+.assistant-panel-content .assistant-chat-feed { padding: 18px 16px; }
+.assistant-panel-content .assistant-chat-compose { padding: 12px 14px 14px; }
+.assistant-panel-content .assistant-chat-suggestions { max-height: 84px; overflow-y: auto; }
+.assistant-panel-content .assistant-chat-channel { align-items: flex-start; flex-direction: column; gap: 5px; }
+.assistant-panel-content .assistant-chat-channel .set-select { width: 100%; min-width: 0; }
+.assistant-panel-content .assistant-chat-form { align-items: stretch; flex-direction: column; gap: 8px; }
+.assistant-panel-content .assistant-chat-form textarea { min-height: 70px; max-height: 150px; resize: vertical; }
+.assistant-panel-content .assistant-chat-form .btn { align-self: flex-end; }
+.assistant-panel-toggle { display: inline-flex; align-items: center; gap: 7px; color: var(--accent-ink); }
+@media (prefers-reduced-motion: reduce) { .assistant-panel, .assistant-panel-backdrop { transition: none; } }
+@media (max-width: 640px) {
+  .assistant-chat-shell { height: calc(100dvh - 180px); min-height: 420px; }
+  .assistant-chat-intro, .assistant-chat-compose { padding-right: 12px; padding-left: 12px; }
+  .assistant-chat-feed { padding-right: 12px; padding-left: 12px; }
+  .assistant-chat-bubble { max-width: 94%; }
+  .assistant-chat-channel { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .assistant-chat-channel .set-select { width: 100%; }
+  .assistant-panel { width: 100vw; max-width: 100vw; }
+}

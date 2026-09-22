@@ -36,7 +36,7 @@
 }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; }
+html, body { height: 100%; margin: 0; overflow: hidden; }
 body {
   font-family: var(--font-sans);
   font-size: 14px;
@@ -50,14 +50,17 @@ button { font: inherit; color: inherit; }
 a { color: inherit; text-decoration: none; }
 
 /* ─── App shell ─────────────────────────────────── */
-.app { height: 100vh; display: grid; grid-template-columns: var(--sidebar-w) 1fr; }
+.app {
+  height: 100vh; height: 100dvh; min-height: 0; overflow: hidden;
+  display: grid; grid-template-columns: var(--sidebar-w) 1fr;
+}
 
 /* ─── Sidebar ────────────────────────────────────── */
 .sidebar {
   background: var(--rail);
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column;
-  min-width: 0;
+  min-width: 0; min-height: 0;
 }
 .sb-brand {
   display: flex; align-items: center; gap: 9px;
@@ -120,6 +123,7 @@ a { color: inherit; text-decoration: none; }
   padding: 9px 10px;
   display: flex; align-items: center; gap: 9px;
 }
+.sb-foot > .sb-label { min-width: 0; flex: 1; }
 .avatar {
   width: 26px; height: 26px; border-radius: 50%;
   background: var(--accent); color: var(--surface);
@@ -128,9 +132,16 @@ a { color: inherit; text-decoration: none; }
 }
 .sb-foot .who { font-size: 13px; line-height: 1.15; }
 .sb-foot .plan { font-size: 11px; color: var(--muted); font-family: var(--font-mono); }
+.sb-logout {
+  appearance: none; border: 0; border-radius: 6px; background: transparent; color: var(--muted);
+  display: inline-flex; align-items: center; gap: 5px; padding: 6px; font: inherit; font-size: 12px;
+  cursor: pointer; flex: 0 0 auto;
+}
+.sb-logout:hover, .sb-logout:focus-visible { color: var(--ink); background: var(--hover); outline: none; }
+.sb-logout svg { width: 15px; height: 15px; }
 
 /* ─── Main ───────────────────────────────────────── */
-.main { display: flex; flex-direction: column; min-width: 0; }
+.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .topbar {
   height: var(--topbar-h);
   border-bottom: 1px solid var(--border);

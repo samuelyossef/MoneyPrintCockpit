@@ -296,17 +296,15 @@ window.CKV = (function () {
         <label class="view-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
           <input id="lSearch" placeholder="Buscar mensagem, serviço ou trace ID" /></label>
         <select class="set-select" id="lLevel"><option>Todos os níveis</option><option>CRITICAL</option><option>ERROR</option><option>WARN</option><option>INFO</option></select>
-        <select class="set-select" id="lSvc"><option>Todos os serviços</option>${[...new Set(D.LOGS.map(l => l.svc))].map(s => `<option>${s}</option>`).join("")}</select>
+        <select class="set-select" id="lSvc"><option>Todos os serviços</option></select>
         <div class="view-filters-spacer"></div>
-        <span class="rows-count" id="lCount">${D.LOGS.length} linhas</span>
+        <button class="btn sm" type="button" id="lRefresh">Atualizar</button>
+        <span class="rows-count" id="lCount">Carregando…</span>
       </div>
-      <div class="console" id="logBody">${logRows(D.LOGS)}</div>
+      <div class="console" id="logBody"><div class="empty"><div class="empty-t">Carregando eventos reais…</div><div class="empty-s">Consultando o Gateway local.</div></div></div>
       <div class="grid2" style="margin-top:20px">
-        ${chartCard("Trace tr_9f2b41c8 — geração de vídeo", "total 3,4 s", `<div class="trace">${D.TRACE.map(t =>
-          `<div class="trace-row"><span class="trace-name">${t.name}</span>
-            <span class="trace-track"><span class="trace-fill ${t.slow ? "slow" : ""}" style="width:${(t.ms / 3500 * 100).toFixed(1)}%"></span></span>
-            <span class="trace-ms">${t.ms < 1000 ? t.ms + "ms" : (t.ms / 1000).toFixed(1).replace(".", ",") + "s"}</span></div>`).join("")}</div>`)}
-        ${chartCard("Erros por hora", "últimas 24 h", bars(D.series(91, 24, 100, -0.1, 0.8), "var(--err)"))}
+        <div class="card" id="logTraceCard"><div class="card-hd"><span class="card-title">Trace mais recente</span></div><div class="card-bd" id="logTraceBody"><div class="card-note">Aguardando eventos.</div></div></div>
+        <div class="card" id="logSummaryCard"><div class="card-hd"><span class="card-title">Resumo dos eventos</span></div><div class="card-bd" id="logSummaryBody"><div class="card-note">Aguardando eventos.</div></div></div>
       </div>`;
   }
   function logRows(rows) {
@@ -422,6 +420,7 @@ window.CKV = (function () {
   }
   const CH_STATUS = { connected: ["active", "Conectado"], pending: ["pending", "Aguardando login"], expired: ["past_due", "Expirado"] };
   const CH_LANGS = [["pt-BR", "Português (Brasil)"], ["en-US", "English (US)"], ["es-ES", "Español"], ["de-DE", "Deutsch"]];
+  const CH_VOICES = [["pt-BR-FranciscaNeural", "Português (Brasil) — Francisca (F)"], ["pt-BR-AntonioNeural", "Português (Brasil) — Antonio (M)"], ["en-US-JennyNeural", "English (US) — Jenny (F)"], ["en-US-GuyNeural", "English (US) — Guy (M)"], ["es-ES-ElviraNeural", "Español — Elvira (F)"], ["es-ES-AlvaroNeural", "Español — Álvaro (M)"], ["de-DE-KatjaNeural", "Deutsch — Katja (F)"], ["de-DE-ConradNeural", "Deutsch — Conrad (M)"]];
   function chStatus(status) {
     const [dot, label] = CH_STATUS[status] || CH_STATUS.expired;
     return `<span class="status-pill"><span class="status-dot ${dot}"></span>${label}</span>`;
@@ -455,7 +454,8 @@ window.CKV = (function () {
     return D.CHANNELS.find(x => x.id === id) || null;
   }
   function newCanalRec() {
-    return { platform: "YouTube", niche: "", language: "pt-BR" };
+    return { platform: "YouTube", niche: "", language: "pt-BR", voice_name: "pt-BR-FranciscaNeural", voice_rate: 1, voice_volume: 1, subtitle_enabled: true, subtitle_position: "bottom", font_size: 56, text_fore_color: "#FFFFFF", stroke_color: "#000000", stroke_width: 1.5,
+      video_defaults: { short: { paragraph_number: 5, video_count: 1, video_clip_duration: 4, video_concat_mode: "script", video_transition_mode: "", video_clip_speed: 1, bgm_type: "", bgm_volume: 0.2 }, long: { target_minutes: 8, video_clip_duration: 6, video_concat_mode: "script", video_transition_mode: "", video_clip_speed: 1, bgm_type: "", bgm_volume: 0.2 } } };
   }
   function canal(c, tab, editing, isNew) {
     editing = editing || isNew;
@@ -464,9 +464,58 @@ window.CKV = (function () {
     const txt = (f, v, ph) => editing
       ? `<input class="np-input" style="width:100%" data-cfield="${f}" value="${esc(v)}" placeholder="${ph || ""}" />`
       : esc(v || "—");
+    const area = (f, v, ph) => editing
+      ? `<textarea class="np-input" style="width:100%;min-height:150px;resize:vertical" data-cfield="${f}" maxlength="4000" placeholder="${ph || ""}">${esc(v)}</textarea>`
+      : `<span style="white-space:pre-wrap">${esc(v || "Nenhum prompt de sistema configurado.")}</span>`;
     const sel = (f, v, opts) => editing
       ? `<select class="set-select" style="width:100%" data-cfield="${f}">${opts.map(([val, label]) => `<option value="${val}" ${val === v ? "selected" : ""}>${label}</option>`).join("")}</select>`
       : esc((opts.find(o => o[0] === v) || [v, v])[1]);
+    const profileField = (label, value) => `<div><label class="dr-sec" style="margin:0 0 7px">${label}</label><div class="channel-profile-value">${value}</div></div>`;
+    const videoDefaults = c.video_defaults || newCanalRec().video_defaults;
+    const videoSelect = (format, field, current, options) => editing
+      ? `<select class="set-select" style="width:100%" data-vfield="${format}.${field}">${options.map(([value, label]) => `<option value="${value}" ${String(value) === String(current) ? "selected" : ""}>${label}</option>`).join("")}</select>`
+      : esc((options.find(([value]) => String(value) === String(current)) || [current, current])[1]);
+    const videoNumber = (format, field, current, min, max, step = "1") => editing
+      ? `<input class="np-input" style="width:100%" data-vfield="${format}.${field}" type="number" min="${min}" max="${max}" step="${step}" value="${esc(current)}" />`
+      : esc(current);
+    const videoProfileFields = format => {
+      const current = videoDefaults[format] || newCanalRec().video_defaults[format];
+      const duration = format === "short"
+        ? profileField("Duração alvo", videoSelect(format, "paragraph_number", current.paragraph_number, [[4, "60 s"], [5, "75 s"], [6, "90 s"]]))
+        : profileField("Duração alvo", videoSelect(format, "target_minutes", current.target_minutes, [[5, "5 minutos"], [8, "8 minutos"], [10, "10 minutos"], [15, "15 minutos"]]));
+      return `
+        <div class="grid2 channel-profile-grid" style="margin:0">
+          ${duration}
+          ${profileField("Duração de cada clipe", videoNumber(format, "video_clip_duration", current.video_clip_duration, 1, 30) + " s")}
+          ${format === "short" ? profileField("Vídeos gerados", videoNumber(format, "video_count", current.video_count, 1, 5)) : ""}
+          ${profileField("Imagens", videoSelect(format, "video_concat_mode", current.video_concat_mode, [["script", "Seguir o roteiro"], ["random", "Aleatória"]]))}
+          ${profileField("Transição", videoSelect(format, "video_transition_mode", current.video_transition_mode, [["", "Nenhuma"], ["Shuffle", "Aleatória"], ["FadeIn", "Fade in"], ["FadeOut", "Fade out"], ["SlideIn", "Slide in"], ["SlideOut", "Slide out"], ["ZoomIn", "Zoom in"], ["ZoomOut", "Zoom out"]]))}
+          ${profileField("Velocidade do clipe", videoSelect(format, "video_clip_speed", current.video_clip_speed, [[0.8, "0.8×"], [1, "1.0×"], [1.2, "1.2×"], [1.5, "1.5×"]]))}
+          ${profileField("Trilha sonora (BGM)", videoSelect(format, "bgm_type", current.bgm_type, [["", "Sem música de fundo"], ["random", "Aleatória"]]))}
+          ${profileField("Volume da música", videoSelect(format, "bgm_volume", current.bgm_volume, [[0.1, "10%"], [0.2, "20%"], [0.4, "40%"], [0.6, "60%"]]))}
+        </div>`;
+    };
+    const videoProfile = () => {
+      const formats = c.platform === "TikTok" ? [["short", "Shorts"]] : [["short", "Shorts"], ["long", "Vídeo longo"]];
+      return `<div class="card" style="margin:14px 0 0;grid-column:1/-1;width:100%"><div class="card-hd"><span class="card-title">Parâmetros de vídeo</span></div>
+        <div class="card-bd"><div class="view-tabs" data-channel-video-tabs style="margin:0 0 14px">${formats.map(([format, label], index) => `<button class="view-tab ${index === 0 ? "is-active" : ""}" type="button" data-channel-video-tab="${format}">${label}</button>`).join("")}</div>
+          ${formats.map(([format], index) => `<div data-channel-video-pane="${format}"${index ? " hidden" : ""}>${videoProfileFields(format)}</div>`).join("")}
+        </div></div>`;
+    };
+    const profile = (fullRow = false) => `
+      <div class="card" style="margin:14px 0 0;${fullRow ? "grid-column:1/-1;width:100%" : "max-width:760px"}"><div class="card-hd"><span class="card-title">Voz e Legendas</span></div>
+        <div class="card-bd"><div class="grid2 ${fullRow ? "channel-profile-grid" : ""}" style="margin:0">
+          ${profileField("Idioma da narração padrão", sel("language", c.language, CH_LANGS))}
+          ${profileField("Voz sintética padrão", sel("voice_name", c.voice_name, CH_VOICES))}
+          ${profileField("Velocidade da voz", sel("voice_rate", String(c.voice_rate), [["0.8", "0.8×"], ["1", "1.0×"], ["1.2", "1.2×"], ["1.5", "1.5×"]]))}
+          ${profileField("Volume da voz", sel("voice_volume", String(c.voice_volume), [["0.6", "60%"], ["1", "100%"], ["1.5", "150%"], ["2", "200%"]]))}
+          ${profileField("Legendas", editing ? `<label style="display:flex;align-items:center;gap:7px;height:34px"><input type="checkbox" class="cbx" data-cfield="subtitle_enabled" ${c.subtitle_enabled ? "checked" : ""} /> Ativadas por padrão</label>` : esc(c.subtitle_enabled ? "Ativadas" : "Desativadas"))}
+          ${profileField("Posição da legenda", sel("subtitle_position", c.subtitle_position, [["bottom", "Inferior"], ["center", "Centro"], ["top", "Superior"]]))}
+          ${profileField("Tamanho da legenda", txt("font_size", c.font_size, "56"))}
+          ${profileField("Espessura da borda", txt("stroke_width", c.stroke_width, "1.5"))}
+          ${profileField("Cor do texto", txt("text_fore_color", c.text_fore_color, "#FFFFFF"))}
+          ${profileField("Cor da borda", txt("stroke_color", c.stroke_color, "#000000"))}
+        </div></div></div>`;
     const kpi = (label, value) => `<div class="kpi" style="cursor:default"><div class="kpi-label">${label}</div><div class="kpi-value">${D.fmtInt(value || 0)}</div></div>`;
     const panes = {
       dados: isNew ? `
@@ -475,7 +524,9 @@ window.CKV = (function () {
           <div class="card-bd" style="display:flex;flex-direction:column;gap:16px">
             <div class="md-field"><label>Plataforma</label>${sel("platform", c.platform, [["YouTube", "YouTube (Shorts e vídeos longos)"], ["TikTok", "TikTok (via Upload-Post)"]])}</div>
             <div class="md-field"><label>Nicho do canal</label>${txt("niche", c.niche, "Ex: Curiosidades, Histórias Reais, Tecnologia")}</div>
-            <div class="md-field"><label>Idioma dos vídeos</label>${sel("language", c.language, CH_LANGS)}</div>
+            <div class="md-field"><label>Prompt de sistema do canal</label>${area("system_prompt", c.system_prompt, "Defina tom, público, estrutura, vocabulário e regras deste canal.")}</div>
+            ${profile()}
+            ${videoProfile()}
             <div class="card-note" style="font-family:inherit;line-height:1.55">
               <b>YouTube:</b> abre o login do Google em outra aba; escolha o canal e autorize. Nome, @handle e inscritos vêm do próprio YouTube.<br>
               <b>TikTok:</b> exige a chave Upload-Post em Configurações; abre a página do Upload-Post para você entrar na conta TikTok.<br>
@@ -490,10 +541,10 @@ window.CKV = (function () {
               <dt>Plataforma</dt><dd>${esc(c.platform)}</dd>
               <dt>Handle</dt><dd>${esc(c.handle || "—")}</dd>
               <dt>Nicho</dt><dd>${txt("niche", c.niche, "Ex: Curiosidades")}</dd>
-              <dt>Idioma</dt><dd>${sel("language", c.language, CH_LANGS)}</dd>
+              <dt>Prompt de sistema</dt><dd>${area("system_prompt", c.system_prompt, "Defina tom, público, estrutura, vocabulário e regras deste canal.")}</dd>
               <dt>Status</dt><dd>${chStatus(c.status)}</dd>
             </dl></div></div>
-          ${c.platform === "YouTube" ? kpi("Inscritos", c.followers) + kpi("Vídeos", c.videos) + kpi("Views totais", c.views) : ""}
+          ${profile(true)}${videoProfile()}${c.platform === "YouTube" ? kpi("Inscritos", c.followers) + kpi("Vídeos", c.videos) + kpi("Views totais", c.views) : ""}
         </div>`,
       conexao: `
         <div class="card" style="margin-bottom:0;max-width:560px"><div class="card-hd"><span class="card-title">Conexão</span></div>
@@ -731,35 +782,32 @@ window.CKV = (function () {
   }
 
   function logDrawer(l) {
+    const spans = Array.isArray(l.spans) ? l.spans : [];
+    const maxDuration = Math.max(1, ...spans.map(span => Number(span.duration_ms) || 0), Number(l.duration_ms) || 0);
+    const traceHtml = spans.length ? spans.map(span => `
+          <div class="trace-row"><span class="trace-name">${esc(span.name || span.service || "etapa")}</span>
+            <span class="trace-track"><span class="trace-fill ${(Number(span.status_code) || 0) >= 400 ? "slow" : ""}" style="width:${Math.max(2, (Number(span.duration_ms) || 0) / maxDuration * 100).toFixed(1)}%"></span></span>
+            <span class="trace-ms">${Number(span.duration_ms || 0).toLocaleString("pt-BR")}ms</span></div>`).join("")
+      : `<div class="card-note">Esta requisição não chamou serviços externos.</div>`;
+    const timestamp = l.timestamp ? new Date(l.timestamp).toLocaleString("pt-BR") : "—";
     return {
       title: l.lvl === "INFO" ? "Evento de sistema" : "Falha em " + l.svc,
-      sub: `${l.msg}`,
+      sub: esc(l.msg),
       body: `
         <div class="dr-sec">Contexto</div>
         <dl class="kv">
           <dt>Nível</dt><dd><span class="log-lvl ${l.lvl}">${l.lvl}</span></dd>
-          <dt>Serviço</dt><dd class="mono">${l.svc}</dd>
-          <dt>Horário</dt><dd class="mono">${l.ts} · 04/09/2026</dd>
-          <dt>Organização</dt><dd>${l.org}</dd>
-          <dt>Usuário</dt><dd class="mono">${esc(l.user)}</dd>
-          <dt>Modelo</dt><dd class="mono">${l.model}</dd>
-          <dt>Trace ID</dt><dd class="mono">${l.trace}</dd>
-          <dt>Request ID</dt><dd class="mono">rq_${l.trace.slice(3, 11)}</dd>
-          <dt>Tentativas</dt><dd class="mono">${l.retries}</dd>
+          <dt>Serviço</dt><dd class="mono">${esc(l.svc)}</dd>
+          <dt>Horário</dt><dd class="mono">${esc(timestamp)}</dd>
+          <dt>Método</dt><dd class="mono">${esc(l.method || "—")}</dd>
+          <dt>Rota</dt><dd class="mono">${esc(l.path || "—")}</dd>
+          <dt>Status HTTP</dt><dd class="mono">${esc(l.status_code ?? "—")}</dd>
+          <dt>Duração</dt><dd class="mono">${Number(l.duration_ms || 0).toLocaleString("pt-BR")} ms</dd>
+          <dt>Trace ID</dt><dd class="mono">${esc(l.trace || "—")}</dd>
         </dl>
         <div class="dr-sec">Trace</div>
-        <div class="trace">${D.TRACE.map(t => `
-          <div class="trace-row"><span class="trace-name">${t.name}</span>
-            <span class="trace-track"><span class="trace-fill ${t.slow ? "slow" : ""}" style="width:${(t.ms / 2200 * 100).toFixed(1)}%"></span></span>
-            <span class="trace-ms">${t.ms < 1000 ? t.ms + "ms" : (t.ms / 1000).toFixed(1).replace(".", ",") + "s"}</span></div>`).join("")}</div>
-        <div class="dr-sec">Stack trace</div>
-        <pre style="font-family:var(--font-mono);font-size:11.5px;color:var(--ink-2);background:var(--rail-2);border:1px solid var(--border);border-radius:8px;padding:12px;overflow-x:auto;margin:0">at ProviderClient.stream (ai-gateway/providers/openai.ts:212)
-at RetryPolicy.execute (ai-gateway/retry.ts:64)
-at RagQueryHandler.answer (rag/query.ts:118)
-at HttpRouter.dispatch (server/router.ts:91)</pre>`,
-      footer: `<button class="btn primary" data-toast="Job reenfileirado para retry">Reprocessar</button>
-               <button class="btn" data-toast="Trace aberto no explorador">Abrir trace</button>
-               <button class="btn" data-toast="Contexto copiado para o suporte">Copiar contexto</button>`,
+        <div class="trace">${traceHtml}</div>`,
+      footer: "",
     };
   }
 
@@ -1043,7 +1091,7 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
 
   /* ── Configurações ──────────────────────────── */
   function configuracoes(scope) {
-    const tabs = [["ia", "Modelos e IA"], ["video", "Vídeo e Stock"], ["sistema", "Navegador e Sistema"], ["voz", "Voz e Legendas"]];
+    const tabs = [["ia", "Modelos e IA"], ["video", "Vídeo e Stock"], ["sistema", "Navegador e Sistema"]];
     const tag = (ok, label) => ok
       ? `<span class="status-pill" style="color:var(--ok)"><span class="status-dot active"></span>${label}</span>`
       : `<span class="status-pill" style="color:var(--warn)"><span class="status-dot pending"></span>${label}</span>`;
@@ -1051,6 +1099,18 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
       ? `<select class="set-select" id="${opts.id}" style="width:100%">${opts.opts.map(([v, t]) => `<option value="${v}" ${v === val ? "selected" : ""}>${t}</option>`).join("")}</select>`
       : `<input class="np-input" id="${opts && opts.id || ""}" style="width:100%" type="${opts && opts.type || "text"}" value="${esc(val)}" /></div>`}</div>`;
     const prov = D.__providers;
+    const nvidiaCatalog = D.__nvidiaModels || { models: [
+      { id: "moonshotai/kimi-k3", label: "Kimi K3", provider: "Moonshot AI", description: "Raciocínio avançado e contexto longo.", capabilities: { text: true, image: true, reasoning: true, streaming: true }, available: null },
+      { id: "z-ai/glm-5.3", label: "GLM 5.3", provider: "Z.ai", description: "Equilibrado para roteiros, JSON e tarefas gerais.", capabilities: { text: true, image: false, reasoning: true, streaming: true }, available: null },
+      { id: "z-ai/glm-5.3-flash", label: "GLM 5.3 Flash", provider: "Z.ai", description: "Variante rápida para tarefas frequentes.", capabilities: { text: true, image: false, reasoning: true, streaming: true }, available: null },
+      { id: "nvidia/nemotron-3.5-lightning-30b-a3b", label: "Nemotron 3.5 Lightning", provider: "NVIDIA", description: "Modelo rápido para tarefas agentivas com thinking.", capabilities: { text: true, image: false, reasoning: true, streaming: true }, available: null },
+      { id: "meta/muse-glimmer-30b", label: "Muse Glimmer 30B", provider: "Meta", description: "Raciocínio multimodal com ferramentas nativas.", capabilities: { text: true, image: true, reasoning: true, streaming: true }, available: null },
+    ] };
+    const nvidiaModels = nvidiaCatalog.models || [];
+    const nvidiaSelected = prov && prov.nvidia_text_model || "moonshotai/kimi-k3";
+    const selectedNvidia = nvidiaModels.find(model => model.id === nvidiaSelected) || nvidiaModels[0];
+    const nvidiaCapabilities = selectedNvidia ? ["Texto", selectedNvidia.capabilities && selectedNvidia.capabilities.image ? "Imagem" : "", selectedNvidia.capabilities && selectedNvidia.capabilities.reasoning ? "Raciocínio" : "", selectedNvidia.capabilities && selectedNvidia.capabilities.streaming ? "Streaming" : ""].filter(Boolean).join(" · ") : "";
+    const nvidiaCatalogNote = nvidiaCatalog.catalog_status === "available" ? "Catálogo NVIDIA atualizado." : nvidiaCatalog.catalog_status === "unauthorized" ? "A NVIDIA recusou a chave configurada." : nvidiaCatalog.catalog_status === "not_configured" ? "Configure a chave NVIDIA para consultar a disponibilidade." : "Disponibilidade não pôde ser consultada agora.";
     const panes = {
       ia: `
         <div class="dr-sec" style="margin-top:0">Provedor de IA</div>
@@ -1071,9 +1131,13 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
             <input class="np-input" id="cfgNvidiaKey" style="width:100%" type="password" placeholder="${prov && prov.nvidia ? "•••••••• (deixe em branco para manter)" : "nvapi-..."}" autocomplete="off" />
             <div class="card-note" id="cfgNvidiaKeyStatus" style="margin-top:5px;min-height:14px"></div></div>
           <div><label class="dr-sec" style="margin:0 0 7px">Modelo de texto</label>
-            <input class="np-input" id="cfgNvidiaTextModel" style="width:100%" value="${esc(prov && prov.nvidia_text_model || "")}" placeholder="google/gemma-4-31b-it" autocomplete="off" /></div>
+            <select class="set-select" id="cfgNvidiaTextModel" style="width:100%">${nvidiaModels.map(model => `<option value="${esc(model.id)}" ${model.id === nvidiaSelected ? "selected" : ""} ${model.available === false && model.id !== nvidiaSelected ? "disabled" : ""}>${esc(model.label)} — ${esc(model.provider)}${model.available === false ? " (indisponível)" : ""}</option>`).join("")}</select>
+            <div class="card-note" id="cfgNvidiaModelInfo" style="margin-top:6px;font-family:inherit">${esc(selectedNvidia && selectedNvidia.description || "")}${nvidiaCapabilities ? ` ${esc(nvidiaCapabilities)}.` : ""}</div>
+            <div class="card-note" id="cfgNvidiaCatalogStatus" style="margin-top:4px;font-family:inherit">${esc(nvidiaCatalogNote)}</div>
+            <button class="btn sm" id="cfgNvidiaTestBtn" type="button" style="margin-top:9px">Testar modelo</button>
+            <div class="card-note" id="cfgNvidiaTestStatus" style="margin-top:6px;min-height:16px"></div></div>
         </div>
-        <div class="card-note" style="margin-top:10px;font-family:inherit">Salvar grava direto em <code>runtime/moneyprinter/config.toml</code>. Trocar o provedor de IA também reconfigura o roteiro do Short no Turbo. É preciso reiniciar o container para aplicar: <code>docker compose restart moneyprinterturbo</code>.</div>`,
+        <div class="card-note" style="margin-top:10px;font-family:inherit">Salvar aplica o modelo imediatamente ao Gateway. O roteiro do Short no Turbo exige reinício após salvar: <code>docker compose restart moneyprinterturbo</code>.</div>`,
       video: `
         <div class="dr-sec" style="margin-top:0">Filmagens e stock</div>
         <div class="card-note" style="margin:6px 0 14px;font-family:inherit">Fonte padrão usada para buscar as filmagens. Configure a chave de quem for usar antes de selecionar.</div>
@@ -1110,17 +1174,6 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
           ${field("Fuso horário", "América/São Paulo (GMT-3)", { select: true, opts: [["america_sp", "América/São Paulo (GMT-3)"], ["utc", "UTC"]] })}
           <div><label class="dr-sec" style="margin:0 0 7px">Tema</label><label style="display:flex;align-items:center;gap:7px;height:34px"><input type="checkbox" class="cbx" /> Modo escuro</label></div>
           ${field("Perfil do navegador (automação)", "Padrão do sistema")}
-        </div>`,
-      voz: `
-        <div class="dr-sec" style="margin-top:0">Voz e legendas</div>
-        <div class="card-note" style="margin:6px 0 14px;font-family:inherit">Edge TTS ${prov ? tag(!!prov.edge_tts, "Sempre disponível") : ""} — não exige chave.</div>
-        <div class="grid2">
-          ${field("Idioma da narração padrão", "pt-BR", { select: true, id: "cfgLanguage", opts: [["pt-BR", "Português (Brasil)"], ["en-US", "English (US)"], ["es-ES", "Español"], ["de-DE", "Deutsch"]] })}
-          ${field("Voz sintética padrão", "pt-BR-FranciscaNeural", { select: true, id: "cfgVoice", opts: [["pt-BR-FranciscaNeural", "Português (Brasil) — Francisca (F)"], ["pt-BR-AntonioNeural", "Português (Brasil) — Antonio (M)"], ["en-US-JennyNeural", "English (US) — Jenny (F)"], ["en-US-GuyNeural", "English (US) — Guy (M)"], ["es-ES-ElviraNeural", "Español — Elvira (F)"], ["es-ES-AlvaroNeural", "Español — Álvaro (M)"], ["de-DE-KatjaNeural", "Deutsch — Katja (F)"], ["de-DE-ConradNeural", "Deutsch — Conrad (M)"]] })}
-          ${field("Tamanho da legenda", "56", { id: "cfgFontSize", type: "number" })}
-          ${field("Cor do texto", "#FFFFFF", { id: "cfgTextColor" })}
-          ${field("Cor da borda", "#000000", { id: "cfgStrokeColor" })}
-          <div><label class="dr-sec" style="margin:0 0 7px">Legendas</label><label style="display:flex;align-items:center;gap:7px;height:34px"><input type="checkbox" class="cbx" id="cfgSubtitleEnabled" checked /> Habilitadas por padrão</label></div>
         </div>`,
     };
     const cur = scope.cfgTab && panes[scope.cfgTab] ? scope.cfgTab : "ia";
@@ -1191,7 +1244,6 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
             ? `O roteiro longo é escrito em várias chamadas de IA (uma por seção); a primeira precisa responder em JSON, então este texto entra como instrução de estilo em todas elas, em vez de substituí-las por completo. Usado por "Escrever roteiro longo com IA".`
             : `Substitui por completo as instruções que a IA recebe para escrever o roteiro do Short — tanto no botão "Gerar roteiro com IA" quanto se o roteiro for deixado em branco para o Turbo escrever sozinho.`} Deixe vazio para usar o prompt padrão.</div>
           <textarea class="np-input" id="genSystemPrompt" rows="16" style="width:100%;resize:vertical" placeholder="Deixe vazio para usar o prompt padrão"></textarea>
-          <button class="btn gen-save-defaults" type="button" style="margin-top:10px;padding:11px" title="Salvar estas opções como padrão para novos vídeos">Salvar padrão</button>
         </div>
       </div>`;
   }
@@ -1214,7 +1266,7 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
   /* One form, two formats: the engine (Turbo, approval, publishing) is shared; what differs is the
      aspect, the duration control, the script writer and which channels may receive the video.
      Split in two: studioCreative (topic/script/channels + the live pipeline/preview) sits on the
-     "Gerador" tab; studioParams (voice/render/subtitle knobs + "Salvar padrão") gets its own tab. */
+     "Gerador" tab; studioParams (voice/render/subtitle knobs) gets its own tab. */
   function studioCreative(scope, format) {
     const isLong = format === "long";
     const chips = ["Psicologia", "Profundezas", "Hábitos Ricos", "Espaço", "História Oculta"];
@@ -1245,7 +1297,6 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
                 <div>
                   <label class="dr-sec" style="margin:0 0 7px">Requisitos personalizados do roteiro</label>
                   <textarea class="np-input" id="genScriptRequirements" rows="2" style="width:100%;resize:vertical" placeholder="Ex: use um tom mais leve, estilo TikTok, com uma abertura mais intrigante"></textarea>
-                  <button class="btn sm gen-save-defaults" type="button" style="margin-top:6px" title="Salvar estas opções como padrão para novos vídeos">Salvar padrão</button>
                 </div>
               </div>
             </details>
@@ -1258,6 +1309,7 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
               ${isLong
                 ? `<select class="set-select" id="genChannelSelect" style="width:100%"><option value="">Escolher depois</option>${D.CHANNELS.filter(c => c.status === "connected" && c.platform === "YouTube").map(c => `<option value="${esc(c.id)}">${esc(c.name)} · YouTube</option>`).join("")}</select>`
                 : `<div id="genChannelList" style="display:flex;flex-direction:column;gap:6px"></div>`}
+              <div class="card-note" id="genChannelProfileNote" style="margin-top:6px;font-family:inherit">Sem canal selecionado: serão usados os padrões técnicos do projeto.</div>
               <div class="card-note" style="margin-top:6px;font-family:inherit">Canais conectados em <a href="#" data-view="clientes" style="color:var(--accent)">Canais</a>.${isLong ? " Vídeos longos vão só para o YouTube." : " No máximo um canal por plataforma."}</div>
             </div>
             <button class="btn primary" id="genStartBtn" style="padding:11px">${isLong ? "Gerar vídeo longo" : "Gerar Short"}</button>
@@ -1314,8 +1366,7 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
         </div>
       </div>`;
   }
-  /* Voice/render/subtitle knobs, moved off the "Gerador" tab into their own — same fields Turbo's
-     VideoParams exposes, just laid out per format like studioCreative was. */
+  /* Voice/render/subtitle knobs are loaded from the chosen channel and remain editable for this job. */
   function studioParams(format) {
     const isLong = format === "long";
     return `
@@ -1380,7 +1431,6 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
             <div><label class="dr-sec" style="margin:0 0 7px">Volume da música</label>
               <select class="set-select" id="genBgmVolume" style="width:100%"><option value="0.1">10%</option><option value="0.2" selected>20%</option><option value="0.4">40%</option><option value="0.6">60%</option></select></div>
           </div>
-          <button class="btn gen-save-defaults" type="button" id="genSaveDefaultsBtn" style="padding:11px" title="Salvar estas opções como padrão para novos vídeos">Salvar padrão</button>
         </div>
       </div>`;
   }
@@ -1431,6 +1481,101 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
       </div>`;
   }
 
+
+  /* ── Assistente conversacional ───────────────── */
+  function assistantChat(prefix) {
+    const channelOptions = D.CHANNELS.map(channel =>
+      "<option value=\"" + esc(channel.id) + "\">" + esc(channel.name) + " · " + esc(channel.platform) + "</option>"
+    ).join("");
+    const markup = "<div class=\"assistant-chat-shell\" id=\"assistantChatRoot\">" +
+      "<div class=\"assistant-chat-intro\"><div><div class=\"card-title\">O que você quer fazer?</div>" +
+      "<div class=\"card-note\">Peça ajuda sobre o sistema, Growth OS, canais, vídeos e trabalhos.</div></div>" +
+      "<button class=\"btn sm\" type=\"button\" id=\"assistantNewChat\">Nova conversa</button></div>" +
+      "<div class=\"assistant-chat-feed\" id=\"assistantChatFeed\" role=\"log\" aria-live=\"polite\"></div>" +
+      "<div class=\"assistant-chat-compose\">" +
+      "<div class=\"assistant-chat-suggestions\">" +
+      "<button class=\"btn sm\" type=\"button\" data-chat-suggestion>Calcule meu gap para o YPP</button>" +
+      "<button class=\"btn sm\" type=\"button\" data-chat-suggestion>Avalie uma ideia de vídeo</button>" +
+      "<button class=\"btn sm\" type=\"button\" data-chat-suggestion>Crie um roteiro de Short</button>" +
+      "<button class=\"btn sm\" type=\"button\" data-chat-suggestion>Quais trabalhos estão em andamento?</button></div>" +
+      "<label class=\"assistant-chat-channel\" for=\"assistantChatChannel\">Canal de contexto" +
+      "<select id=\"assistantChatChannel\" class=\"set-select\"><option value=\"\">Escolha quando necessário</option>" + channelOptions + "</select></label>" +
+      "<form id=\"assistantChatForm\" class=\"assistant-chat-form\">" +
+      "<textarea id=\"assistantChatInput\" rows=\"2\" maxlength=\"3000\" placeholder=\"Escreva sua mensagem…\" aria-label=\"Mensagem para o assistente\"></textarea>" +
+      "<button class=\"btn primary\" id=\"assistantChatSend\" type=\"submit\">Enviar</button></form>" +
+      "<div class=\"assistant-chat-footnote\">Ações de publicação continuam sujeitas à revisão humana.</div></div></div>";
+    return prefix ? markup.split("assistantChat").join(prefix) : markup;
+  }
+
+  /* ── Growth OS ──────────────────────────────── */
+  function growth() {
+    const channelOptions = D.CHANNELS.map(channel => `<option value="${esc(channel.id)}">${esc(channel.name)} · ${esc(channel.platform)}</option>`).join("");
+    const metric = (id, label, value) => `<div class="md-field"><label for="${id}">${label}</label><input class="np-input" id="${id}" type="number" min="0" step="any" value="${value}" style="width:100%" /></div>`;
+    const dimension = (id, label, value) => `<div class="md-field"><label for="${id}">${label}</label><input class="np-input" id="${id}" type="number" min="0" max="100" value="${value}" style="width:100%" /></div>`;
+    return `
+      <div id="growthRoot">
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-hd"><span class="card-title">Contexto do plano</span><span class="spacer"></span><span class="badge plan-pro">P0</span></div>
+          <div class="card-bd">
+            <div class="grid2" style="margin:0">
+              <div class="md-field"><label for="growthChannel">Canal</label><select class="set-select" id="growthChannel" style="width:100%"><option value="">Selecione…</option>${channelOptions}</select></div>
+              <div class="md-field"><label for="growthTopic">Tema</label><input class="np-input" id="growthTopic" style="width:100%" placeholder="Ex: Como agentes de IA estão substituindo workflows SaaS" /></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid2" style="align-items:start">
+          <div class="card" style="margin:0">
+            <div class="card-hd"><span class="card-title">Meta YPP qualificada</span></div>
+            <div class="card-bd">
+              <div class="grid2" style="margin:0">
+                ${metric("growthSubscribers", "Inscritos atuais", 742)}
+                ${metric("growthSubscriberTarget", "Meta de inscritos", 1000)}
+                ${metric("growthWatchHours", "Horas qualificadas", 2860)}
+                ${metric("growthWatchTarget", "Meta de horas", 4000)}
+                ${metric("growthShortViews", "Views qualificadas de Shorts", 3200000)}
+                ${metric("growthShortTarget", "Meta de Shorts", 10000000)}
+                ${metric("growthDays", "Dias restantes", 4)}
+                ${metric("growthAvd", "AVD em minutos", 6.8)}
+              </div>
+              <div style="display:flex;gap:8px;margin-top:14px"><button class="btn" id="growthEvaluate" type="button">Calcular gap</button></div>
+              <div id="growthGoalResult" style="margin-top:14px"></div>
+            </div>
+          </div>
+
+          <div class="card" style="margin:0">
+            <div class="card-hd"><span class="card-title">Opportunity Score</span><span class="spacer"></span><span class="card-note">0–100</span></div>
+            <div class="card-bd">
+              <div class="grid2" style="margin:0">
+                ${dimension("growthDemand", "Demanda", 80)}
+                ${dimension("growthAudience", "Audience fit", 80)}
+                ${dimension("growthRetention", "Retenção histórica", 70)}
+                ${dimension("growthConversion", "Conversão em inscritos", 70)}
+                ${dimension("growthExpectedAvd", "AVD esperado", 75)}
+                ${dimension("growthEvergreen", "Evergreen", 65)}
+                ${dimension("growthVelocity", "Velocidade da tendência", 80)}
+                ${dimension("growthMonetization", "Monetização", 60)}
+                ${dimension("growthStock", "Disponibilidade de stock", 80)}
+                ${dimension("growthCompetition", "Competição", 50)}
+                ${dimension("growthCost", "Custo de produção", 30)}
+                ${dimension("growthSaturation", "Saturação", 40)}
+              </div>
+              <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+                <button class="btn" id="growthScore" type="button">Calcular score</button>
+                <button class="btn primary" id="growthPlan" type="button">Criar plano durável</button>
+              </div>
+              <div id="growthOpportunityResult" style="margin-top:14px"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px;margin-bottom:0">
+          <div class="card-hd"><span class="card-title">Workflow Temporal</span><span class="spacer"></span><span class="card-note">publicação em revisão por padrão</span></div>
+          <div class="card-bd" id="growthWorkflowResult"><div class="card-note">Nenhum plano iniciado nesta sessão.</div></div>
+        </div>
+      </div>`;
+  }
+
   /* ── Jobs e workers ─────────────────────────── */
   /* Filled by MoneyPrinterRuntime.bindJobsWorkers/renderPendingJobs from window.CK.PENDING_JOBS. */
   function jobsWorkers() {
@@ -1466,5 +1611,5 @@ at HttpRouter.dispatch (server/router.ts:91)</pre>`,
 
   return { overview, usuarios, logs, billing, clientes, custosIA, videoGrids, configuracoes, gerador, notificacoes,
            alertRows, userRows, logRows, orgRows, userDrawer, logDrawer, orgDrawer, perfilUsuario, filtersBar,
-           organizacao, orgRec, newOrgRec, canais, canaisHead, canalRows, canalRec, newCanalRec, canal, videoList, youtubeShorts, agentes, jobsWorkers };
+           organizacao, orgRec, newOrgRec, canais, canaisHead, canalRows, canalRec, newCanalRec, canal, videoList, youtubeShorts, agentes, assistantChat, growth, jobsWorkers };
 })();

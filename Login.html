@@ -1,12 +1,9 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="pt-BR" data-theme="light">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Lattice — Sign in</title>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Serif&display=swap" rel="stylesheet" />
+<title>MoneyPrinter — Entrar</title>
 <style>
   :root {
     --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -471,13 +468,6 @@
     .form-sub { font-size: 13px; }
   }
 </style>
-<link id="gfont-Josefin-Sans" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@300;400;500;600;700&amp;display=swap">
-<link id="gfont-Arvo" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Arvo:wght@300;400;500;600;700&amp;display=swap">
-<link id="gfont-Comfortaa" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@300;400;500;600;700&amp;display=swap">
-<link id="gfont-Righteous" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Righteous:wght@300;400;500;600;700&amp;display=swap">
-<link id="gfont-Ubuntu" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Ubuntu:wght@300;400;500;600;700&amp;display=swap">
-<link id="gfont-Roboto" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;600;700&amp;display=swap">
-<link id="gfont-Poppins" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&amp;display=swap">
 </head>
 <body>
 <div class="shell">
@@ -485,14 +475,14 @@
   <!-- Mobile top bar -->
   <div class="mobile-top">
     <div class="mobile-mark">L</div>
-    <span class="mobile-name">COPYXY/Z.</span>
+    <span class="mobile-name">MoneyPrinter</span>
   </div>
 
   <!-- ── Brand panel ─────────────────────────── -->
   <div class="brand" style="background-color: rgb(255, 255, 255)">
     <div class="brand-top">
-      <div class="brand-mark">L</div>
-      <span class="brand-name" style="font-size: 20px; font-family: Poppins"><span style="color: rgb(0, 0, 0)">CopyxyzLabs</span></span>
+      <div class="brand-mark">M</div>
+      <span class="brand-name" style="font-size: 20px; font-family: Helvetica, Arial, sans-serif; font-weight: 700"><span style="color: rgb(0, 0, 0)">MoneyPrinter</span></span>
     </div>
 
 
@@ -502,7 +492,7 @@
   <div class="form-panel">
 
     <!-- Theme toggle -->
-    <button class="theme-btn" id="themeBtn" title="Toggle theme" type="button" aria-label="Toggle dark mode">
+    <button class="theme-btn" id="themeBtn" title="Alternar tema" type="button" aria-label="Alternar tema escuro">
       <svg id="themeIcon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
         <circle cx="8" cy="8" r="3"/>
         <path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3.22 3.22l1.06 1.06M11.72 11.72l1.06 1.06M11.72 4.28l-1.06 1.06M4.28 11.72l-1.06 1.06"/>
@@ -510,8 +500,8 @@
     </button>
 
     <form class="form" id="loginForm" novalidate>
-      <h1 class="form-heading">Sign in</h1>
-      <p class="form-sub">Welcome back to Lattice</p>
+      <h1 class="form-heading">Entrar</h1>
+      <p class="form-sub">Acesse o cockpit local do MoneyPrinter</p>
 
       <!-- Email -->
       <div class="field">
@@ -528,8 +518,7 @@
       <!-- Password -->
       <div class="field">
         <div class="field-label-row">
-          <label for="password">Password</label>
-          <a href="#" class="field-forgot">Forgot password?</a>
+          <label for="password">Senha</label>
         </div>
         <div class="field-wrap">
           <svg class="field-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
@@ -538,7 +527,7 @@
             <circle cx="8" cy="10.5" r=".6" fill="currentColor" stroke="none"/>
           </svg>
           <input type="password" id="password" name="password" placeholder="••••••••" autocomplete="current-password" />
-          <button type="button" class="pw-toggle" id="pwToggle" title="Show password">
+          <button type="button" class="pw-toggle" id="pwToggle" title="Mostrar senha" aria-label="Mostrar senha">
             <svg id="pwIcon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
               <path d="M1 8s2.8-5 7-5 7 5 7 5-2.8 5-7 5-7-5-7-5Z"/>
               <circle cx="8" cy="8" r="2"/>
@@ -553,46 +542,16 @@
 
       <!-- Submit -->
       <button type="submit" class="btn-submit" id="submitBtn">
-        <span id="btnInner">Continue</span>
+        <span id="btnInner">Entrar</span>
       </button>
-
-      <div class="divider">or</div>
-
-      <!-- Google -->
-      <button type="button" class="btn-google">
-        <svg viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
-          <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615Z" fill="#4285F4"/>
-          <path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18Z" fill="#34A853"/>
-          <path d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332Z" fill="#FBBC05"/>
-          <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58Z" fill="#EA4335"/>
-        </svg>
-        Sign in with Google
-      </button>
-
-      <!-- SSO -->
-      <button type="button" class="btn-sso">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="1.5" y="1.5" width="13" height="13" rx="2"/>
-          <path d="M5.5 1.5v13M5.5 8h9"/>
-        </svg>
-        Continue with SSO
-      </button>
-
-      <p class="form-footer">
-        Don't have an account? <a href="Signup.html">Create one</a>
-      </p>
-
-      <p class="form-legal">
-        By signing in you agree to our
-        <a href="#">Terms of Service</a>
-        and <a href="#">Privacy Policy</a>
-      </p>
     </form>
 
   </div>
 </div>
 
-<script>
+<!-- login behavior lives in shared/login.js so the Gateway CSP can disallow inline scripts. -->
+<script src="shared/login.js"></script>
+<!--
   // ── Theme ─────────────────────────────────────────
   const html  = document.documentElement;
   const themeBtn  = document.getElementById('themeBtn');
@@ -682,6 +641,6 @@
   ['email', 'password'].forEach(id => {
     document.getElementById(id).addEventListener('input', clearError);
   });
-</script>
+-->
 </body>
 </html>

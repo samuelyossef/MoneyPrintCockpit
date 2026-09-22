@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-  [switch]$NonInteractive
+  [switch]$NonInteractive,
+  [switch]$AdminOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,7 +22,34 @@ function Read-SecretValue([string]$label, [string]$environmentName) {
   finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 }
 
+function Read-PlainValue([string]$label, [string]$environmentName) {
+  if ($NonInteractive) { return [Environment]::GetEnvironmentVariable($environmentName) }
+  return Read-Host $label
+}
+
+function Get-PasswordHash([string]$password) {
+  $salt = New-Object byte[] 16
+  [Security.Cryptography.RandomNumberGenerator]::Fill($salt)
+  $derive = [Security.Cryptography.Rfc2898DeriveBytes]::new($password, $salt, 600000, [Security.Cryptography.HashAlgorithmName]::SHA256)
+  try { return @{ algorithm='pbkdf2_sha256'; iterations='600000'; salt=([Convert]::ToHexString($salt).ToLowerInvariant()); hash=([Convert]::ToHexString($derive.GetBytes(32)).ToLowerInvariant()) } }
+  finally { $derive.Dispose() }
+}
+
 $mptKey = [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
+$adminName = Read-PlainValue 'Nome do administrador local' 'COCKPIT_ADMIN_NAME'
+$adminEmail = Read-PlainValue 'E-mail do administrador local' 'COCKPIT_ADMIN_EMAIL'
+$adminPassword = Read-SecretValue 'Senha do administrador local' 'COCKPIT_ADMIN_PASSWORD'
+if ([string]::IsNullOrWhiteSpace($adminName) -or [string]::IsNullOrWhiteSpace($adminEmail) -or $adminPassword.Length -lt 12) {
+  throw 'Informe nome, e-mail e uma senha de pelo menos 12 caracteres para o administrador local.'
+}
+$adminHash = Get-PasswordHash $adminPassword
+$admin = @{ name=$adminName.Trim(); email=$adminEmail.Trim().ToLowerInvariant(); algorithm=$adminHash.algorithm; iterations=$adminHash.iterations; salt=$adminHash.salt; hash=$adminHash.hash } | ConvertTo-Json -Compress
+[IO.File]::WriteAllText((Join-Path $secretsPath 'admin.json'), $admin + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+if ($AdminOnly) {
+  icacls $runtimePath /inheritance:r /grant:r "$env:USERNAME`:(OI)(CI)F" | Out-Null
+  Write-Output 'Administrador local configurado.'
+  exit 0
+}
 $moonshotKey = Read-SecretValue 'Chave Moonshot/Kimi (Enter para configurar depois)' 'MOONSHOT_API_KEY'
 $pexelsKey = Read-SecretValue 'Chave Pexels (Enter para configurar depois)' 'PEXELS_API_KEY'
 $uploadPostKey = Read-SecretValue 'Chave Upload-Post (Enter para configurar depois)' 'UPLOAD_POST_API_KEY'

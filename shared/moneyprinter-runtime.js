@@ -4,13 +4,81 @@
   let activeProject = null;
   let activeJob = null;
   let stream = null;
+  let csrfToken = sessionStorage.getItem("cockpit-csrf") || "";
+  let assistantMessages = [];
 
-  async function request(path, options) {
-    const response = await fetch(API + path, { headers: { "Content-Type": "application/json", ...(options && options.headers) }, ...options });
+  async function request(path, options = {}) {
+    const method = (options.method || "GET").toUpperCase();
+    const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(method) && csrfToken) headers["X-CSRF-Token"] = csrfToken;
+    const response = await fetch(API + path, { credentials: "same-origin", ...options, headers });
     if (response.status === 204) return null;
     const body = await response.json().catch(() => ({}));
+    if (response.status === 401 && path !== "/auth/session") {
+      sessionStorage.removeItem("cockpit-csrf");
+      window.location.replace("/Login.html");
+    }
     if (!response.ok) throw new Error(body.detail || "Não foi possível concluir a operação.");
     return body;
+  }
+
+  async function streamLongScript(payload, onEvent) {
+    const headers = { "Content-Type": "application/json" };
+    if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
+    const response = await fetch(API + "/scripts/long/stream", {
+      method: "POST", credentials: "same-origin", headers, body: JSON.stringify(payload),
+    });
+    if (response.status === 401) {
+      sessionStorage.removeItem("cockpit-csrf");
+      window.location.replace("/Login.html");
+      throw new Error("Sua sessão expirou.");
+    }
+    if (!response.ok || !response.body) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || "Não foi possível iniciar o roteiro.");
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "", event = "message", completed = null;
+    const consume = block => {
+      const lines = block.split(/\r?\n/);
+      const eventLine = lines.find(line => line.startsWith("event:"));
+      const dataLine = lines.find(line => line.startsWith("data:"));
+      if (!dataLine) return;
+      const name = eventLine ? eventLine.slice(6).trim() : "message";
+      let data;
+      try { data = JSON.parse(dataLine.slice(5).trim()); } catch (_) { throw new Error("O servidor enviou um progresso inválido."); }
+      if (name === "error") throw new Error(data.message || "Não foi possível gerar o roteiro.");
+      onEvent(name, data);
+      if (name === "completed") completed = data;
+    };
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      let boundary;
+      while ((boundary = buffer.search(/\r?\n\r?\n/)) >= 0) {
+        const block = buffer.slice(0, boundary); buffer = buffer.slice(boundary).replace(/^\r?\n\r?\n/, "");
+        consume(block);
+      }
+      if (done) break;
+    }
+    if (!completed) throw new Error("A geração do roteiro foi encerrada antes de concluir.");
+    return completed;
+  }
+
+  async function establishSession() {
+    const session = await request("/auth/session");
+    csrfToken = session.csrf_token || "";
+    sessionStorage.setItem("cockpit-csrf", csrfToken);
+    window.CK && (window.CK.__admin = session);
+    return session;
+  }
+
+  async function logout() {
+    await request("/auth/logout", { method: "POST" });
+    csrfToken = "";
+    sessionStorage.removeItem("cockpit-csrf");
+    window.location.replace("/Login.html");
   }
 
   function value(body, selector, fallback) {
@@ -173,12 +241,11 @@
   const PROJECT_NAMES = { long: "Vídeos longos", short: "Shorts" };
   async function projectFor(body) {
     const name = PROJECT_NAMES[screenFormat(body)] || "Meu projeto";
-    const defaults = { video_language: value(body, "#genLanguageSelect", "pt-BR"), voice_name: value(body, "#genVoiceSelect", "pt-BR-FranciscaNeural") };
     if (activeProject && activeProject.name === name) return activeProject;
     const projects = await request("/projects");
     const found = projects.find(project => project.name === name);
     if (found) { activeProject = found; return found; }
-    activeProject = await request("/projects", { method: "POST", body: JSON.stringify({ name, language: defaults.video_language, defaults, publish: { auto_publish: false, platforms: [], youtube_privacy: "private" } }) });
+    activeProject = await request("/projects", { method: "POST", body: JSON.stringify({ name, language: "pt-BR", defaults: {}, publish: { auto_publish: false, platforms: [], youtube_privacy: "private" } }) });
     return activeProject;
   }
 
@@ -327,6 +394,64 @@
   let syncTimer = null;
   syncVideos();
 
+  async function syncNotifications() {
+    if (!window.CK || !window.CK.NOTIFICATIONS) return;
+    try {
+      const data = await request("/notifications");
+      const mapKind = kind => kind === "job_failed" ? "critical" : kind === "job_interrupted" ? "warning" : "ok";
+      const items = (data.items || []).map(item => ({
+        id: item.id, sev: mapKind(item.kind), title: item.title, sub: item.detail || "",
+        time: item.created_at ? new Date(item.created_at).toLocaleString("pt-BR") : "", read: Boolean(item.read_at), view: item.job_id ? "jobsWorkers" : "notificacoes",
+      }));
+      window.CK.NOTIFICATIONS.length = 0; window.CK.NOTIFICATIONS.push(...items);
+      window.CK.ALERTS.length = 0; window.CK.ALERTS.push(...items);
+      if (window.CK.__refreshTopbar) window.CK.__refreshTopbar();
+    } catch (_) { /* The dedicated view will show the Gateway error if it becomes unavailable. */ }
+  }
+
+  const CHANNEL_PROFILE_KEYS = ["language", "voice_name", "voice_rate", "voice_volume", "subtitle_enabled", "subtitle_position", "font_size", "text_fore_color", "stroke_color", "stroke_width"];
+  const CHANNEL_VIDEO_PROFILE_KEYS = {
+    short: ["paragraph_number", "video_clip_duration", "video_count", "video_concat_mode", "video_transition_mode", "video_clip_speed", "bgm_type", "bgm_volume"],
+    long: ["target_minutes", "video_clip_duration", "video_concat_mode", "video_transition_mode", "video_clip_speed", "bgm_type", "bgm_volume"],
+  };
+  const channelProfilePayload = channel => ({ ...Object.fromEntries(CHANNEL_PROFILE_KEYS.map(key => [key, channel[key]])), video_defaults: channel.video_defaults || {} });
+
+  function applyChannelProfile(body) {
+    const channels = selectedChannels(body).map(channelById).filter(Boolean);
+    const note = body.querySelector("#genChannelProfileNote");
+    if (!channels.length) {
+      if (note) { note.textContent = "Sem canal selecionado: serão usados os padrões técnicos do projeto."; note.style.color = ""; }
+      return;
+    }
+    const primary = channels[0];
+    const format = screenFormat(body) || "short";
+    const videoProfile = primary.video_defaults && primary.video_defaults[format];
+    const profileKeys = [...CHANNEL_PROFILE_KEYS, ...CHANNEL_VIDEO_PROFILE_KEYS[format]];
+    const conflicts = profileKeys.filter(key => {
+      const primaryValue = CHANNEL_VIDEO_PROFILE_KEYS[format].includes(key) ? videoProfile && videoProfile[key] : primary[key];
+      return channels.some(channel => String(CHANNEL_VIDEO_PROFILE_KEYS[format].includes(key) ? channel.video_defaults && channel.video_defaults[format] && channel.video_defaults[format][key] : channel[key]) !== String(primaryValue));
+    });
+    if (conflicts.length) {
+      if (note) { note.textContent = "Os canais selecionados têm parâmetros de vídeo diferentes. Alinhe-os ou gere vídeos separados."; note.style.color = "var(--err)"; }
+      return;
+    }
+    const set = (selector, value) => { const input = body.querySelector(selector); if (input && value !== undefined) input.value = value; };
+    set("#genLanguageSelect", primary.language); set("#genVoiceSelect", primary.voice_name);
+    set("#genVoiceRate", primary.voice_rate); set("#genVoiceVolume", primary.voice_volume);
+    set("#genSubtitlePosition", primary.subtitle_position); set("#genFontSizeInput", primary.font_size);
+    set("#genTextColorInput", primary.text_fore_color); set("#genStrokeColorInput", primary.stroke_color);
+    set("#genStrokeWidth", primary.stroke_width);
+    if (videoProfile) {
+      set("#genParagraphInput", videoProfile.paragraph_number); set("#genTargetMinutes", videoProfile.target_minutes);
+      set("#genDurationInput", videoProfile.video_clip_duration); set("#genVideoCount", videoProfile.video_count);
+      set("#genConcatMode", videoProfile.video_concat_mode); set("#genTransition", videoProfile.video_transition_mode);
+      set("#genClipSpeed", videoProfile.video_clip_speed); set("#genBgmSelect", videoProfile.bgm_type); set("#genBgmVolume", videoProfile.bgm_volume);
+    }
+    const subtitle = body.querySelector("#genSubtitleEnabled"); if (subtitle) subtitle.checked = !!primary.subtitle_enabled;
+    if (note) { note.textContent = `Padrões de voz, legendas e vídeo carregados de ${primary.name}. Você pode ajustá-los apenas para este vídeo.`; note.style.color = ""; }
+  }
+  syncNotifications();
+
   async function checkHealth() {
     try { window.CK && (window.CK.__health = await fetch(`${API}/health`).then(r => r.json())); }
     catch (_) { window.CK && (window.CK.__health = { status: "offline" }); }
@@ -335,8 +460,12 @@
   checkHealth();
 
   async function fetchProviders() {
-    try { window.CK && (window.CK.__providers = await request("/settings/providers")); }
-    catch (_) { /* Gateway offline: leave providers panel showing its last known state. */ }
+    try {
+      const [providers, nvidiaModels] = await Promise.all([
+        request("/settings/providers"), request("/settings/providers/nvidia/models"),
+      ]);
+      if (window.CK) { window.CK.__providers = providers; window.CK.__nvidiaModels = nvidiaModels; }
+    } catch (_) { /* Gateway offline: leave providers panel showing its last known state. */ }
     // Provider badges only live on Configurações; repainting any other view would wipe its form.
     if (window.CK && window.CK.__refresh && document.querySelector("#cfgBody")) window.CK.__refresh();
   }
@@ -356,10 +485,14 @@
       el.value = val;
     };
     set("#genLanguageSelect", defaults.video_language); set("#genVoiceSelect", defaults.voice_name);
+    set("#genVoiceRate", defaults.voice_rate); set("#genVoiceVolume", defaults.voice_volume);
     set("#genParagraphInput", defaults.paragraph_number); set("#genDurationInput", defaults.video_clip_duration);
     set("#genFontSizeInput", defaults.font_size); set("#genTextColorInput", defaults.text_fore_color);
     set("#genStrokeColorInput", defaults.stroke_color); set("#genBgmSelect", defaults.bgm_type);
-    set("#genSubtitlePosition", defaults.subtitle_position);
+    set("#genBgmVolume", defaults.bgm_volume); set("#genSubtitlePosition", defaults.subtitle_position);
+    set("#genVideoCount", defaults.video_count); set("#genConcatMode", defaults.video_concat_mode);
+    set("#genTransition", defaults.video_transition_mode); set("#genClipSpeed", defaults.video_clip_speed);
+    set("#genTargetMinutes", defaults.target_minutes);
     const subtitle = body.querySelector("#genSubtitleEnabled");
     if (subtitle && defaults.subtitle_enabled !== undefined) subtitle.checked = !!defaults.subtitle_enabled;
     // Only fill these two if the field is still empty - an in-progress edit on screen (not yet
@@ -375,31 +508,8 @@
      to the hardcoded HTML defaults. A "loaded once" guard would leave that reset
      value on screen forever after the first background refresh (#found in QA). */
   async function bindGenerationDefaults(body, notify) {
-    // Three "Salvar padrão" buttons share this one save action (Parâmetros de vídeo, Prompt do
-    // sistema, and next to Requisitos personalizados) - wherever the user happens to be editing,
-    // not just the tab that owns the rest of the fields.
-    const saveButtons = [...body.querySelectorAll(".gen-save-defaults")];
-    if (!saveButtons.length) return;
     const format = screenFormat(body);
     const url = `/settings/generation-defaults?format=${format}`;
-    const save = async () => {
-      cachedDefaults[format] = await request(url, { method: "PUT", body: JSON.stringify({ value: {
-        video_language: value(body, "#genLanguageSelect", "pt-BR"), voice_name: value(body, "#genVoiceSelect", "pt-BR-FranciscaNeural"),
-        ...(body.querySelector("#genParagraphInput") ? { paragraph_number: integer(value(body, "#genParagraphInput", 5), 5) } : {}),
-        video_clip_duration: integer(value(body, "#genDurationInput", 5), 5),
-        font_size: integer(value(body, "#genFontSizeInput", 56), 56), text_fore_color: value(body, "#genTextColorInput", "#FFFFFF"),
-        stroke_color: value(body, "#genStrokeColorInput", "#000000"), bgm_type: value(body, "#genBgmSelect", ""),
-        subtitle_position: value(body, "#genSubtitlePosition", "bottom"),
-        subtitle_enabled: !body.querySelector("#genSubtitleEnabled") || body.querySelector("#genSubtitleEnabled").checked,
-        video_script_prompt: value(body, "#genScriptRequirements", "").trim(), custom_system_prompt: value(body, "#genSystemPrompt", "").trim(),
-      } }) });
-      notify(`Padrões de ${format === "long" ? "vídeo longo" : "Shorts"} salvos.`);
-    };
-    saveButtons.forEach(btn => {
-      if (btn.dataset.bound) return;
-      btn.dataset.bound = "true";
-      btn.addEventListener("click", async () => { try { await save(); } catch (error) { notify(error.message); } });
-    });
     if (cachedDefaults[format]) { applyDefaults(body, cachedDefaults[format]); return; }
     try {
       cachedDefaults[format] = await request(url);
@@ -450,6 +560,38 @@
      one tab never wipes another tab's saved fields. */
   async function bindConfigSettings(body, notify) {
     bindKeyValidation(body);
+    const nvidiaSelect = body.querySelector("#cfgNvidiaTextModel");
+    const nvidiaInfo = body.querySelector("#cfgNvidiaModelInfo");
+    const nvidiaTest = body.querySelector("#cfgNvidiaTestBtn");
+    const nvidiaTestStatus = body.querySelector("#cfgNvidiaTestStatus");
+    const selectedModel = () => ((window.CK && window.CK.__nvidiaModels && window.CK.__nvidiaModels.models) || []).find(model => model.id === (nvidiaSelect && nvidiaSelect.value));
+    const describeSelectedModel = () => {
+      const model = selectedModel();
+      if (!nvidiaInfo || !model) return;
+      const capabilities = ["Texto", model.capabilities && model.capabilities.image ? "Imagem" : "", model.capabilities && model.capabilities.reasoning ? "Raciocínio" : "", model.capabilities && model.capabilities.streaming ? "Streaming" : ""].filter(Boolean).join(" · ");
+      nvidiaInfo.textContent = `${model.description || ""}${capabilities ? ` ${capabilities}.` : ""}`;
+    };
+    if (nvidiaSelect && !nvidiaSelect.dataset.modelBound) {
+      nvidiaSelect.dataset.modelBound = "true";
+      nvidiaSelect.addEventListener("change", describeSelectedModel);
+    }
+    if (nvidiaTest && !nvidiaTest.dataset.bound) {
+      nvidiaTest.dataset.bound = "true";
+      nvidiaTest.addEventListener("click", async () => {
+        if (!nvidiaSelect) return;
+        nvidiaTest.disabled = true;
+        if (nvidiaTestStatus) { nvidiaTestStatus.textContent = "Testando uma resposta mínima na NVIDIA…"; nvidiaTestStatus.style.color = "var(--muted)"; }
+        try {
+          const result = await request("/settings/providers/nvidia/test", { method: "POST", body: JSON.stringify({ model: nvidiaSelect.value }) });
+          if (nvidiaTestStatus) {
+            nvidiaTestStatus.textContent = result.ok ? `✓ ${result.detail} (${result.latency_ms} ms)` : `✗ ${result.detail}`;
+            nvidiaTestStatus.style.color = result.ok ? "var(--ok)" : "var(--err)";
+          }
+        } catch (error) {
+          if (nvidiaTestStatus) { nvidiaTestStatus.textContent = error.message; nvidiaTestStatus.style.color = "var(--err)"; }
+        } finally { nvidiaTest.disabled = false; }
+      });
+    }
     const saveBtn = body.querySelector("#cfgSaveBtn");
     if (!saveBtn) return;
     if (!saveBtn.dataset.bound) {
@@ -473,7 +615,8 @@
         });
         const uploadUser = body.querySelector("#cfgUploadPostUser"); if (uploadUser && uploadUser.value) credentials.upload_post_username = uploadUser.value;
         const moonshotModel = body.querySelector("#cfgMoonshotModel"); if (moonshotModel && moonshotModel.value) credentials.moonshot_model_name = moonshotModel.value;
-        const nvidiaTextModel = body.querySelector("#cfgNvidiaTextModel"); if (nvidiaTextModel && nvidiaTextModel.value) credentials.nvidia_text_model = nvidiaTextModel.value;
+        const nvidiaTextModel = body.querySelector("#cfgNvidiaTextModel");
+        if (nvidiaTextModel && nvidiaTextModel.value !== ((window.CK.__providers && window.CK.__providers.nvidia_text_model) || "moonshotai/kimi-k3")) credentials.nvidia_text_model = nvidiaTextModel.value;
         // A <select> always has a value, unlike the text fields above - only send it when it actually changed,
         // so saving unrelated settings doesn't needlessly re-trigger the "restart the container" notice.
         const providerSelect = body.querySelector("#cfgLlmProvider");
@@ -490,7 +633,9 @@
               const el = body.querySelector(selector); if (el) el.value = "";
               const status = body.querySelector(`${selector}Status`); if (status) status.textContent = "";
             });
-            notify("Configurações salvas. Reinicie o container moneyprinterturbo para aplicar as chaves.");
+            notify(window.CK.__providers.turbo_pending_restart
+              ? "Configurações salvas. Reinicie o container moneyprinterturbo para aplicar o modelo aos Shorts."
+              : "Configurações salvas.");
           } else {
             notify("Configurações salvas.");
           }
@@ -505,18 +650,43 @@
 
   // One draft per screen, so a long-video script never shows up on the Shorts form.
   const draftKey = body => `moneyprint-generation-draft-v1-${screenFormat(body)}`;
+  const DRAFT_TEXT_SELECTORS = ["#genTopicInput", "#genScriptInput", "#genTermsInput", "#genScriptRequirements", "#genSystemPrompt"];
+  const DRAFT_PARAMETER_SELECTORS = ["#genLanguageSelect", "#genVoiceSelect", "#genVoiceRate", "#genVoiceVolume", "#genParagraphInput", "#genTargetMinutes", "#genDurationInput", "#genVideoCount", "#genConcatMode", "#genTransition", "#genClipSpeed", "#genSubtitleEnabled", "#genSubtitlePosition", "#genStrokeWidth", "#genFontSizeInput", "#genTextColorInput", "#genStrokeColorInput", "#genBgmSelect", "#genBgmVolume"];
 
   function saveDraft(body) {
-    const inputs = ["#genTopicInput", "#genScriptInput", "#genTermsInput", "#genLanguageSelect", "#genVoiceSelect", "#genScriptRequirements", "#genSystemPrompt"];
-    const draft = Object.fromEntries(inputs.map(selector => [selector, value(body, selector, "")]));
+    const inputs = [...DRAFT_TEXT_SELECTORS, ...DRAFT_PARAMETER_SELECTORS];
+    const draft = Object.fromEntries(inputs.map(selector => {
+      const element = body.querySelector(selector);
+      return [selector, element ? (element.type === "checkbox" ? element.checked : element.value) : undefined];
+    }));
+    draft.channel_ids = selectedChannels(body);
     try { localStorage.setItem(draftKey(body), JSON.stringify(draft)); } catch (_) { /* storage full or blocked: drafts are a convenience */ }
   }
 
   function restoreDraft(body) {
     try {
       const draft = JSON.parse(localStorage.getItem(draftKey(body)) || "{}");
-      Object.entries(draft).forEach(([selector, saved]) => { const input = body.querySelector(selector); if (input && saved) input.value = saved; });
+      DRAFT_TEXT_SELECTORS.forEach(selector => { const input = body.querySelector(selector); if (input && draft[selector]) input.value = draft[selector]; });
+      const selected = new Set(Array.isArray(draft.channel_ids) ? draft.channel_ids : []);
+      const select = body.querySelector("#genChannelSelect");
+      if (select && selected.has(select.value) === false && [...select.options].some(option => selected.has(option.value))) select.value = [...selected][0];
+      body.querySelectorAll('input[name="genChannel"]').forEach(input => { input.checked = selected.has(input.value); });
+      return draft;
     } catch (_) { /* Invalid local draft must not block the Cockpit. */ }
+    return {};
+  }
+
+  function restoreParameterOverrides(body, draft) {
+    const current = selectedChannels(body).slice().sort();
+    const saved = Array.isArray(draft.channel_ids) ? draft.channel_ids.slice().sort() : [];
+    if (current.join("|") !== saved.join("|")) return;
+    DRAFT_PARAMETER_SELECTORS.forEach(selector => {
+      if (!(selector in draft)) return;
+      const input = body.querySelector(selector);
+      if (!input) return;
+      if (input.type === "checkbox") input.checked = !!draft[selector];
+      else input.value = draft[selector];
+    });
   }
 
   function bindGenerator(body, notify) {
@@ -525,8 +695,17 @@
     lastNotify = notify;
     resumeActiveJob();
     syncVideos(); // a job may have started elsewhere (another tab, the API) since the last sync
-    bindGenerationDefaults(body, notify);
     fillChannelSelects();
+    let generationDraft = {};
+    const applyProfileAndOverrides = () => {
+      applyChannelProfile(body);
+      restoreParameterOverrides(body, generationDraft);
+    };
+    const persistGeneratorDraft = () => {
+      saveDraft(body);
+      try { generationDraft = JSON.parse(localStorage.getItem(draftKey(body)) || "{}"); } catch (_) { generationDraft = {}; }
+    };
+    bindGenerationDefaults(body, notify).then(applyProfileAndOverrides);
     const genTabs = body.querySelector("#genTabs");
     if (genTabs && !genTabs.dataset.bound) {
       genTabs.dataset.bound = "true";
@@ -552,15 +731,44 @@
     if (!button || button.dataset.moneyprinterBound) return;
     button.dataset.moneyprinterBound = "true";
     const label = button.textContent;
+    const generatorLanguage = body.querySelector("#genLanguageSelect");
+    const generatorVoice = body.querySelector("#genVoiceSelect");
+    const syncGeneratorVoices = () => {
+      if (!generatorLanguage || !generatorVoice) return;
+      const prefix = `${generatorLanguage.value.split("-")[0]}-`;
+      [...generatorVoice.options].forEach(option => { option.hidden = !option.value.startsWith(prefix); });
+      if (!generatorVoice.value.startsWith(prefix)) generatorVoice.value = [...generatorVoice.options].find(option => option.value.startsWith(prefix))?.value || "";
+    };
+    syncGeneratorVoices();
+    if (generatorLanguage) generatorLanguage.addEventListener("change", syncGeneratorVoices);
     const channelList = body.querySelector("#genChannelList");
     // One channel per platform: ticking a second YouTube channel unticks the first.
     if (channelList) channelList.addEventListener("change", event => {
       const box = event.target;
-      if (box.name !== "genChannel" || !box.checked) return;
-      channelList.querySelectorAll(`input[data-platform="${box.dataset.platform}"]`).forEach(other => { if (other !== box) other.checked = false; });
+      if (box.name === "genChannel" && box.checked) {
+        channelList.querySelectorAll(`input[data-platform="${box.dataset.platform}"]`).forEach(other => { if (other !== box) other.checked = false; });
+      }
+      generationDraft.channel_ids = selectedChannels(body);
+      applyChannelProfile(body);
+      persistGeneratorDraft();
+    });
+    const channelSelect = body.querySelector("#genChannelSelect");
+    if (channelSelect) channelSelect.addEventListener("change", () => {
+      generationDraft.channel_ids = selectedChannels(body);
+      applyChannelProfile(body);
+      persistGeneratorDraft();
     });
     const scriptInput = body.querySelector("#genScriptInput");
     const stats = body.querySelector("#genScriptStats");
+    const termsMode = () => value(body, "#genConcatMode", "random") === "script";
+    const syncTermsGate = () => {
+      if (format !== "long") return;
+      const blocked = termsMode() && ["pending", "failed", "stale"].includes(body.dataset.termsState || "");
+      button.dataset.termsBlocked = blocked ? "true" : "";
+      button.disabled = blocked;
+      if (blocked) button.title = "Gere as palavras-chave alinhadas antes de iniciar no modo Seguir o roteiro.";
+      else button.removeAttribute("title");
+    };
     const updateStats = () => {
       if (!stats) return;
       const words = scriptInput.value.trim().split(/\s+/).filter(Boolean).length;
@@ -569,11 +777,29 @@
       stats.textContent = words ? `${words} palavras · ≈ ${seconds > 90 ? `${Math.round(seconds / 6) / 10} min` : `${seconds} s`} de narração${outOfRange ? ` — ${outOfRange} para um Short (60–90 s)` : ""}` : "";
       stats.style.color = outOfRange ? "var(--warn)" : "";
     };
-    restoreDraft(body);
+    generationDraft = restoreDraft(body);
+    applyProfileAndOverrides();
     updateStats();
-    body.querySelectorAll("#genTopicInput, #genScriptInput, #genTermsInput, #genLanguageSelect, #genVoiceSelect, #genScriptRequirements, #genSystemPrompt").forEach(input => input.addEventListener("input", () => saveDraft(body)));
-    scriptInput.addEventListener("input", updateStats);
+    body.querySelectorAll([...DRAFT_TEXT_SELECTORS, ...DRAFT_PARAMETER_SELECTORS].join(",")).forEach(input => {
+      input.addEventListener("input", persistGeneratorDraft);
+      input.addEventListener("change", persistGeneratorDraft);
+    });
+    scriptInput.addEventListener("input", () => {
+      updateStats();
+      if (format === "long" && body.dataset.termsScript && body.dataset.termsScript !== scriptInput.value.trim()) {
+        body.dataset.termsState = "stale";
+        const terms = body.querySelector("#genTermsInput"); if (terms) terms.value = "";
+        syncTermsGate();
+      }
+    });
+    const concatMode = body.querySelector("#genConcatMode");
+    if (concatMode) concatMode.addEventListener("change", syncTermsGate);
+    body.addEventListener("moneyprinter:terms-state", syncTermsGate);
     button.addEventListener("click", async () => {
+      if (button.dataset.termsBlocked === "true") {
+        notify("Gere ou repita as palavras-chave para manter as filmagens alinhadas ao roteiro.");
+        return;
+      }
       const subject = value(body, "#genTopicInput", "").trim();
       if (!subject) { notify("Informe o tema do vídeo."); body.querySelector("#genTopicInput").focus(); return; }
       button.disabled = true;
@@ -627,11 +853,12 @@
     run("#genScriptAiBtn", "Gerar roteiro com IA", async subject => {
       const result = await request("/scripts/short", { method: "POST", body: JSON.stringify({
         subject, language: value(body, "#genLanguageSelect", "pt-BR"), paragraph_number: integer(value(body, "#genParagraphInput", 5), 5),
-        script_prompt: value(body, "#genScriptRequirements", "").trim(), system_prompt: value(body, "#genSystemPrompt", "").trim(),
+        script_prompt: value(body, "#genScriptRequirements", "").trim(), system_prompt: [channelById(selectedChannels(body)[0])?.system_prompt, value(body, "#genSystemPrompt", "").trim()].filter(Boolean).join("\n\n"),
       }) });
       body.querySelector("#genScriptInput").value = result.script || "";
       body.querySelector("#genScriptInput").dispatchEvent(new Event("input")); // saves the draft and refreshes the word count
       if (result.trimmed) notify("Roteiro cortado para caber na duração alvo do Short.");
+      else if (result.too_short) notify(`Roteiro com ${result.words} palavras (≈ ${Math.round(result.words / 2.5)} s) — curto para 60–90 s. Gere de novo ou complete o texto.`);
     });
     // One search term per script chunk, in narration order, instead of a handful of generic
     // terms shared by the whole video - see visual_terms() in the gateway.
@@ -645,21 +872,53 @@
       body.querySelector("#genTermsInput").dispatchEvent(new Event("input"));
       return result;
     };
+    const termsState = (state, script = "") => {
+      body.dataset.termsState = state;
+      if (script) body.dataset.termsScript = script;
+      if (state === "idle") { delete body.dataset.termsScript; }
+      body.dispatchEvent(new Event("moneyprinter:terms-state"));
+    };
+    const scheduleAlignedTerms = async (subject, { announce = false } = {}) => {
+      const script = value(body, "#genScriptInput", "").trim();
+      if (!script) { termsState("idle"); return null; }
+      if (body.dataset.termsState === "pending" && body.dataset.termsScript === script) return null;
+      const termsBtn = body.querySelector("#genTermsAiBtn");
+      termsState("pending", script);
+      if (termsBtn) { termsBtn.disabled = true; termsBtn.textContent = "Preparando filmagens…"; }
+      try {
+        const result = await alignTermsToScript(subject);
+        if (value(body, "#genScriptInput", "").trim() !== script) {
+          termsState("stale");
+          if (announce) notify("O roteiro foi alterado; gere as palavras-chave novamente.");
+          return null;
+        }
+        termsState("ready", script);
+        if (announce) notify(`${result.cuts} cortes de ${result.clip_seconds}s alinhados ao roteiro.`);
+        return result;
+      } catch (error) {
+        if (value(body, "#genScriptInput", "").trim() === script) termsState("failed", script);
+        throw error;
+      } finally {
+        if (termsBtn) { termsBtn.disabled = false; termsBtn.textContent = "Gerar palavras-chave"; }
+      }
+    };
     run("#genLongScriptBtn", "Escrever roteiro longo com IA", async subject => {
       const channel = channelById(selectedChannels(body)[0]);
-      const result = await request("/scripts/long", { method: "POST", body: JSON.stringify({
+      const result = await streamLongScript({
         subject, language: value(body, "#genLanguageSelect", "pt-BR"), minutes: integer(value(body, "#genTargetMinutes", 8), 8), niche: (channel && channel.niche) || "",
-        requirements: value(body, "#genScriptRequirements", "").trim(), system_prompt: value(body, "#genSystemPrompt", "").trim(),
-      }) });
+        requirements: value(body, "#genScriptRequirements", "").trim(), system_prompt: [channel && channel.system_prompt, value(body, "#genSystemPrompt", "").trim()].filter(Boolean).join("\n\n"),
+      }, (_event, progress) => {
+        const btn = body.querySelector("#genLongScriptBtn");
+        if (btn && progress.message) btn.textContent = progress.message;
+      });
       body.querySelector("#genScriptInput").value = result.script || "";
       body.querySelector("#genScriptInput").dispatchEvent(new Event("input"));
-      const terms = await alignTermsToScript(subject);
-      notify(`Roteiro com ${result.sections.length} seções · ≈ ${result.estimated_minutes} min de narração${terms ? ` · ${terms.cuts} cortes alinhados` : ""}${result.trimmed ? " · cortado para caber na duração alvo" : ""}`);
+      notify(`Roteiro com ${result.sections.length} seções · ≈ ${result.estimated_minutes} min de narração${result.trimmed ? " · cortado para caber na duração alvo" : ""}`);
+      scheduleAlignedTerms(subject).catch(error => notify(`Palavras-chave não foram geradas: ${error.message}`));
     });
     run("#genTermsAiBtn", "Gerar palavras-chave", async subject => {
-      const result = await alignTermsToScript(subject);
-      if (!result) { notify("Escreva ou gere o roteiro primeiro."); return; }
-      notify(`${result.cuts} cortes de ${result.clip_seconds}s alinhados ao roteiro.`);
+      const result = await scheduleAlignedTerms(subject, { announce: true });
+      if (!result && !value(body, "#genScriptInput", "").trim()) notify("Escreva ou gere o roteiro primeiro.");
     });
   }
 
@@ -715,7 +974,9 @@
   function mapChannel(c) {
     const stats = c.stats || {};
     return { id: c.id, name: c.name, platform: c.platform === "tiktok" ? "TikTok" : "YouTube", handle: c.handle, status: c.status,
-      niche: c.niche, language: c.language, followers: stats.followers || 0, videos: stats.videos || 0, views: stats.views || 0, last: "—" };
+      niche: c.niche, language: c.language, system_prompt: c.system_prompt || "", voice_name: c.voice_name, voice_rate: c.voice_rate, voice_volume: c.voice_volume,
+      subtitle_enabled: c.subtitle_enabled, subtitle_position: c.subtitle_position, font_size: c.font_size, text_fore_color: c.text_fore_color,
+      stroke_color: c.stroke_color, stroke_width: c.stroke_width, video_defaults: c.video_defaults, followers: stats.followers || 0, videos: stats.videos || 0, views: stats.views || 0, last: "—" };
   }
 
   /* Refills the channel selects in place: re-rendering Gerador would wipe what the user typed. */
@@ -765,11 +1026,11 @@
     if (win && !win.closed) { win.opener = null; win.location.href = url; }
     else window.open(url, "_blank", "noopener");
   }
-  const youtubeConnectUrl = rec => `${API}/channels/youtube/connect?${new URLSearchParams({ niche: rec.niche || "", language: rec.language || "pt-BR" })}`;
+  const youtubeConnectUrl = rec => `${API}/channels/youtube/connect?${new URLSearchParams({ niche: rec.niche || "", system_prompt: rec.system_prompt || "", ...channelProfilePayload(rec), video_defaults: JSON.stringify(rec.video_defaults || {}) })}`;
 
   async function connectChannel(rec, win) {
     if (rec.platform !== "TikTok") { openIn(win, youtubeConnectUrl(rec)); return; }
-    const result = await request("/channels/tiktok/connect", { method: "POST", body: JSON.stringify({ niche: rec.niche || "", language: rec.language || "pt-BR" }) });
+    const result = await request("/channels/tiktok/connect", { method: "POST", body: JSON.stringify({ niche: rec.niche || "", system_prompt: rec.system_prompt || "", ...channelProfilePayload(rec) }) });
     openIn(win, result.access_url);
     await syncChannels();
   }
@@ -964,5 +1225,196 @@
     });
   }
 
-  window.MoneyPrinterRuntime = { bindGenerator, deleteJob, retryJob, stopJob, bindConfigSettings, bindYoutubeLibraryPublish, connectChannel, channelAction, saveChannel, bindAgents, bindAnalytics, bindJobsWorkers };
+  /* ── Logs e traces: eventos reais persistidos pelo Gateway. ── */
+  function bindLogs(body, notify, onOpen) {
+    const logBody = body.querySelector("#logBody");
+    if (!logBody || logBody.dataset.bound) return;
+    logBody.dataset.bound = "true";
+    const search = body.querySelector("#lSearch"), level = body.querySelector("#lLevel"), service = body.querySelector("#lSvc");
+    const count = body.querySelector("#lCount"), refresh = body.querySelector("#lRefresh");
+    const traceBody = body.querySelector("#logTraceBody"), summaryBody = body.querySelector("#logSummaryBody");
+    let events = [], visible = [];
+
+    const renderSummary = () => {
+      const totals = events.reduce((out, item) => { out[item.lvl] = (out[item.lvl] || 0) + 1; return out; }, {});
+      summaryBody.innerHTML = `<dl class="kv" style="margin:0">
+        <dt>Total carregado</dt><dd class="mono">${events.length}</dd>
+        <dt>Erros</dt><dd class="mono" style="color:var(--err)">${(totals.ERROR || 0) + (totals.CRITICAL || 0)}</dd>
+        <dt>Avisos</dt><dd class="mono" style="color:var(--warn)">${totals.WARN || 0}</dd>
+        <dt>Informações</dt><dd class="mono">${totals.INFO || 0}</dd>
+      </dl>`;
+      const latest = events[0];
+      if (!latest) { traceBody.innerHTML = `<div class="card-note">Nenhum evento registrado ainda.</div>`; return; }
+      const spans = latest.spans || [], max = Math.max(1, latest.duration_ms || 0, ...spans.map(s => s.duration_ms || 0));
+      traceBody.innerHTML = `<div class="card-note" style="font-family:var(--font-mono);margin-bottom:10px">${esc(latest.trace)} · ${Number(latest.duration_ms || 0).toLocaleString("pt-BR")} ms</div>
+        <div class="trace"><div class="trace-row"><span class="trace-name">Gateway</span><span class="trace-track"><span class="trace-fill" style="width:100%"></span></span><span class="trace-ms">${Number(latest.duration_ms || 0).toLocaleString("pt-BR")}ms</span></div>
+        ${spans.map(span => `<div class="trace-row"><span class="trace-name">${esc(span.service || span.name)}</span><span class="trace-track"><span class="trace-fill ${span.status_code >= 400 ? "slow" : ""}" style="width:${Math.max(2, (span.duration_ms || 0) / max * 100).toFixed(1)}%"></span></span><span class="trace-ms">${Number(span.duration_ms || 0).toLocaleString("pt-BR")}ms</span></div>`).join("")}</div>`;
+    };
+    const apply = () => {
+      const needle = (search.value || "").toLowerCase();
+      visible = events.filter(item =>
+        (!needle || `${item.msg} ${item.svc} ${item.trace} ${item.path || ""}`.toLowerCase().includes(needle)) &&
+        (level.value.startsWith("Todos") || item.lvl === level.value) &&
+        (service.value.startsWith("Todos") || item.svc === service.value));
+      logBody.innerHTML = window.CKV.logRows(visible);
+      count.textContent = visible.length + (visible.length === 1 ? " linha" : " linhas");
+    };
+    const load = async () => {
+      refresh.disabled = true; refresh.textContent = "Atualizando…";
+      try {
+        const data = await request("/logs?limit=200");
+        events = (data.items || []).map(item => ({
+          ...item, ts: item.timestamp ? new Date(item.timestamp).toLocaleTimeString("pt-BR") : "—",
+          lvl: item.level, svc: item.service, msg: item.message, trace: item.trace_id,
+        }));
+        window.CK.LOGS.length = 0; window.CK.LOGS.push(...events);
+        const current = service.value;
+        service.innerHTML = `<option>Todos os serviços</option>` + (data.services || []).map(name => `<option>${esc(name)}</option>`).join("");
+        if ([...service.options].some(option => option.value === current)) service.value = current;
+        apply(); renderSummary();
+      } catch (error) {
+        logBody.innerHTML = `<div class="empty"><div class="empty-t">Não foi possível carregar os logs</div><div class="empty-s">${esc(error.message)}</div></div>`;
+        count.textContent = "Falha ao carregar";
+        notify(error.message);
+      } finally { refresh.disabled = false; refresh.textContent = "Atualizar"; }
+    };
+    [search, level, service].forEach(element => element.addEventListener("input", apply));
+    refresh.addEventListener("click", load);
+    logBody.addEventListener("click", event => {
+      const row = event.target.closest("[data-log]");
+      if (row && visible[+row.dataset.log] && onOpen) onOpen(visible[+row.dataset.log]);
+    });
+    load();
+  }
+
+
+  function bindAssistantChat(body, prefix) {
+    const id = prefix || "assistantChat";
+    const root = body.querySelector("#" + id + "Root");
+    if (!root || root.dataset.bound) return;
+    root.dataset.bound = "true";
+    const feed = root.querySelector("#" + id + "Feed");
+    const form = root.querySelector("#" + id + "Form");
+    const input = root.querySelector("#" + id + "Input");
+    const sendButton = root.querySelector("#" + id + "Send");
+    const channel = root.querySelector("#" + id + "Channel");
+
+    const render = () => {
+      if (!assistantMessages.length) {
+        feed.innerHTML = '<div class="assistant-chat-welcome"><div class="assistant-avatar">MP</div><div><strong>Assistente MoneyPrinter</strong><p>Posso responder perguntas, calcular metas e oportunidades, criar um plano de crescimento ou gerar um roteiro. O que você precisa?</p></div></div>';
+      } else {
+        feed.innerHTML = assistantMessages.map(item =>
+          '<div class="assistant-chat-row ' + (item.role === "user" ? "is-user" : "is-assistant") + '">' +
+          '<div class="assistant-chat-bubble">' + esc(item.content) + '</div></div>'
+        ).join("");
+      }
+      feed.scrollTop = feed.scrollHeight;
+    };
+    const addMessage = (role, content) => {
+      assistantMessages.push({ role, content });
+      assistantMessages = assistantMessages.slice(-32);
+      render();
+    };
+    const send = async () => {
+      const content = input.value.trim();
+      if (!content || sendButton.disabled) return;
+      addMessage("user", content);
+      input.value = "";
+      input.disabled = true;
+      sendButton.disabled = true;
+      sendButton.textContent = "Pensando…";
+      try {
+        const result = await request("/assistant/chat", {
+          method: "POST",
+          body: JSON.stringify({ messages: assistantMessages.slice(-16), channel_id: channel.value || null }),
+        });
+        addMessage("assistant", result.message || "Não recebi uma resposta.");
+      } catch (error) {
+        addMessage("assistant", "Não consegui concluir: " + error.message);
+      } finally {
+        input.disabled = false;
+        sendButton.disabled = false;
+        sendButton.textContent = "Enviar";
+        input.focus();
+      }
+    };
+
+    form.addEventListener("submit", event => { event.preventDefault(); send(); });
+    input.addEventListener("keydown", event => {
+      if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); }
+    });
+    root.addEventListener("click", event => {
+      const suggestion = event.target.closest("[data-chat-suggestion]");
+      if (suggestion) { input.value = suggestion.textContent.trim(); input.focus(); return; }
+      if (event.target.closest("#" + id + "NewChat")) { assistantMessages = []; render(); input.focus(); }
+    });
+    render();
+  }
+
+  function bindGrowth(body, notify) {
+    const root = body.querySelector("#growthRoot");
+    if (!root || root.dataset.bound) return;
+    root.dataset.bound = "true";
+    const number = id => Number(root.querySelector(`#${id}`).value);
+    const channel = () => root.querySelector("#growthChannel").value;
+    const topic = () => root.querySelector("#growthTopic").value.trim();
+    const goal = () => ({
+      subscribers: number("growthSubscribers"), subscriber_target: number("growthSubscriberTarget"),
+      qualified_watch_hours: number("growthWatchHours"), watch_hour_target: number("growthWatchTarget"),
+      qualified_shorts_views: number("growthShortViews"), shorts_view_target: number("growthShortTarget"),
+      days_remaining: number("growthDays"), average_view_duration_minutes: number("growthAvd"),
+    });
+    const opportunity = () => ({
+      demand: number("growthDemand"), audience_fit: number("growthAudience"), historical_retention: number("growthRetention"),
+      subscriber_conversion: number("growthConversion"), expected_avd: number("growthExpectedAvd"), evergreen: number("growthEvergreen"),
+      trend_velocity: number("growthVelocity"), monetization: number("growthMonetization"), stock_availability: number("growthStock"),
+      competition: number("growthCompetition"), production_cost: number("growthCost"), saturation: number("growthSaturation"),
+    });
+    const requireContext = () => {
+      if (!channel()) throw new Error("Selecione um canal conectado.");
+      if (topic().length < 3) throw new Error("Informe um tema com pelo menos 3 caracteres.");
+    };
+    const showGoal = data => {
+      const result = data.result || data;
+      root.querySelector("#growthGoalResult").innerHTML = `<dl class="kv" style="margin:0">
+        <dt>Gap de inscritos</dt><dd class="mono">${fmt(result.subscribers.gap)} · ${fmt(result.subscribers.required_daily_velocity)}/dia</dd>
+        <dt>Gap de horas</dt><dd class="mono">${fmt(result.watch_hours.gap)} · ${fmt(result.watch_hours.required_daily_velocity)}h/dia</dd>
+        <dt>Views longas necessárias</dt><dd class="mono">${fmt(result.required_qualified_long_views_per_day || 0)}/dia</dd>
+        <dt>Escopo</dt><dd>Somente orgânico qualificado</dd></dl>`;
+    };
+    const showScore = data => {
+      const result = data.result || data;
+      root.querySelector("#growthOpportunityResult").innerHTML = `<div style="font-size:32px;font-weight:650;color:var(--ink)">${Number(result.score).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}<span style="font-size:14px;color:var(--muted)">/100</span></div><div class="card-note">${esc(result.version)} · cálculo determinístico e auditável</div>`;
+    };
+    root.querySelector("#growthEvaluate").addEventListener("click", () => busy(root.querySelector("#growthEvaluate"), async () => {
+      requireContext();
+      const data = await request("/v1/growth/goals/evaluate", { method: "POST", body: JSON.stringify({ channel_id: channel(), metrics: goal() }) });
+      showGoal(data);
+    }).catch(error => notify(error.message)));
+    root.querySelector("#growthScore").addEventListener("click", () => busy(root.querySelector("#growthScore"), async () => {
+      requireContext();
+      const data = await request("/v1/growth/opportunities/score", { method: "POST", body: JSON.stringify({ channel_id: channel(), topic: topic(), dimensions: opportunity() }) });
+      showScore(data);
+    }).catch(error => notify(error.message)));
+    root.querySelector("#growthPlan").addEventListener("click", () => busy(root.querySelector("#growthPlan"), async () => {
+      requireContext();
+      const started = await request("/v1/growth/workflows", { method: "POST", body: JSON.stringify({
+        channel_id: channel(), topic: topic(), ypp_goal: goal(), opportunity: opportunity(),
+        production_target: { long: 1, shorts: 3 }, publish_mode: "review",
+      }) });
+      const panel = root.querySelector("#growthWorkflowResult");
+      panel.innerHTML = `<div class="card-note">Workflow ${esc(started.id)} iniciado. Aguardando o worker…</div>`;
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const current = await request(`/v1/growth/workflows/${started.id}`);
+        panel.innerHTML = `<dl class="kv" style="margin:0"><dt>Estado</dt><dd>${esc(current.state)}</dd><dt>Etapa</dt><dd>${esc(current.current_step)}</dd><dt>Workflow</dt><dd class="mono">${esc(started.id)}</dd></dl>`;
+        if (["completed", "failed", "cancelled"].includes(current.state)) {
+          if (current.output) { showGoal(current.output.ypp_gap); showScore(current.output.opportunity); }
+          break;
+        }
+      }
+    }).catch(error => notify(error.message)));
+  }
+
+  window.MoneyPrinterRuntime = { request, establishSession, logout, syncNotifications, bindGenerator, deleteJob, retryJob, stopJob, bindConfigSettings, bindYoutubeLibraryPublish, connectChannel, channelAction, saveChannel, bindAgents, bindAssistantChat, bindGrowth, bindAnalytics, bindJobsWorkers, bindLogs };
 }());

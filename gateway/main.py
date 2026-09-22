@@ -2,33 +2,52 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import json
 import logging
 import os
 import re
+import secrets
 import sqlite3
 import statistics
 import tempfile
+import time
 from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
+
+from gateway.growth.api import router as growth_router
+from gateway.growth.api import store as growth_store
+from gateway.growth.api import OpportunityScoreRequest, PlanningWorkflowRequest, YPPGoalRequest
+from gateway.growth.api import evaluate_goal, score_opportunity, start_planning_workflow
+from gateway.growth.store import GrowthStoreUnavailable
+from gateway.growth.storage import ObjectStorageUnavailable, ensure_media_bucket
 
 DATA_DIR = Path(os.getenv("APP_DATA_DIR", "runtime"))
 DATABASE = DATA_DIR / "cockpit.sqlite3"
 TURBO_BASE_URL = os.getenv("TURBO_BASE_URL", "http://127.0.0.1:8080").rstrip("/")
 KEY_FILE = os.getenv("MPT_API_KEY_FILE", "")
+ADMIN_FILE = Path(os.getenv("COCKPIT_ADMIN_FILE", str(DATA_DIR / "secrets" / "admin.json")))
+SESSION_HOURS = 12
+LOGIN_ATTEMPTS = 5
+LOGIN_WINDOW_MINUTES = 15
+SHORT_STALE_MINUTES = int(os.getenv("SHORT_STALE_MINUTES", "45"))
+LONG_STALE_MINUTES = int(os.getenv("LONG_STALE_MINUTES", "180"))
+QUEUE_STALE_MINUTES = int(os.getenv("QUEUE_STALE_MINUTES", "360"))
 STATIC_ROOT = Path(__file__).resolve().parents[1]
 JOB_STATES = {"draft", "queued", "running", "completed", "approved", "failed", "interrupted", "deleting", "deleted"}
 RETRY_BASE_SECONDS = 1.0
+ACTIVE_TRACE: ContextVar[dict[str, Any] | None] = ContextVar("active_trace", default=None)
 
 
 def now() -> str:
@@ -37,6 +56,45 @@ def now() -> str:
 
 def as_utc(value: datetime) -> datetime:
     return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC)
+
+
+def parse_time(value: str | None) -> datetime:
+    if not value:
+        return datetime.now(UTC)
+    try:
+        return as_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
+    except ValueError:
+        return datetime.now(UTC)
+
+
+def password_hash(password: str, salt: str | None = None) -> dict[str, str]:
+    """PBKDF2 is deliberately stdlib-only so local setup has no extra secret dependency."""
+    salt_bytes = bytes.fromhex(salt) if salt else secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt_bytes, 600_000)
+    return {"algorithm": "pbkdf2_sha256", "iterations": "600000", "salt": salt_bytes.hex(), "hash": digest.hex()}
+
+
+def configured_admin() -> dict[str, str] | None:
+    try:
+        data = json.loads(ADMIN_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    required = {"name", "email", "salt", "hash"}
+    return data if required.issubset(data) else None
+
+
+def admin_session_version(admin: dict[str, str]) -> str:
+    """Fingerprint sessions against the configured password without storing it in SQLite."""
+    return hashlib.sha256(f"{admin['salt']}:{admin['hash']}".encode("utf-8")).hexdigest()
+
+
+def verify_password(password: str, admin: dict[str, str]) -> bool:
+    candidate = password_hash(password, str(admin["salt"]))
+    return secrets.compare_digest(candidate["hash"], str(admin["hash"]))
+
+
+def session_token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def api_key() -> str:
@@ -100,6 +158,13 @@ def initialize_database() -> None:
             CREATE TABLE IF NOT EXISTS channels (
               id TEXT PRIMARY KEY, platform TEXT NOT NULL, name TEXT NOT NULL, handle TEXT NOT NULL DEFAULT '',
               external_id TEXT, status TEXT NOT NULL, niche TEXT NOT NULL DEFAULT '', language TEXT NOT NULL DEFAULT 'pt-BR',
+              system_prompt TEXT NOT NULL DEFAULT '',
+              voice_name TEXT NOT NULL DEFAULT 'pt-BR-FranciscaNeural', voice_rate REAL NOT NULL DEFAULT 1.0,
+              voice_volume REAL NOT NULL DEFAULT 1.0, subtitle_enabled INTEGER NOT NULL DEFAULT 1,
+              subtitle_position TEXT NOT NULL DEFAULT 'bottom', font_size INTEGER NOT NULL DEFAULT 56,
+              text_fore_color TEXT NOT NULL DEFAULT '#FFFFFF', stroke_color TEXT NOT NULL DEFAULT '#000000',
+              stroke_width REAL NOT NULL DEFAULT 1.5,
+              video_defaults_json TEXT NOT NULL DEFAULT '{}',
               stats_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT,
               UNIQUE(platform, external_id)
             );
@@ -113,6 +178,26 @@ def initialize_database() -> None:
             CREATE TABLE IF NOT EXISTS video_analytics (
               publication_id TEXT PRIMARY KEY, captured_at TEXT NOT NULL, metrics_json TEXT NOT NULL, score INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS observability_events (
+              id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, level TEXT NOT NULL, service TEXT NOT NULL,
+              message TEXT NOT NULL, trace_id TEXT NOT NULL, method TEXT NOT NULL, path TEXT NOT NULL,
+              status_code INTEGER NOT NULL, duration_ms REAL NOT NULL, context_json TEXT NOT NULL DEFAULT '{}',
+              spans_json TEXT NOT NULL DEFAULT '[]'
+            );
+            CREATE INDEX IF NOT EXISTS idx_observability_events_timestamp ON observability_events(timestamp DESC);
+            CREATE TABLE IF NOT EXISTS sessions (
+              token_hash TEXT PRIMARY KEY, csrf_token TEXT NOT NULL, admin_version TEXT NOT NULL, created_at TEXT NOT NULL,
+              expires_at TEXT NOT NULL, last_seen_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS login_attempts (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, attempted_at TEXT NOT NULL, success INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS notifications (
+              id TEXT PRIMARY KEY, event_key TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, title TEXT NOT NULL,
+              detail TEXT NOT NULL DEFAULT '', job_id TEXT REFERENCES video_jobs(id), read_at TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
             """
         )
         job_columns = {column["name"] for column in db.execute("PRAGMA table_info(video_jobs)")}
@@ -124,6 +209,43 @@ def initialize_database() -> None:
             db.execute("UPDATE video_jobs SET format = CASE WHEN json_extract(request_json, '$.video_aspect') = '16:9' THEN 'long' ELSE 'short' END")
         if "created_by" not in job_columns:
             db.execute("ALTER TABLE video_jobs ADD COLUMN created_by TEXT")
+        if "progress_updated_at" not in job_columns:
+            db.execute("ALTER TABLE video_jobs ADD COLUMN progress_updated_at TEXT")
+            db.execute("UPDATE video_jobs SET progress_updated_at=updated_at WHERE progress_updated_at IS NULL")
+        if "last_observed_progress" not in job_columns:
+            db.execute("ALTER TABLE video_jobs ADD COLUMN last_observed_progress INTEGER NOT NULL DEFAULT 0")
+            db.execute("UPDATE video_jobs SET last_observed_progress=progress")
+        if "interruption_reason" not in job_columns:
+            db.execute("ALTER TABLE video_jobs ADD COLUMN interruption_reason TEXT")
+        session_columns = {column["name"] for column in db.execute("PRAGMA table_info(sessions)")}
+        if "admin_version" not in session_columns:
+            # Existing sessions intentionally become invalid after this security migration.
+            db.execute("ALTER TABLE sessions ADD COLUMN admin_version TEXT NOT NULL DEFAULT ''")
+        channel_columns = {column["name"] for column in db.execute("PRAGMA table_info(channels)")}
+        if "system_prompt" not in channel_columns:
+            db.execute("ALTER TABLE channels ADD COLUMN system_prompt TEXT NOT NULL DEFAULT ''")
+        profile_columns = {
+            "voice_name": "TEXT NOT NULL DEFAULT ''",
+            "voice_rate": "REAL NOT NULL DEFAULT 1.0",
+            "voice_volume": "REAL NOT NULL DEFAULT 1.0",
+            "subtitle_enabled": "INTEGER NOT NULL DEFAULT 1",
+            "subtitle_position": "TEXT NOT NULL DEFAULT 'bottom'",
+            "font_size": "INTEGER NOT NULL DEFAULT 56",
+            "text_fore_color": "TEXT NOT NULL DEFAULT '#FFFFFF'",
+            "stroke_color": "TEXT NOT NULL DEFAULT '#000000'",
+            "stroke_width": "REAL NOT NULL DEFAULT 1.5",
+        }
+        added_profile_columns = []
+        for column, definition in profile_columns.items():
+            if column not in channel_columns:
+                db.execute(f"ALTER TABLE channels ADD COLUMN {column} {definition}")
+                added_profile_columns.append(column)
+        if "voice_name" in added_profile_columns:
+            db.execute(
+                "UPDATE channels SET voice_name = CASE lower(substr(language, 1, 2)) "
+                "WHEN 'en' THEN 'en-US-JennyNeural' WHEN 'es' THEN 'es-ES-ElviraNeural' "
+                "WHEN 'de' THEN 'de-DE-KatjaNeural' ELSE 'pt-BR-FranciscaNeural' END"
+            )
         publication_columns = {column["name"] for column in db.execute("PRAGMA table_info(publications)")}
         if "scheduled_at" not in publication_columns:
             db.execute("ALTER TABLE publications ADD COLUMN scheduled_at TEXT")
@@ -152,6 +274,19 @@ def initialize_database() -> None:
                     "UPDATE settings SET value_json=?, updated_at=? WHERE key='generation-defaults'",
                     (json.dumps({**stored, **missing}), now()),
                 )
+        channel_columns = {column["name"] for column in db.execute("PRAGMA table_info(channels)")}
+        if "video_defaults_json" not in channel_columns:
+            db.execute("ALTER TABLE channels ADD COLUMN video_defaults_json TEXT NOT NULL DEFAULT '{}'")
+            settings_rows = {row["key"]: json.loads(row["value_json"]) for row in db.execute(
+                "SELECT key, value_json FROM settings WHERE key IN (?, ?, ?)",
+                ("generation-defaults", "generation-defaults:short", "generation-defaults:long"),
+            )}
+            base = settings_rows.get("generation-defaults", default_generation_settings())
+            defaults = normalize_channel_video_defaults({
+                "short": video_profile_from_settings("short", {**base, **FORMAT_PRESETS["short"], **settings_rows.get("generation-defaults:short", {})}),
+                "long": video_profile_from_settings("long", {**base, **FORMAT_PRESETS["long"], **settings_rows.get("generation-defaults:long", {})}),
+            })
+            db.execute("UPDATE channels SET video_defaults_json=?", (json.dumps(defaults),))
 
 
 def default_generation_settings() -> dict[str, Any]:
@@ -224,6 +359,46 @@ class SettingsPatch(BaseModel):
     value: dict[str, Any]
 
 
+class LoginInput(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+def session_from_request(request: Request) -> sqlite3.Row | None:
+    token = request.cookies.get("cockpit_session")
+    if not token:
+        return None
+    admin = configured_admin()
+    if not admin:
+        return None
+    expected_version = admin_session_version(admin)
+    with database() as db:
+        row = db.execute(
+            "SELECT * FROM sessions WHERE token_hash=? AND expires_at>?", (session_token_hash(token), now())
+        ).fetchone()
+        if row and not secrets.compare_digest(row["admin_version"], expected_version):
+            db.execute("DELETE FROM sessions WHERE token_hash=?", (row["token_hash"],))
+            return None
+        if row:
+            db.execute("UPDATE sessions SET last_seen_at=? WHERE token_hash=?", (now(), row["token_hash"]))
+        return row
+
+
+def login_is_limited() -> bool:
+    cutoff = (datetime.now(UTC) - timedelta(minutes=LOGIN_WINDOW_MINUTES)).isoformat()
+    with database() as db:
+        failed = db.execute("SELECT count(*) AS count FROM login_attempts WHERE success=0 AND attempted_at>=?", (cutoff,)).fetchone()["count"]
+    return failed >= LOGIN_ATTEMPTS
+
+
+def notify(event_key: str, kind: str, title: str, detail: str = "", job_id: str | None = None) -> None:
+    with database() as db:
+        db.execute(
+            "INSERT OR IGNORE INTO notifications(id, event_key, kind, title, detail, job_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (str(uuid4()), event_key[:200], kind[:50], title[:300], detail[:1000], job_id, now()),
+        )
+
+
 def row_as_project(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": row["id"], "name": row["name"], "niche": row["niche"], "language": row["language"],
@@ -276,11 +451,23 @@ async def send_with_retry(client: httpx.AsyncClient, method: str, url: str, retr
 
 async def turbo_request(method: str, path: str, retries: int = 2, **kwargs: Any) -> httpx.Response:
     headers = {**turbo_headers(), **kwargs.pop("headers", {})}
+    started = time.perf_counter()
+    status_code = 503
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(30, read=90)) as client:
             response = await send_with_retry(client, method, f"{TURBO_BASE_URL}{path}", retries=retries, headers=headers, **kwargs)
+            status_code = response.status_code
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=503, detail=f"MoneyPrinterTurbo indisponível: {exc}") from exc
+    finally:
+        trace = ACTIVE_TRACE.get()
+        if trace is not None:
+            trace["spans"].append({
+                "name": f"Turbo {method.upper()} {path}",
+                "service": "moneyprinterturbo",
+                "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+                "status_code": status_code,
+            })
     if response.status_code >= 400:
         detail = response.text[:500]
         raise HTTPException(status_code=502, detail=f"MoneyPrinterTurbo respondeu {response.status_code}: {detail}")
@@ -296,13 +483,38 @@ def map_turbo_state(payload: dict[str, Any]) -> tuple[str, int, str | None, str 
     progress = max(0, min(100, int(float(payload.get("progress", 0) or 0))))
     error = payload.get("error") or None
     stage = payload.get("failed_stage") or None
-    if error or raw in {"failed", "failure", "error"}:
+    if error or raw in {"-1", "failed", "failure", "error"}:
         return "failed", progress, stage, str(error or "Falha no Turbo")
-    if raw in {"completed", "complete", "success", "done", "finished"} or payload.get("videos") or payload.get("combined_videos"):
+    if raw in {"1", "completed", "complete", "success", "done", "finished"} or payload.get("videos") or payload.get("combined_videos"):
         return "completed", 100, None, None
     if raw in {"queued", "pending", "waiting"}:
         return "queued", progress, None, None
+    # MoneyPrinterTurbo v1.3.7 uses state=4 for active processing.
+    if raw in {"4", "processing", "running", "rendering"}:
+        return "running", progress, None, None
     return "running", progress, None, None
+
+
+def stale_minutes_for(job: sqlite3.Row) -> int:
+    return SHORT_STALE_MINUTES if job["format"] == "short" else LONG_STALE_MINUTES
+
+
+async def interrupt_job(job_id: str, reason: str, cancel_turbo: bool = True) -> None:
+    with database() as db:
+        job = db.execute("SELECT * FROM video_jobs WHERE id=?", (job_id,)).fetchone()
+    if not job or job["state"] not in {"queued", "running"}:
+        return
+    if cancel_turbo and job["turbo_task_id"]:
+        try:
+            await turbo_request("DELETE", f"/api/v1/tasks/{job['turbo_task_id']}", retries=0)
+        except HTTPException:
+            pass
+    with database() as db:
+        db.execute(
+            "UPDATE video_jobs SET state='interrupted', error=?, interruption_reason=?, updated_at=? WHERE id=?",
+            (reason, reason, now(), job_id),
+        )
+    notify(f"job-interrupted:{job_id}:{reason}", "job_interrupted", f"Geração interrompida: {job['subject']}", reason, job_id)
 
 
 def sse_message(event: str, data: str) -> str:
@@ -337,11 +549,20 @@ async def reconcile_job(job_id: str) -> dict[str, Any]:
         return row_as_job(job)
     state, progress, stage, error = map_turbo_state(payload)
     completed_at = now() if state == "completed" else None
+    notification: tuple[str, str, str] | None = None
     with database() as db:
+        # A successful poll is not progress. Preserve a distinct heartbeat timestamp so
+        # state=4 at the same percentage can be detected as stalled.
+        advanced = state != job["state"] or progress > int(job["last_observed_progress"] or 0)
+        progress_updated_at = now() if advanced else job["progress_updated_at"]
         db.execute(
-            "UPDATE video_jobs SET state=?, progress=?, failed_stage=?, error=?, turbo_payload_json=?, updated_at=?, completed_at=COALESCE(completed_at, ?) WHERE id=?",
-            (state, progress, stage, error, json.dumps(payload), now(), completed_at, job_id),
+            "UPDATE video_jobs SET state=?, progress=?, last_observed_progress=?, progress_updated_at=?, failed_stage=?, error=?, turbo_payload_json=?, updated_at=?, completed_at=COALESCE(completed_at, ?) WHERE id=?",
+            (state, progress, max(progress, int(job["last_observed_progress"] or 0)), progress_updated_at, stage, error, json.dumps(payload), now(), completed_at, job_id),
         )
+        if state == "completed" and job["state"] != "completed":
+            notification = ("job_completed", f"Geração concluída: {job['subject']}", "Pronta para revisão e publicação.")
+        elif state == "failed" and job["state"] != "failed":
+            notification = ("job_failed", f"Falha na geração: {job['subject']}", error or "O Turbo informou uma falha.")
         if state == "completed":
             # "videos" are the final renders (narration + subtitles + BGM); "combined_videos"
             # are the silent stitched clips used as an intermediate step.
@@ -355,7 +576,10 @@ async def reconcile_job(job_id: str) -> dict[str, Any]:
                 )
         db.commit()
         current = db.execute("SELECT * FROM video_jobs WHERE id = ?", (job_id,)).fetchone()
-        return row_as_job(current, db)
+        result = row_as_job(current, db)
+    if notification:
+        notify(f"{notification[0]}:{job_id}", notification[0], notification[1], notification[2], job_id)
+    return result
 
 
 async def reconcile_stale_jobs() -> None:
@@ -370,27 +594,52 @@ async def reconcile_stale_jobs() -> None:
         try:
             await reconcile_job(job_id)
         except HTTPException:
-            with database() as db:
-                db.execute(
-                    "UPDATE video_jobs SET state='interrupted', error=COALESCE(error, 'Interrompido por reinício do Gateway'), updated_at=? WHERE id=? AND state IN ('queued','running')",
-                    (now(), job_id),
-                )
+            await interrupt_job(job_id, "Interrompido: MoneyPrinterTurbo indisponível durante a reconciliação.", cancel_turbo=False)
+            continue
+        with database() as db:
+            current = db.execute("SELECT * FROM video_jobs WHERE id=?", (job_id,)).fetchone()
+        if not current or current["state"] not in {"queued", "running"}:
+            continue
+        reference = parse_time(current["created_at"] if current["state"] == "queued" else current["progress_updated_at"] or current["updated_at"])
+        age_minutes = (datetime.now(UTC) - reference).total_seconds() / 60
+        timeout = QUEUE_STALE_MINUTES if current["state"] == "queued" else stale_minutes_for(current)
+        if age_minutes >= timeout:
+            label = "fila" if current["state"] == "queued" else "sem avanço de progresso"
+            await interrupt_job(current["id"], f"Interrompido após {int(age_minutes)} min {label} (limite: {timeout} min).")
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     initialize_database()
+    try:
+        growth_store.ensure_schema()
+        with database() as db:
+            channels = [dict(row) for row in db.execute(
+                "SELECT id, platform, name, niche, language, status FROM channels WHERE deleted_at IS NULL"
+            )]
+        for channel in channels:
+            growth_store.sync_channel(channel)
+    except GrowthStoreUnavailable as exc:
+        logging.getLogger("cockpit.growth").warning("Growth OS indisponível; fluxo legado preservado: %s", exc)
+    try:
+        ensure_media_bucket()
+    except ObjectStorageUnavailable as exc:
+        logging.getLogger("cockpit.growth").warning("Object storage indisponível; geração legada preservada: %s", exc)
     await reconcile_stale_jobs()
     loop = asyncio.create_task(agent_loop())
     yield
     loop.cancel()
 
 
-app = FastAPI(title="Moneyprint Cockpit Gateway", version="1.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="Moneyprint Cockpit Gateway", version="1.1.0", lifespan=lifespan,
+    docs_url="/docs" if os.getenv("ENABLE_API_DOCS") == "1" else None,
+    redoc_url=None,
+)
+app.include_router(growth_router)
 
 
-@app.get("/api/health")
-async def health() -> dict[str, Any]:
+async def health_status() -> dict[str, Any]:
     database_ok = DATABASE.exists()
     turbo_ok = False
     try:
@@ -399,6 +648,173 @@ async def health() -> dict[str, Any]:
     except HTTPException:
         pass
     return {"status": "ok" if database_ok and turbo_ok else "degraded", "database": database_ok, "turbo": turbo_ok}
+
+
+@app.get("/api/health/live")
+async def health_live() -> dict[str, Any]:
+    try:
+        with database() as db:
+            db.execute("SELECT 1").fetchone()
+        return {"status": "ok", "database": True}
+    except sqlite3.Error:
+        return JSONResponse({"status": "degraded", "database": False}, status_code=503)
+
+
+@app.get("/api/health/ready")
+@app.get("/api/health")
+async def health() -> Response:
+    state = await health_status()
+    return JSONResponse(state, status_code=200 if state["status"] == "ok" else 503)
+
+
+@app.post("/api/auth/login")
+def login(input: LoginInput, response: Response) -> dict[str, Any]:
+    if login_is_limited():
+        raise HTTPException(status_code=429, detail="Muitas tentativas. Aguarde 15 minutos.")
+    admin = configured_admin()
+    success = bool(admin and input.email.strip().lower() == str(admin["email"]).lower() and verify_password(input.password, admin))
+    with database() as db:
+        db.execute("INSERT INTO login_attempts(attempted_at, success) VALUES (?, ?)", (now(), int(success)))
+        db.execute("DELETE FROM login_attempts WHERE attempted_at<?", ((datetime.now(UTC) - timedelta(days=1)).isoformat(),))
+    if not success:
+        raise HTTPException(status_code=401, detail="E-mail ou senha inválidos.")
+    token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(24)
+    expires = datetime.now(UTC) + timedelta(hours=SESSION_HOURS)
+    with database() as db:
+        db.execute("INSERT INTO sessions(token_hash, csrf_token, admin_version, created_at, expires_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)",
+                   (session_token_hash(token), csrf, admin_session_version(admin), now(), expires.isoformat(), now()))
+    response.set_cookie("cockpit_session", token, max_age=SESSION_HOURS * 3600, httponly=True, samesite="lax", secure=False, path="/")
+    return {"name": admin["name"], "email": admin["email"], "csrf_token": csrf, "expires_at": expires.isoformat()}
+
+
+@app.post("/api/auth/logout")
+def logout(request: Request, response: Response) -> Response:
+    token = request.cookies.get("cockpit_session")
+    if token:
+        with database() as db:
+            db.execute("DELETE FROM sessions WHERE token_hash=?", (session_token_hash(token),))
+    response.delete_cookie("cockpit_session", path="/")
+    response.status_code = 204
+    return response
+
+
+@app.get("/api/auth/session")
+def auth_session(request: Request) -> dict[str, Any]:
+    session = session_from_request(request)
+    admin = configured_admin()
+    if not session or not admin:
+        raise HTTPException(status_code=401, detail="Sessão inválida ou expirada.")
+    return {"name": admin["name"], "email": admin["email"], "csrf_token": session["csrf_token"], "expires_at": session["expires_at"]}
+
+
+@app.get("/api/status")
+async def system_status() -> dict[str, Any]:
+    ready = await health_status()
+    provider = provider_readiness()
+    with database() as db:
+        job = db.execute("SELECT * FROM video_jobs WHERE state IN ('queued','running') AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1").fetchone()
+    return {
+        "gateway": "online" if ready["database"] else "offline", "turbo": "online" if ready["turbo"] else "offline",
+        "llm_provider": provider["llm_provider"],
+        "llm_model": provider["nvidia_text_model"] if provider["llm_provider"] == "nvidia" else provider["moonshot_model"],
+        "environment": os.getenv("APP_ENV", "local"), "active_job": row_as_job(job) if job else None,
+    }
+
+
+def observability_service(path: str) -> str:
+    segment = path.removeprefix("/api/").split("/", 1)[0]
+    return {
+        "jobs": "jobs", "projects": "projects", "scripts": "moneyprinterturbo",
+        "channels": "channels", "agents": "agents", "analytics": "analytics",
+        "settings": "settings",
+    }.get(segment, "gateway")
+
+
+def observability_trace_id(value: str) -> str:
+    candidate = value.strip()[:80]
+    return candidate if re.fullmatch(r"[A-Za-z0-9._-]{1,80}", candidate) else f"tr_{uuid4().hex[:12]}"
+
+
+def record_observability_event(
+    *, trace_id: str, method: str, path: str, status_code: int, duration_ms: float,
+    spans: list[dict[str, Any]] | None = None, error: str | None = None,
+) -> None:
+    """Persist a bounded, credential-free request event for the local observability screen."""
+    level = "ERROR" if status_code >= 500 else "WARN" if status_code >= 400 else "INFO"
+    service = observability_service(path)
+    message = error or f"{method.upper()} {path} respondeu {status_code} em {duration_ms:.1f} ms"
+    context = {"method": method.upper(), "path": path, "status_code": status_code}
+    with database() as db:
+        db.execute(
+            "INSERT INTO observability_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (str(uuid4()), now(), level, service, message, trace_id, method.upper(), path,
+             status_code, duration_ms, json.dumps(context), json.dumps(spans or [])),
+        )
+        db.execute(
+            "DELETE FROM observability_events WHERE id IN (SELECT id FROM observability_events ORDER BY timestamp DESC LIMIT -1 OFFSET 2000)"
+        )
+
+
+def row_as_observability_event(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"], "timestamp": row["timestamp"], "level": row["level"],
+        "service": row["service"], "message": row["message"], "trace_id": row["trace_id"],
+        "method": row["method"], "path": row["path"], "status_code": row["status_code"],
+        "duration_ms": row["duration_ms"], "context": json.loads(row["context_json"]),
+        "spans": json.loads(row["spans_json"]),
+    }
+
+
+@app.get("/api/logs")
+def list_observability_events(
+    limit: int = 200, q: str = "", level: str = "", service: str = "",
+) -> dict[str, Any]:
+    limit = max(1, min(limit, 500))
+    clauses: list[str] = []
+    params: list[Any] = []
+    if q.strip():
+        clauses.append("(lower(message) LIKE ? OR lower(trace_id) LIKE ? OR lower(path) LIKE ?)")
+        needle = f"%{q.strip().lower()}%"
+        params.extend([needle, needle, needle])
+    if level.strip():
+        clauses.append("level = ?")
+        params.append(level.strip().upper())
+    if service.strip():
+        clauses.append("service = ?")
+        params.append(service.strip())
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    with database() as db:
+        total = db.execute(f"SELECT count(*) AS total FROM observability_events{where}", params).fetchone()["total"]
+        rows = db.execute(
+            f"SELECT * FROM observability_events{where} ORDER BY timestamp DESC LIMIT ?", (*params, limit)
+        ).fetchall()
+        services = [row["service"] for row in db.execute("SELECT DISTINCT service FROM observability_events ORDER BY service")]
+    return {"items": [row_as_observability_event(row) for row in rows], "total": total, "services": services}
+
+
+@app.get("/api/notifications")
+def list_notifications(limit: int = 100) -> dict[str, Any]:
+    with database() as db:
+        rows = db.execute("SELECT * FROM notifications ORDER BY created_at DESC LIMIT ?", (max(1, min(limit, 200)),)).fetchall()
+        unread = db.execute("SELECT count(*) AS count FROM notifications WHERE read_at IS NULL").fetchone()["count"]
+    return {"items": [dict(row) for row in rows], "unread": unread}
+
+
+@app.patch("/api/notifications/{notification_id}/read")
+def read_notification(notification_id: str) -> dict[str, Any]:
+    with database() as db:
+        db.execute("UPDATE notifications SET read_at=COALESCE(read_at, ?) WHERE id=?", (now(), notification_id))
+        row = db.execute("SELECT * FROM notifications WHERE id=?", (notification_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Notificação não encontrada")
+    return dict(row)
+
+
+@app.post("/api/notifications/read-all")
+def read_all_notifications() -> dict[str, int]:
+    with database() as db:
+        updated = db.execute("UPDATE notifications SET read_at=? WHERE read_at IS NULL", (now(),)).rowcount
+    return {"updated": updated}
 
 
 @app.get("/api/projects")
@@ -535,9 +951,46 @@ class ProviderValidation(BaseModel):
     api_key: str = Field(min_length=1, max_length=500)
 
 
+class NvidiaModelTest(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+
+
 MOONSHOT_ENDPOINTS = {"china": "https://api.moonshot.cn/v1", "global": "https://api.moonshot.ai/v1"}
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
-NVIDIA_DEFAULT_TEXT_MODEL = "google/gemma-4-31b-it"
+NVIDIA_DEFAULT_TEXT_MODEL = "moonshotai/kimi-k3"
+NVIDIA_CATALOG_CACHE_SECONDS = 600
+NVIDIA_PROBE_TIMEOUT_SECONDS = 30
+# Long-form scripts issue several sequential completions.  Kimi K3 may spend
+# substantial time reasoning before returning a section, so the ordinary 180s
+# read limit produced a false "service unavailable" while the provider was
+# still working.  This is a read limit only; connection failures still fail
+# promptly and no provider/model fallback is performed.
+NVIDIA_GENERATION_READ_TIMEOUT_SECONDS = 300
+
+# The Cockpit deliberately exposes a small, tested set instead of NVIDIA's full
+# heterogeneous catalog.  Some catalog entries are embedding, image, or base
+# models and would fail in the text-generation flows that call /chat/completions.
+NVIDIA_MODELS: tuple[dict[str, Any], ...] = (
+    {"id": "moonshotai/kimi-k3", "label": "Kimi K3", "provider": "Moonshot AI",
+     "description": "Raciocínio avançado e contexto longo.", "capabilities": {"text": True, "image": True, "reasoning": True, "streaming": True}},
+    {"id": "z-ai/glm-5.3", "label": "GLM 5.3", "provider": "Z.ai",
+     "description": "Equilibrado para roteiros, JSON e tarefas gerais.", "capabilities": {"text": True, "image": False, "reasoning": True, "streaming": True}},
+    {"id": "z-ai/glm-5.3-flash", "label": "GLM 5.3 Flash", "provider": "Z.ai",
+     "description": "Variante rápida para tarefas frequentes.", "capabilities": {"text": True, "image": False, "reasoning": True, "streaming": True}},
+    {"id": "nvidia/nemotron-3.5-lightning-30b-a3b", "label": "Nemotron 3.5 Lightning", "provider": "NVIDIA",
+     "description": "Modelo rápido para tarefas agentivas com thinking.", "capabilities": {"text": True, "image": False, "reasoning": True, "streaming": True}},
+    {"id": "meta/muse-glimmer-30b", "label": "Muse Glimmer 30B", "provider": "Meta",
+     "description": "Raciocínio multimodal com ferramentas nativas.", "capabilities": {"text": True, "image": True, "reasoning": True, "streaming": True}},
+    {"id": "google/diffusiongemma-26b-a4b-it", "label": "DiffusionGemma 26B", "provider": "Google",
+     "description": "Modelo multimodal para texto e imagem, com raciocínio habilitável.", "capabilities": {"text": True, "image": True, "reasoning": True, "streaming": True}},
+)
+NVIDIA_MODEL_IDS = frozenset(model["id"] for model in NVIDIA_MODELS)
+NVIDIA_TASK_TOKEN_LIMITS = {"json": 2048, "outline": 4096, "script": 8192, "test": 16}
+# The long-script editor has its own conservative caps.  They deliberately do
+# not change the profiles used by metadata, agents, or the Turbo integration.
+FAST_LONG_SCRIPT_MAX_TOKENS = 4096
+FAST_LONG_SECTION_MAX_TOKENS = 1536
+_nvidia_catalog_cache: dict[str, Any] = {"expires_at": 0.0}
 
 
 async def detect_moonshot_region(client: httpx.AsyncClient, api_key: str) -> str | None:
@@ -554,6 +1007,126 @@ async def detect_moonshot_region(client: httpx.AsyncClient, api_key: str) -> str
         if response.status_code == 200:
             return region
     return None
+
+
+def nvidia_model_or_422(model: str) -> str:
+    if model not in NVIDIA_MODEL_IDS:
+        raise HTTPException(status_code=422, detail="Escolha um dos modelos NVIDIA disponíveis no Cockpit.")
+    return model
+
+
+async def nvidia_model_catalog() -> dict[str, Any]:
+    """Returns only supported chat models and never exposes NVIDIA credentials.
+
+    /v1/models is a discovery endpoint, not an authentication probe.  Availability
+    is therefore advisory; the explicit test endpoint is the proof that a selected
+    model can complete a request with the configured key.
+    """
+    config_path = DATA_DIR / "moneyprinter" / "config.toml"
+    config = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    key = _config_string(config, "nvidia_api_key")
+    selected = _config_string(config, "nvidia_text_model") or NVIDIA_DEFAULT_TEXT_MODEL
+    fingerprint = hashlib.sha256(key.encode("utf-8")).hexdigest() if key else ""
+    cached = _nvidia_catalog_cache
+    if cached.get("fingerprint") == fingerprint and cached.get("expires_at", 0.0) > time.monotonic():
+        return {**cached["value"], "selected_model": selected}
+
+    checked_at = now()
+    available_ids: set[str] | None = None
+    catalog_status = "not_configured" if not key else "unavailable"
+    if key:
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10)) as client:
+                response = await client.get(f"{NVIDIA_BASE_URL}/models", headers={"Authorization": f"Bearer {key}"})
+            if response.status_code == 200:
+                data = response.json().get("data", [])
+                available_ids = {str(item.get("id")) for item in data if isinstance(item, dict) and item.get("id")}
+                catalog_status = "available"
+            elif response.status_code in {401, 403}:
+                catalog_status = "unauthorized"
+        except (httpx.HTTPError, ValueError, TypeError):
+            # Deliberately do not put transport/provider details into a browser response.
+            catalog_status = "unavailable"
+
+    models = [{**model, "capabilities": dict(model["capabilities"]), "available": (model["id"] in available_ids) if available_ids is not None else None}
+              for model in NVIDIA_MODELS]
+    value = {"models": models, "catalog_status": catalog_status, "checked_at": checked_at}
+    _nvidia_catalog_cache.clear()
+    _nvidia_catalog_cache.update({"fingerprint": fingerprint, "expires_at": time.monotonic() + NVIDIA_CATALOG_CACHE_SECONDS, "value": value})
+    return {**value, "selected_model": selected}
+
+
+def nvidia_chat_body(
+    model: str,
+    prompt: str,
+    task: Literal["json", "outline", "script", "test"] = "json",
+    *,
+    max_tokens: int | None = None,
+    fast_script: bool = False,
+) -> dict[str, Any]:
+    """Builds only the parameters documented for each supported NIM model."""
+    model = nvidia_model_or_422(model)
+    body: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens if max_tokens is not None else NVIDIA_TASK_TOKEN_LIMITS[task],
+        "stream": False,
+    }
+    if model == "moonshotai/kimi-k3":
+        body.update({"temperature": 1, "reasoning_effort": "medium" if fast_script else "max"})
+    elif model in {"z-ai/glm-5.3", "z-ai/glm-5.3-flash"}:
+        body.update({"temperature": 0.5, "top_p": 1})
+    elif model == "nvidia/nemotron-3.5-lightning-30b-a3b":
+        body.update({"temperature": 1, "top_p": 0.95, "chat_template_kwargs": {"enable_thinking": True},
+                     "reasoning_budget": body["max_tokens"]})
+    elif model == "meta/muse-glimmer-30b":
+        body.update({"temperature": 1, "top_p": 0.95})
+    elif model == "google/diffusiongemma-26b-a4b-it":
+        # Structured outputs (visual terms, metadata and outlines) need the
+        # final JSON within a bounded response.  DiffusionGemma can spend that
+        # entire budget in private thinking, leaving content=null and causing a
+        # misleading 502.  Keep thinking for narration, where it improves the
+        # prose, but turn it off for JSON contracts.
+        body.update({"temperature": 1, "top_p": 0.95,
+                     "chat_template_kwargs": {"enable_thinking": task != "json"}})
+    return body
+
+
+@app.get("/api/settings/providers/nvidia/models")
+async def list_nvidia_models() -> dict[str, Any]:
+    return await nvidia_model_catalog()
+
+
+@app.post("/api/settings/providers/nvidia/test")
+async def test_nvidia_model(input: NvidiaModelTest) -> dict[str, Any]:
+    model = nvidia_model_or_422(input.model)
+    config_path = DATA_DIR / "moneyprinter" / "config.toml"
+    config = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    key = _config_string(config, "nvidia_api_key")
+    if not key:
+        raise HTTPException(status_code=409, detail="Configure a chave NVIDIA antes de testar um modelo.")
+    started = time.monotonic()
+    # A connectivity probe must stay cheap even when the selected generation
+    # profile enables deep reasoning (Kimi/Nemotron).  It validates the same
+    # model and key without consuming a full reasoning budget.
+    probe_body = {"model": model, "messages": [{"role": "user", "content": "Responda somente: OK."}], "max_tokens": 16, "stream": False}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30, read=60)) as client:
+            response = await asyncio.wait_for(
+                client.post(f"{NVIDIA_BASE_URL}/chat/completions", headers={"Authorization": f"Bearer {key}"}, json=probe_body),
+                timeout=NVIDIA_PROBE_TIMEOUT_SECONDS,
+            )
+    except (asyncio.TimeoutError, httpx.TimeoutException):
+        return {"ok": False, "model": model, "latency_ms": round((time.monotonic() - started) * 1000),
+                "detail": f"A NVIDIA não concluiu o teste em {NVIDIA_PROBE_TIMEOUT_SECONDS} segundos."}
+    except httpx.HTTPError:
+        return {"ok": False, "model": model, "latency_ms": round((time.monotonic() - started) * 1000),
+                "detail": "Não foi possível alcançar a NVIDIA agora."}
+    latency_ms = round((time.monotonic() - started) * 1000)
+    if response.status_code == 200:
+        return {"ok": True, "model": model, "latency_ms": latency_ms, "detail": "Modelo respondeu com sucesso."}
+    detail = "A NVIDIA recusou a chave ou o modelo." if response.status_code in {401, 403, 404} else "A NVIDIA não pôde concluir o teste agora."
+    return {"ok": False, "model": model, "latency_ms": latency_ms, "detail": detail}
 
 
 @app.post("/api/settings/providers/validate")
@@ -604,6 +1177,15 @@ async def update_providers(input: ProviderCredentials) -> dict[str, Any]:
     if not config_path.exists():
         raise HTTPException(status_code=409, detail="config.toml não encontrado. Rode setup.ps1 primeiro.")
     text = config_path.read_text(encoding="utf-8")
+    if input.nvidia_text_model:
+        nvidia_model_or_422(input.nvidia_text_model)
+    active_provider = _config_string(text, "cockpit_llm_provider") or "moonshot"
+    effective_provider = input.llm_provider or active_provider
+    turbo_changed = bool(input.llm_provider) or (
+        effective_provider == "nvidia" and bool(input.nvidia_api_key or input.nvidia_text_model)
+    ) or (
+        effective_provider == "moonshot" and bool(input.moonshot_api_key or input.moonshot_model_name)
+    )
     if input.moonshot_api_key:
         text = _toml_set(text, "moonshot_api_key", f'"{_toml_escape(input.moonshot_api_key)}"')
         async with httpx.AsyncClient(timeout=httpx.Timeout(10)) as client:
@@ -633,6 +1215,16 @@ async def update_providers(input: ProviderCredentials) -> dict[str, Any]:
             text = _toml_set(text, "openai_model_name", f'"{_toml_escape(_config_string(text, "nvidia_text_model") or NVIDIA_DEFAULT_TEXT_MODEL)}"')
         else:
             text = _toml_set(text, "llm_provider", '"moonshot"')
+    # Saving a different NVIDIA model used to update only the Gateway setting.  Keep
+    # Turbo's OpenAI-compatible slot in sync even when the provider was already NVIDIA.
+    if _config_string(text, "cockpit_llm_provider") == "nvidia":
+        nvidia_key = _config_string(text, "nvidia_api_key")
+        if not nvidia_key:
+            raise HTTPException(status_code=409, detail="Configure a chave NVIDIA antes de usar este provedor.")
+        text = _toml_set(text, "llm_provider", '"openai"')
+        text = _toml_set(text, "openai_api_key", f'"{_toml_escape(nvidia_key)}"')
+        text = _toml_set(text, "openai_base_url", f'"{NVIDIA_BASE_URL}"')
+        text = _toml_set(text, "openai_model_name", f'"{_toml_escape(_config_string(text, "nvidia_text_model") or NVIDIA_DEFAULT_TEXT_MODEL)}"')
     if input.pexels_api_key:
         text = _toml_set(text, "pexels_api_keys", f'["{_toml_escape(input.pexels_api_key)}"]')
     if input.pixabay_api_key:
@@ -644,7 +1236,7 @@ async def update_providers(input: ProviderCredentials) -> dict[str, Any]:
     if input.upload_post_username:
         text = _toml_set(text, "upload_post_username", f'"{_toml_escape(input.upload_post_username)}"')
     config_path.write_text(text, encoding="utf-8")
-    return provider_readiness()
+    return {**provider_readiness(), "restart_required": turbo_changed, "turbo_pending_restart": turbo_changed}
 
 
 # VideoParams fields from MoneyPrinterTurbo v1.3.7 app/models/schema.py that the
@@ -682,6 +1274,24 @@ def build_turbo_payload(subject: str, script: str, settings: dict[str, Any]) -> 
     return payload
 
 
+def normalize_retry_payload(job: sqlite3.Row) -> tuple[dict[str, Any], list[str]]:
+    """Rebuild legacy payloads through today's allow-list and format locks."""
+    legacy = json.loads(job["request_json"])
+    raw_settings = {key: legacy[key] for key in TURBO_VIDEO_FIELDS if key in legacy}
+    if "target_minutes" in legacy:
+        raw_settings["target_minutes"] = legacy["target_minutes"]
+    warnings: list[str] = []
+    if raw_settings.get("video_source") not in {None, "pexels", "pixabay", "coverr"}:
+        warnings.append("Fonte antiga convertida para Pexels.")
+    raw_settings["video_source"] = raw_settings.get("video_source") if raw_settings.get("video_source") in {"pexels", "pixabay", "coverr"} else "pexels"
+    format = job["format"] if job["format"] in FORMAT_LOCKED else "short"
+    settings = {**generation_defaults(format), **raw_settings, **FORMAT_LOCKED[format]}
+    payload = build_turbo_payload(str(legacy.get("video_subject") or job["subject"]), str(legacy.get("video_script") or job["script"]), settings)
+    if set(legacy) - set(TURBO_VIDEO_FIELDS) - {"video_subject", "video_script", "target_minutes"}:
+        warnings.append("Campos legados não suportados foram removidos.")
+    return payload, warnings
+
+
 def job_max_words(format: str, settings: dict[str, Any]) -> int | None:
     """The narration budget the screen asked for: the Short's "Duração alvo" select, or the long
     video's target in minutes. None means no target was sent, so nothing is trimmed."""
@@ -701,7 +1311,25 @@ async def create_job(project_id: str, input: JobCreate) -> dict[str, Any]:
         channels = [channel_row_or_404(db, channel_id) for channel_id in dict.fromkeys(input.channel_ids)]
     # Checked before Turbo starts a render that could then never be published where it was meant to go.
     validate_publish_channels(channels, input.format)
-    merged = {**generation_defaults(input.format), **project["defaults"], **input.settings, **FORMAT_LOCKED[input.format]}
+    conflicting_profile_fields = conflicting_channel_profile_fields(channels, input.format)
+    if conflicting_profile_fields:
+        names = ", ".join(channel["name"] for channel in channels)
+        labels = {"video_language": "idioma", "voice_name": "voz", "voice_rate": "velocidade", "voice_volume": "volume", "subtitle_enabled": "legendas", "subtitle_position": "posição", "font_size": "tamanho", "text_fore_color": "cor do texto", "stroke_color": "cor da borda", "stroke_width": "espessura da borda", "paragraph_number": "duração do Short", "target_minutes": "duração", "video_clip_duration": "duração do clipe", "video_count": "quantidade de vídeos", "video_concat_mode": "modo de imagens", "video_transition_mode": "transição", "video_clip_speed": "velocidade do clipe", "bgm_type": "trilha sonora", "bgm_volume": "volume da música"}
+        fields = ", ".join(labels.get(field, field) for field in conflicting_profile_fields)
+        raise HTTPException(status_code=409, detail=f"Os canais {names} têm perfis de voz, legendas ou parâmetros de vídeo diferentes ({fields}). Alinhe os perfis ou gere vídeos separados.")
+    channel_settings = channel_generation_settings(channels[0], input.format) if channels else {}
+    merged = {**generation_defaults(input.format), **project["defaults"], **channel_settings, **input.settings, **FORMAT_LOCKED[input.format]}
+    effective_profile = normalize_channel_profile({
+        "language": merged.get("video_language", "pt-BR"),
+        **{field: merged.get(field) for field in CHANNEL_PROFILE_FIELDS},
+    })
+    merged.update({"video_language": effective_profile.pop("language"), **effective_profile})
+    channel_prompts = list(dict.fromkeys(str(channel["system_prompt"] or "").strip() for channel in channels if str(channel["system_prompt"] or "").strip()))
+    if len(channel_prompts) > 1:
+        raise HTTPException(status_code=409, detail="Os canais selecionados têm prompts de sistema diferentes. Gere um vídeo por padrão editorial.")
+    if channel_prompts:
+        generator_prompt = str(merged.get("custom_system_prompt") or "").strip()
+        merged["custom_system_prompt"] = "\n\n".join([channel_prompts[0], generator_prompt]).strip()
     # Turbo's encoder defaults to 2 threads; this container sees the same Docker VM CPUs as Turbo.
     merged.setdefault("n_threads", os.cpu_count() or 2)
     script_text = input.script.strip()
@@ -715,7 +1343,8 @@ async def create_job(project_id: str, input: JobCreate) -> dict[str, Any]:
             script_response = await turbo_request("POST", "/api/v1/scripts", json={
                 "video_subject": input.subject, "video_language": merged.get("video_language", "pt-BR"),
                 "paragraph_number": merged.get("paragraph_number", 5),
-                "video_script_prompt": merged.get("video_script_prompt", ""), "custom_system_prompt": merged.get("custom_system_prompt", ""),
+                "video_script_prompt": short_script_prompt(str(merged.get("video_script_prompt", "")), int(merged.get("paragraph_number", 5) or 5)),
+                "custom_system_prompt": merged.get("custom_system_prompt", ""),
             })
             script_text = str((unwrap(script_response.json()) or {}).get("video_script", "")).strip()
     # The chosen duration wins over whatever was written, pasted or generated, in every mode: a
@@ -732,10 +1361,11 @@ async def create_job(project_id: str, input: JobCreate) -> dict[str, Any]:
     if not isinstance(turbo_result, dict) or not turbo_result.get("task_id"):
         raise HTTPException(status_code=502, detail="Resposta inválida do MoneyPrinterTurbo ao criar tarefa")
     job_id, timestamp = str(uuid4()), now()
+    persisted_request = {**request_payload, **({"target_minutes": merged["target_minutes"]} if "target_minutes" in merged else {})}
     with database() as db:
         db.execute(
             "INSERT INTO video_jobs(id, project_id, turbo_task_id, subject, script, request_json, state, created_at, updated_at, format) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
-            (job_id, project_id, turbo_result["task_id"], input.subject.strip(), script_text, json.dumps(request_payload), timestamp, timestamp, input.format),
+            (job_id, project_id, turbo_result["task_id"], input.subject.strip(), script_text, json.dumps(persisted_request), timestamp, timestamp, input.format),
         )
         # The channels picked now are the video's publish targets, waiting for approval.
         for channel in channels:
@@ -795,15 +1425,23 @@ async def retry_job(job_id: str) -> dict[str, Any]:
         row = db.execute("SELECT * FROM video_jobs WHERE id=? AND deleted_at IS NULL", (job_id,)).fetchone()
     if not row or row["state"] not in {"failed", "interrupted"}:
         raise HTTPException(status_code=409, detail="Apenas trabalhos interrompidos ou com falha podem ser repetidos")
-    request = json.loads(row["request_json"])
+    request, warnings = normalize_retry_payload(row)
+    with database() as db:
+        channels = [item for item in db.execute(
+            "SELECT channels.* FROM publications JOIN channels ON channels.id=publications.channel_id WHERE publications.job_id=? AND publications.channel_id IS NOT NULL",
+            (job_id,),
+        )]
+    validate_publish_channels(channels, row["format"])
     response = await turbo_request("POST", "/api/v1/videos", json=request)
     created = unwrap(response.json())
     task_id = created.get("task_id") if isinstance(created, dict) else None
     if not task_id:
         raise HTTPException(status_code=502, detail="O Turbo não retornou task_id")
     with database() as db:
-        db.execute("UPDATE video_jobs SET turbo_task_id=?, state='queued', progress=0, error=NULL, failed_stage=NULL, updated_at=? WHERE id=?", (task_id, now(), job_id))
-        return row_as_job(db.execute("SELECT * FROM video_jobs WHERE id=?", (job_id,)).fetchone(), db)
+        db.execute("UPDATE video_jobs SET turbo_task_id=?, request_json=?, state='queued', progress=0, last_observed_progress=0, progress_updated_at=?, error=NULL, failed_stage=NULL, interruption_reason=NULL, updated_at=? WHERE id=?", (task_id, json.dumps(request), now(), now(), job_id))
+        result = row_as_job(db.execute("SELECT * FROM video_jobs WHERE id=?", (job_id,)).fetchone(), db)
+    result["warnings"] = warnings
+    return result
 
 
 @app.post("/api/jobs/{job_id}/cancel", status_code=202)
@@ -998,7 +1636,23 @@ def put_metadata(job_id: str, input: MetadataInput) -> dict[str, Any]:
     return store_metadata(job_id, input.model_dump())
 
 
-async def llm_chat(prompt: str, json_mode: bool = False) -> str:
+def llm_task(prompt: str, json_mode: bool) -> Literal["json", "outline", "script"]:
+    """Keep existing call sites stable while enforcing task-sized output limits."""
+    if "Planeje um vídeo de YouTube" in prompt:
+        return "outline"
+    if "Escreva a narração da seção" in prompt:
+        return "script"
+    return "json" if json_mode else "script"
+
+
+async def llm_chat(
+    prompt: str,
+    json_mode: bool = False,
+    *,
+    task: Literal["json", "outline", "script", "test"] | None = None,
+    max_tokens: int | None = None,
+    fast_script: bool = False,
+) -> str:
     provider, base_url, key, model = llm_config()
     label = "Moonshot/Kimi" if provider == "moonshot" else "NVIDIA"
     if not key:
@@ -1008,15 +1662,37 @@ async def llm_chat(prompt: str, json_mode: bool = False) -> str:
     # and parse_json_object() tolerates prose or a code fence around it.
     if json_mode and provider == "moonshot":
         body["response_format"] = {"type": "json_object"}
+    if provider == "nvidia":
+        body = nvidia_chat_body(model, prompt, task or llm_task(prompt, json_mode), max_tokens=max_tokens, fast_script=fast_script)
+    elif max_tokens is not None:
+        body["max_tokens"] = max_tokens
+    read_timeout = NVIDIA_GENERATION_READ_TIMEOUT_SECONDS if provider == "nvidia" else 180
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30, read=180)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30, read=read_timeout)) as client:
             response = await send_with_retry(client, "POST", f"{base_url}/chat/completions", headers={"Authorization": f"Bearer {key}"}, json=body)
+    except httpx.ReadTimeout as exc:
+        if provider == "nvidia":
+            raise HTTPException(
+                status_code=504,
+                detail=(
+                    "A NVIDIA não concluiu esta etapa do roteiro em 5 minutos. "
+                    "A conexão básica está disponível; tente novamente ou escolha "
+                    "GLM 5.3 Flash em Configurações para roteiros mais rápidos."
+                ),
+            ) from exc
+        raise HTTPException(status_code=504, detail=f"{label} demorou demais para responder.") from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=503, detail=f"{label} indisponível: {exc}") from exc
     if response.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"{label} respondeu {response.status_code}: {response.text[:300]}")
+        raise HTTPException(status_code=502, detail=f"{label} respondeu com erro {response.status_code}.")
     try:
-        return response.json()["choices"][0]["message"]["content"] or ""
+        message = response.json()["choices"][0]["message"]
+        # NVIDIA reasoning models may send their private chain-of-thought in a
+        # separate field.  The Cockpit keeps only the final content for scripts
+        # and metadata; reasoning is intentionally neither persisted nor shown.
+        _reasoning = message.get("reasoning_content")
+        content = message.get("content")
+        return str(content) if content is not None else ""
     except (ValueError, KeyError, IndexError, TypeError) as exc:
         raise HTTPException(status_code=502, detail=f"O {label} devolveu uma resposta inesperada") from exc
 
@@ -1030,6 +1706,175 @@ def parse_json_object(content: str) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise HTTPException(status_code=502, detail="A IA não devolveu JSON válido")
     return parsed
+
+
+
+class AssistantChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=3000)
+
+
+class AssistantChatInput(BaseModel):
+    messages: list[AssistantChatMessage] = Field(min_length=1, max_length=16)
+    channel_id: str | None = Field(default=None, max_length=36)
+
+
+def _assistant_channel(channels: list[dict[str, Any]], selected_id: str | None, args: dict[str, Any]) -> dict[str, Any] | None:
+    requested = str(selected_id or args.get("channel_id") or "").strip()
+    if requested:
+        match = next((item for item in channels if str(item.get("id")) == requested), None)
+        if match:
+            return match
+    name = str(args.get("channel_name") or "").strip().casefold()
+    if name:
+        matches = [item for item in channels if str(item.get("name") or "").casefold() == name]
+        if len(matches) == 1:
+            return matches[0]
+    return channels[0] if len(channels) == 1 else None
+
+
+@app.post("/api/assistant/chat")
+async def assistant_chat(input: AssistantChatInput) -> dict[str, Any]:
+    channels = list_channels()
+    channel_context = [
+        {key: channel.get(key) for key in ("id", "name", "platform", "niche", "language", "status")}
+        for channel in channels
+    ]
+    transcript = [{"role": item.role, "content": item.content} for item in input.messages[-12:]]
+    prompt = (
+        "Você é a assistente conversacional do MoneyPrinter Cockpit. Responda em português brasileiro, "
+        "de modo direto e natural. Entenda o histórico e escolha uma ação somente quando o usuário a pedir "
+        "ou quando ela for necessária para responder. Nunca invente métricas do canal. "
+        "Ações disponíveis: reply (conversa e explicações), clarify (perguntar os dados que faltam), "
+        "growth_goal (calcular metas YPP), growth_score (pontuar uma oportunidade de tema), "
+        "growth_plan (criar um plano durável; só quando pedido explicitamente), short_script "
+        "(gerar um roteiro de Short; só quando pedido explicitamente), channels (listar canais), "
+        "jobs (listar trabalhos recentes), workflow_status (consultar um workflow) e system_status "
+        "(verificar a saúde do sistema). Não publique nem aprove conteúdo. Planos ficam em revisão humana. "
+        "Para growth_goal, forneça args.metrics com subscribers, subscriber_target, qualified_watch_hours, "
+        "watch_hour_target, qualified_shorts_views, shorts_view_target, days_remaining e, se conhecido, "
+        "average_view_duration_minutes. Se faltar algum dado obrigatório, escolha clarify sem adivinhar. "
+        "Para growth_score, forneça topic e dimensions com 12 notas de 0 a 100: demand, audience_fit, "
+        "historical_retention, subscriber_conversion, expected_avd, evergreen, trend_velocity, monetization, "
+        "stock_availability, competition, production_cost e saturation. Se estimar notas com a IA, marque "
+        "args.estimated=true. Para growth_plan, forneça topic, ypp_goal (mesmas métricas) e opportunity "
+        "(as 12 notas); nunca defina publicação automática. Para short_script, forneça subject. "
+        "Para workflow_status, forneça workflow_id. Para ações que dependem de canal, use o canal selecionado "
+        "ou um nome que corresponda exatamente à lista. Responda somente com um objeto JSON neste formato: "
+        '{"action":"reply|clarify|growth_goal|growth_score|growth_plan|short_script|channels|jobs|workflow_status|system_status","message":"texto curto","args":{}}'
+        + "\nCanal selecionado: " + json.dumps(input.channel_id, ensure_ascii=False)
+        + "\nCanais disponíveis: " + json.dumps(channel_context, ensure_ascii=False)
+        + "\nHistórico: " + json.dumps(transcript, ensure_ascii=False)
+    )
+    decision = parse_json_object(await llm_chat(prompt, json_mode=True, task="json", max_tokens=1600))
+    action = str(decision.get("action") or "reply")
+    message = str(decision.get("message") or "").strip()
+    args = decision.get("args") if isinstance(decision.get("args"), dict) else {}
+
+    if action in {"reply", "clarify"}:
+        return {"action": action, "message": message or "Pode me contar um pouco mais sobre o que você precisa?"}
+    if action == "channels":
+        if not channels:
+            return {"action": action, "message": "Ainda não há canais cadastrados. Conecte um canal na área Canais."}
+        lines = [f"- {item.get('name')} ({item.get('platform')}) · {item.get('status')}" for item in channels]
+        return {"action": action, "message": "Seus canais cadastrados:\n" + "\n".join(lines), "data": channel_context}
+    if action == "jobs":
+        with database() as db:
+            jobs = [dict(row) for row in db.execute(
+                "SELECT id, subject, state, progress, created_at FROM video_jobs "
+                "WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 8"
+            )]
+        if not jobs:
+            return {"action": action, "message": "Ainda não há vídeos em processamento ou no histórico."}
+        lines = [f"- {item['subject']} · {item['state']} · {item['progress']}%" for item in jobs]
+        return {"action": action, "message": "Trabalhos recentes:\n" + "\n".join(lines), "data": jobs}
+    if action == "system_status":
+        status = await health_status()
+        return {"action": action, "message": (
+            f"Estado do sistema: {status.get('status', 'indisponível')}. "
+            f"Banco de dados: {'conectado' if status.get('database') else 'indisponível'}; "
+            f"MoneyPrinter Turbo: {'conectado' if status.get('turbo') else 'indisponível'}."
+        ), "data": status}
+    if action == "workflow_status":
+        try:
+            workflow_id = UUID(str(args.get("workflow_id") or ""))
+            workflow = growth_store.workflow(workflow_id)
+        except (ValueError, GrowthStoreUnavailable) as exc:
+            raise HTTPException(status_code=400 if isinstance(exc, ValueError) else 503, detail="Não foi possível consultar esse workflow.") from exc
+        if not workflow:
+            raise HTTPException(status_code=404, detail="Workflow não encontrado.")
+        return {"action": action, "message": (
+            f"Plano {workflow_id}: estado {workflow.get('state')} · etapa {workflow.get('current_step') or '—'}."
+        ), "data": workflow}
+
+    channel = _assistant_channel(channels, input.channel_id, args)
+    if not channel:
+        detail = "Conecte um canal antes de continuar." if not channels else "Selecione um canal ou diga o nome exato dele."
+        return {"action": "clarify", "message": detail}
+
+    try:
+        channel_id = UUID(str(channel["id"]))
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail="O canal selecionado tem um identificador inválido.") from exc
+
+    if action == "growth_goal":
+        try:
+            goal_input = YPPGoalRequest(channel_id=channel_id, metrics=args.get("metrics") or {})
+        except ValidationError as exc:
+            return {"action": "clarify", "message": "Para calcular seu gap, me passe os valores atuais e as metas de inscritos, horas qualificadas e visualizações de Shorts, além de quantos dias faltam. Pode escrever tudo em uma única frase."}
+        result = evaluate_goal(goal_input)
+        values = result["result"].model_dump(mode="json")
+        return {"action": action, "data": values, "message": (
+            f"Para {channel.get('name')}, faltam {values['subscribers']['gap']:,.0f} inscritos "
+            f"({values['subscribers']['required_daily_velocity']:,.2f}/dia), "
+            f"{values['watch_hours']['gap']:,.0f} horas qualificadas "
+            f"({values['watch_hours']['required_daily_velocity']:,.2f}/dia) e "
+            f"{values['shorts_views']['gap']:,.0f} visualizações qualificadas de Shorts. "
+            "O cálculo considera apenas métricas orgânicas qualificadas."
+        )}
+    if action == "growth_score":
+        try:
+            score_input = OpportunityScoreRequest(
+                channel_id=channel_id, topic=str(args.get("topic") or ""), dimensions=args.get("dimensions") or {},
+            )
+        except ValidationError as exc:
+            return {"action": "clarify", "message": "Me diga o tema da oportunidade. Posso estimar as dimensões para iniciar a avaliação e identificar claramente o resultado como estimativa."}
+        result = score_opportunity(score_input)
+        values = result["result"].model_dump(mode="json")
+        estimate = " Esta é uma estimativa da IA, não uma medição de dados externos." if args.get("estimated") else ""
+        return {"action": action, "data": values, "message": (
+            f"O tema “{score_input.topic}” recebeu {values['score']}/100 "
+            f"(versão {values['version']}).{estimate}"
+        )}
+    if action == "growth_plan":
+        try:
+            plan_input = PlanningWorkflowRequest(
+                channel_id=channel_id, topic=str(args.get("topic") or ""),
+                ypp_goal=args.get("ypp_goal") or {}, opportunity=args.get("opportunity") or {},
+                production_target=args.get("production_target") or {"long": 1, "shorts": 3},
+                publish_mode="review",
+            )
+        except ValidationError as exc:
+            return {"action": "clarify", "message": "Para montar o plano, preciso do tema, dos números atuais e das metas YPP e do prazo. Posso coletar esses dados com você, um passo de cada vez."}
+        started = await start_planning_workflow(plan_input)
+        return {"action": action, "data": started, "message": (
+            f"Iniciei o plano para “{plan_input.topic}” no canal {channel.get('name')}. "
+            f"Ele ficará em revisão humana. ID do workflow: {started['id']}."
+        )}
+    if action == "short_script":
+        subject = str(args.get("subject") or "").strip()
+        if not subject:
+            return {"action": "clarify", "message": "Qual é o tema do roteiro?"}
+        result = await short_script(ShortScriptInput(
+            subject=subject, language=str(channel.get("language") or "pt-BR"),
+            script_prompt=str(args.get("style") or "")[:2000],
+            system_prompt=str(channel.get("system_prompt") or "")[:4000],
+        ))
+        script = result["script"]
+        return {"action": action, "data": result, "message": (
+            f"Roteiro de Short sobre “{subject}” ({result['words']} palavras):\n\n{script}"
+        )}
+    return {"action": "reply", "message": message or "Ainda não consigo executar esse pedido pela conversa. Posso consultar canais e jobs, calcular metas e oportunidades, criar um plano de crescimento ou gerar um roteiro de Short."}
 
 
 @app.post("/api/jobs/{job_id}/metadata/generate")
@@ -1054,11 +1899,25 @@ async def generate_metadata(job_id: str) -> dict[str, Any]:
 
 WORDS_PER_MINUTE = 150  # calibration knob: Edge TTS narrates ~150 words/min at voice rate 1.0
 SHORT_TARGET_SECONDS = {4: 60, 5: 75, 6: 90}  # mirrors the Shorts "Duração alvo" select in cockpit-views.js
+SHORT_MIN_SECONDS = 60  # below this a Short is "curto demais" (see the word-count hint in moneyprinter-runtime.js)
 
 
 def short_script_max_words(paragraph_number: int) -> int:
     seconds = SHORT_TARGET_SECONDS.get(paragraph_number, max(SHORT_TARGET_SECONDS.values()))
     return round(seconds * WORDS_PER_MINUTE / 60)
+
+
+def short_script_min_words() -> int:
+    return round(SHORT_MIN_SECONDS * WORDS_PER_MINUTE / 60)
+
+
+def short_script_prompt(script_prompt: str, paragraph_number: int) -> str:
+    """Word-range rule Turbo's writer must hit (60–90 s of narration). Rides along with any
+    custom requirements instead of replacing them."""
+    max_words, min_words = short_script_max_words(paragraph_number), short_script_min_words()
+    length_rule = f"O roteiro deve ter entre {min_words} e {max_words} palavras (narração de 60 a 90 segundos)."
+    custom = (script_prompt or "").strip()
+    return f"{custom}\n{length_rule}".strip() if custom else length_rule
 
 
 def trim_to_words(script: str, max_words: int) -> str:
@@ -1083,14 +1942,20 @@ class ShortScriptInput(BaseModel):
 
 @app.post("/api/scripts/short")
 async def short_script(input: ShortScriptInput) -> dict[str, Any]:
+    max_words, min_words = short_script_max_words(input.paragraph_number), short_script_min_words()
+    # Turbo's writer only gets paragraph_number, so it often undershoots (e.g. 139 words ≈ 56 s
+    # for a 60–90 s Short). State the word range explicitly in the prompt it already reads.
     response = await turbo_request("POST", "/api/v1/scripts", json={
         "video_subject": input.subject, "video_language": clean_language(input.language),
         "paragraph_number": input.paragraph_number,
-        "video_script_prompt": input.script_prompt, "custom_system_prompt": input.system_prompt,
+        "video_script_prompt": short_script_prompt(input.script_prompt, input.paragraph_number),
+        "custom_system_prompt": input.system_prompt,
     })
     script = str((unwrap(response.json()) or {}).get("video_script", "")).strip()
-    trimmed = trim_to_words(script, short_script_max_words(input.paragraph_number))
-    return {"script": trimmed, "words": len(trimmed.split()), "trimmed": trimmed != script}
+    trimmed = trim_to_words(script, max_words)
+    words = len(trimmed.split())
+    return {"script": trimmed, "words": words, "trimmed": trimmed != script,
+            "too_short": words < min_words, "min_words": min_words}
 
 
 class LongScriptInput(BaseModel):
@@ -1108,14 +1973,18 @@ def clean_narration(text: str) -> str:
     return "\n".join(line for line in lines if line)
 
 
-@app.post("/api/scripts/long")
-async def long_script(input: LongScriptInput) -> dict[str, Any]:
-    """Turbo's own script endpoint stops at 10 paragraphs (~2-4 min), so long videos are written here
-    in sections: one outline call, then one call per section that continues from the previous ending.
-    ponytail: synchronous (a few minutes for 15 min); stream progress over SSE if the wait becomes a problem."""
+def long_script_tokens(words: int, ceiling: int) -> int:
+    """Reserve enough output for Portuguese narration without inviting needless reasoning.
+
+    The estimate is intentionally below the provider-wide script cap.  A final
+    word trim remains the authoritative duration guardrail.
+    """
+    return min(ceiling, max(768, round(words * 1.8)))
+
+
+async def long_script_events(input: LongScriptInput) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+    """Writes an editable long script and reports only safe UI progress events."""
     language = clean_language(input.language)
-    section_count = max(4, round(input.minutes / 1.5))
-    words_per_section = input.minutes * WORDS_PER_MINUTE // section_count
     requirements = input.requirements.strip()
     system_prompt = input.system_prompt.strip()
     # ponytail: unlike Turbo's own custom_system_prompt (a full replacement), this can't replace the
@@ -1123,6 +1992,42 @@ async def long_script(input: LongScriptInput) -> dict[str, Any]:
     # stay narration-only, or the multi-step pipeline breaks. It's folded in as an extra, higher-weight
     # instruction on every call instead, same mechanism as `requirements` but framed as a standing rule.
     style = (f" Instruções de estilo do sistema, siga em tudo o que escrever: {system_prompt}." if system_prompt else "")
+    target_words = input.minutes * WORDS_PER_MINUTE
+
+    # The common 5-8 minute case used to incur an outline plus 4-5 serial
+    # writes.  One bounded completion is both faster and coherent because the
+    # entire requested narration fits in the selected model's context.
+    if input.minutes <= 8:
+        yield "progress", {"stage": "writing", "section": 1, "total": 1, "message": "Escrevendo o roteiro completo…"}
+        generated = parse_json_object(await llm_chat(
+            f"Escreva um roteiro completo de vídeo de YouTube de cerca de {input.minutes} minutos no idioma {language} sobre: {input.subject}."
+            + (f" Nicho do canal: {input.niche}." if input.niche else "")
+            + (f" Requisitos personalizados: {requirements}." if requirements else "") + style
+            + f' Responda apenas JSON: {{"title": título conciso, "script": narração com cerca de {target_words} palavras}}. '
+            "A narração deve ter abertura forte, desenvolvimento coerente e conclusão com chamada para se inscrever. "
+            "Use apenas texto falado em parágrafos corridos: sem títulos no roteiro, marcadores, markdown, emojis nem indicações de cena.",
+            json_mode=True,
+            task="script",
+            max_tokens=long_script_tokens(target_words, FAST_LONG_SCRIPT_MAX_TOKENS),
+            fast_script=True,
+        ))
+        script = clean_narration(str(generated.get("script") or ""))
+        if not script:
+            raise HTTPException(status_code=502, detail="A IA não devolveu um roteiro válido")
+        trimmed_script = trim_to_words(script, target_words)
+        words = len(trimmed_script.split())
+        result = {
+            "title": str(generated.get("title") or input.subject), "script": trimmed_script,
+            "trimmed": trimmed_script != script, "sections": ["Roteiro completo"],
+            "words": words, "estimated_minutes": round(words / WORDS_PER_MINUTE, 1),
+        }
+        yield "progress", {"stage": "finalizing", "section": 1, "total": 1, "message": "Finalizando roteiro…"}
+        yield "completed", result
+        return
+
+    section_count = max(4, round(input.minutes / 1.5))
+    words_per_section = target_words // section_count
+    yield "progress", {"stage": "planning", "section": 0, "total": section_count, "message": "Planejando as seções…"}
     outline = parse_json_object(await llm_chat(
         f"Planeje um vídeo de YouTube de {input.minutes} minutos no idioma {language} sobre: {input.subject}."
         + (f" Nicho do canal: {input.niche}." if input.niche else "")
@@ -1131,26 +2036,64 @@ async def long_script(input: LongScriptInput) -> dict[str, Any]:
         '{"heading": título da seção, "points": lista de 2 a 4 pontos}}. '
         "A primeira seção é um gancho de abertura e a última uma conclusão com chamada para se inscrever.",
         json_mode=True,
+        task="outline",
+        max_tokens=long_script_tokens(section_count * 180, FAST_LONG_SECTION_MAX_TOKENS),
+        fast_script=True,
     ))
     sections = [section for section in outline.get("sections") or [] if isinstance(section, dict) and section.get("heading")][:section_count]
     if not sections:
         raise HTTPException(status_code=502, detail="A IA não devolveu o roteiro em seções")
     parts: list[str] = []
     for index, section in enumerate(sections, start=1):
+        yield "progress", {"stage": "writing", "section": index, "total": len(sections), "message": f"Escrevendo seção {index} de {len(sections)}…"}
         previous = f"\nFinal da seção anterior (continue a partir dele, sem repetir): {parts[-1][-600:]}" if parts else ""
         parts.append(clean_narration(await llm_chat(
             f"Escreva a narração da seção {index} de {len(sections)} de um vídeo de YouTube no idioma {language} sobre: {input.subject}.\n"
             f"Seção: {section['heading']}\nPontos: {'; '.join(map(str, section.get('points') or []))}\n"
             f"Cerca de {words_per_section} palavras. Somente o texto falado, em parágrafos corridos: sem títulos, marcadores, markdown, emojis nem indicações de cena."
-            + (f" Requisitos personalizados: {requirements}." if requirements else "") + style + previous
+            + (f" Requisitos personalizados: {requirements}." if requirements else "") + style + previous,
+            task="script",
+            max_tokens=long_script_tokens(words_per_section, FAST_LONG_SECTION_MAX_TOKENS),
+            fast_script=True,
         )))
     script = "\n\n".join(part for part in parts if part)
     trimmed_script = trim_to_words(script, input.minutes * WORDS_PER_MINUTE)
     words = len(trimmed_script.split())
-    return {
+    result = {
         "title": str(outline.get("title") or input.subject), "script": trimmed_script, "trimmed": trimmed_script != script,
         "sections": [str(section["heading"]) for section in sections], "words": words, "estimated_minutes": round(words / WORDS_PER_MINUTE, 1),
     }
+    yield "progress", {"stage": "finalizing", "section": len(sections), "total": len(sections), "message": "Finalizando roteiro…"}
+    yield "completed", result
+
+
+async def generate_long_script(input: LongScriptInput) -> dict[str, Any]:
+    async for event, data in long_script_events(input):
+        if event == "completed":
+            return data
+    raise HTTPException(status_code=502, detail="A IA não concluiu o roteiro")
+
+
+@app.post("/api/scripts/long")
+async def long_script(input: LongScriptInput) -> dict[str, Any]:
+    """Compatibility endpoint for clients that do not consume script progress."""
+    return await generate_long_script(input)
+
+
+@app.post("/api/scripts/long/stream")
+async def long_script_stream(input: LongScriptInput, request: Request) -> StreamingResponse:
+    async def events() -> AsyncIterator[str]:
+        try:
+            async for event, data in long_script_events(input):
+                if await request.is_disconnected():
+                    return
+                yield sse_message(event, json.dumps(data, ensure_ascii=False))
+        except HTTPException as exc:
+            yield sse_message("error", json.dumps({"code": exc.status_code, "message": str(exc.detail)}, ensure_ascii=False))
+        except Exception:
+            logging.exception("long script stream failed")
+            yield sse_message("error", json.dumps({"code": 500, "message": "Não foi possível gerar o roteiro."}, ensure_ascii=False))
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 def split_script(script: str, parts: int) -> list[str]:
@@ -1249,7 +2192,7 @@ LANGUAGE_PATTERN = r"[a-z]{2,3}(-[A-Za-z0-9]{2,8})*"
 UPLOAD_POST_BASE = "https://api.upload-post.com"
 PLATFORM_LABELS = {"youtube": "YouTube Studio", "tiktok": "TikTok"}
 # ponytail: in-memory OAuth state; a Gateway restart mid-consent just means clicking "Conectar" again.
-oauth_flows: dict[str, tuple[Any, dict[str, str]]] = {}
+oauth_flows: dict[str, tuple[Any, dict[str, Any], str]] = {}
 
 
 class PublishRejected(Exception):
@@ -1266,6 +2209,177 @@ def youtube_token_file(channel_id: str) -> Path:
 
 def clean_language(value: str) -> str:
     return value if re.fullmatch(LANGUAGE_PATTERN, value or "") else "pt-BR"
+
+
+CHANNEL_PROFILE_FIELDS = (
+    "voice_name", "voice_rate", "voice_volume", "subtitle_enabled", "subtitle_position",
+    "font_size", "text_fore_color", "stroke_color", "stroke_width",
+)
+CHANNEL_PROFILE_COLORS = {"text_fore_color", "stroke_color"}
+CHANNEL_PROFILE_POSITIONS = {"bottom", "center", "top"}
+CHANNEL_VIDEO_PROFILE_FIELDS = {
+    "short": ("paragraph_number", "video_clip_duration", "video_count", "video_concat_mode", "video_transition_mode", "video_clip_speed", "bgm_type", "bgm_volume"),
+    "long": ("target_minutes", "video_clip_duration", "video_concat_mode", "video_transition_mode", "video_clip_speed", "bgm_type", "bgm_volume"),
+}
+VIDEO_TRANSITIONS = {"", "Shuffle", "FadeIn", "FadeOut", "SlideIn", "SlideOut", "ZoomIn", "ZoomOut"}
+VIDEO_CONCAT_MODES = {"script", "random"}
+VIDEO_CLIP_SPEEDS = {0.8, 1.0, 1.2, 1.5}
+VIDEO_BGM_TYPES = {"", "random"}
+VIDEO_BGM_VOLUMES = {0.1, 0.2, 0.4, 0.6}
+VOICE_CHOICES = {
+    "pt-BR": {"pt-BR-FranciscaNeural", "pt-BR-AntonioNeural"},
+    "en-US": {"en-US-JennyNeural", "en-US-GuyNeural"},
+    "es-ES": {"es-ES-ElviraNeural", "es-ES-AlvaroNeural"},
+    "de-DE": {"de-DE-KatjaNeural", "de-DE-ConradNeural"},
+}
+
+
+def default_voice_for_language(language: str) -> str:
+    prefix = clean_language(language).split("-", 1)[0]
+    return VOICE_BY_LANGUAGE.get(prefix, "pt-BR-FranciscaNeural")
+
+
+def video_profile_from_settings(format: Literal["long", "short"], settings: dict[str, Any]) -> dict[str, Any]:
+    """Keep only user-facing render controls that are safe to make channel-specific."""
+    common = {
+        "video_clip_duration": settings.get("video_clip_duration", 6 if format == "long" else 4),
+        "video_concat_mode": settings.get("video_concat_mode", "script"),
+        "video_transition_mode": settings.get("video_transition_mode", ""),
+        "video_clip_speed": settings.get("video_clip_speed", 1.0),
+        "bgm_type": settings.get("bgm_type", ""),
+        "bgm_volume": settings.get("bgm_volume", 0.2),
+    }
+    if format == "short":
+        return {"paragraph_number": settings.get("paragraph_number", 5), "video_count": settings.get("video_count", 1), **common}
+    return {"target_minutes": settings.get("target_minutes", 8), **common}
+
+
+def default_channel_video_defaults() -> dict[str, dict[str, Any]]:
+    return {format: video_profile_from_settings(format, generation_defaults(format)) for format in ("short", "long")}
+
+
+def normalize_channel_video_defaults(values: Any, *, fallback: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+    """Validate the render controls stored on a channel, merging PATCH values by format."""
+    if values is None:
+        values = {}
+    if not isinstance(values, dict):
+        raise HTTPException(status_code=422, detail="Os parâmetros de vídeo do canal devem ser um objeto.")
+    base = fallback if fallback is not None else default_channel_video_defaults()
+    result: dict[str, dict[str, Any]] = {}
+    for format in ("short", "long"):
+        raw = values.get(format, {})
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=422, detail=f"Os parâmetros de {format} devem ser um objeto.")
+        allowed = set(CHANNEL_VIDEO_PROFILE_FIELDS[format])
+        unknown = set(raw) - allowed
+        if unknown:
+            raise HTTPException(status_code=422, detail=f"Parâmetro de vídeo não suportado: {sorted(unknown)[0]}.")
+        current = dict(base.get(format, {}))
+        current.update(raw)
+        try:
+            clip_duration = int(current["video_clip_duration"])
+            clip_speed = float(current["video_clip_speed"])
+            bgm_volume = float(current["bgm_volume"])
+        except (KeyError, TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="Parâmetros de vídeo numéricos inválidos.") from None
+        if not 1 <= clip_duration <= 30:
+            raise HTTPException(status_code=422, detail="A duração de cada clipe deve estar entre 1 e 30 segundos.")
+        if clip_speed not in VIDEO_CLIP_SPEEDS:
+            raise HTTPException(status_code=422, detail="Velocidade de clipe inválida.")
+        if bgm_volume not in VIDEO_BGM_VOLUMES:
+            raise HTTPException(status_code=422, detail="Volume da música inválido.")
+        concat_mode = str(current.get("video_concat_mode", ""))
+        transition = str(current.get("video_transition_mode", ""))
+        bgm_type = str(current.get("bgm_type", ""))
+        if concat_mode not in VIDEO_CONCAT_MODES:
+            raise HTTPException(status_code=422, detail="Modo de imagens inválido.")
+        if transition not in VIDEO_TRANSITIONS:
+            raise HTTPException(status_code=422, detail="Transição inválida.")
+        if bgm_type not in VIDEO_BGM_TYPES:
+            raise HTTPException(status_code=422, detail="Trilha sonora inválida.")
+        profile = {
+            "video_clip_duration": clip_duration,
+            "video_concat_mode": concat_mode,
+            "video_transition_mode": transition,
+            "video_clip_speed": clip_speed,
+            "bgm_type": bgm_type,
+            "bgm_volume": bgm_volume,
+        }
+        if format == "short":
+            try:
+                paragraph_number, video_count = int(current["paragraph_number"]), int(current["video_count"])
+            except (KeyError, TypeError, ValueError):
+                raise HTTPException(status_code=422, detail="Duração ou quantidade de vídeos do Short inválida.") from None
+            if paragraph_number not in {4, 5, 6} or not 1 <= video_count <= 5:
+                raise HTTPException(status_code=422, detail="Shorts aceitam duração de 60, 75 ou 90 segundos e de 1 a 5 vídeos.")
+            result[format] = {"paragraph_number": paragraph_number, "video_count": video_count, **profile}
+        else:
+            try:
+                target_minutes = int(current["target_minutes"])
+            except (KeyError, TypeError, ValueError):
+                raise HTTPException(status_code=422, detail="Duração do vídeo longo inválida.") from None
+            if target_minutes not in {5, 8, 10, 15}:
+                raise HTTPException(status_code=422, detail="Vídeos longos aceitam 5, 8, 10 ou 15 minutos.")
+            result[format] = {"target_minutes": target_minutes, **profile}
+    return result
+
+
+def channel_video_defaults(channel: sqlite3.Row | dict[str, Any]) -> dict[str, dict[str, Any]]:
+    raw = dict(channel).get("video_defaults_json", "{}")
+    try:
+        values = json.loads(raw) if isinstance(raw, str) else raw
+    except json.JSONDecodeError:
+        values = {}
+    return normalize_channel_video_defaults(values)
+
+
+def normalize_channel_profile(values: dict[str, Any], *, require_all: bool = True) -> dict[str, Any]:
+    """Validate one render profile shared by channel forms, direct API calls and OAuth setup."""
+    language = clean_language(str(values.get("language", "pt-BR")))
+    voice_name = str(values.get("voice_name") or default_voice_for_language(language))
+    allowed_voices = VOICE_CHOICES.get(language)
+    if not allowed_voices or voice_name not in allowed_voices:
+        raise HTTPException(status_code=422, detail="A voz escolhida não é compatível com o idioma da narração.")
+    profile: dict[str, Any] = {"language": language, "voice_name": voice_name}
+    numeric_ranges = {"voice_rate": (0.5, 2.0), "voice_volume": (0.0, 2.0), "stroke_width": (0.0, 10.0)}
+    for field, (minimum, maximum) in numeric_ranges.items():
+        try:
+            number = float(values.get(field, 1.0 if field != "stroke_width" else 1.5))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail=f"{field} deve ser numérico.") from None
+        if not minimum <= number <= maximum:
+            raise HTTPException(status_code=422, detail=f"{field} está fora do limite permitido.")
+        profile[field] = number
+    try:
+        font_size = int(values.get("font_size", 56))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="font_size deve ser inteiro.") from None
+    if not 12 <= font_size <= 120:
+        raise HTTPException(status_code=422, detail="font_size está fora do limite permitido.")
+    profile["font_size"] = font_size
+    profile["subtitle_enabled"] = bool(values.get("subtitle_enabled", True))
+    profile["subtitle_position"] = str(values.get("subtitle_position", "bottom"))
+    if profile["subtitle_position"] not in CHANNEL_PROFILE_POSITIONS:
+        raise HTTPException(status_code=422, detail="Posição de legenda inválida.")
+    for field in CHANNEL_PROFILE_COLORS:
+        color = str(values.get(field, "#FFFFFF" if field == "text_fore_color" else "#000000")).upper()
+        if not re.fullmatch(r"#[0-9A-F]{6}", color):
+            raise HTTPException(status_code=422, detail=f"{field} deve usar a cor hexadecimal #RRGGBB.")
+        profile[field] = color
+    return profile
+
+
+def channel_generation_settings(channel: sqlite3.Row | dict[str, Any], format: Literal["long", "short"]) -> dict[str, Any]:
+    profile = normalize_channel_profile(dict(channel))
+    return {"video_language": profile.pop("language"), **profile, **channel_video_defaults(channel)[format]}
+
+
+def conflicting_channel_profile_fields(channels: list[sqlite3.Row], format: Literal["long", "short"]) -> list[str]:
+    if len(channels) < 2:
+        return []
+    profiles = [channel_generation_settings(channel, format) for channel in channels]
+    fields = ("video_language", *CHANNEL_PROFILE_FIELDS, *CHANNEL_VIDEO_PROFILE_FIELDS[format])
+    return [field for field in fields if any(profile[field] != profiles[0][field] for profile in profiles[1:])]
 
 
 def job_language(db: sqlite3.Connection, job: sqlite3.Row) -> str:
@@ -1285,7 +2399,9 @@ def job_language(db: sqlite3.Connection, job: sqlite3.Row) -> str:
 
 
 def row_as_channel(row: sqlite3.Row) -> dict[str, Any]:
-    result = {key: row[key] for key in ("id", "platform", "name", "handle", "external_id", "status", "niche", "language", "created_at", "updated_at")}
+    result = {key: row[key] for key in ("id", "platform", "name", "handle", "external_id", "status", "niche", "language", "system_prompt", *CHANNEL_PROFILE_FIELDS, "created_at", "updated_at")}
+    result["subtitle_enabled"] = bool(result["subtitle_enabled"])
+    result["video_defaults"] = channel_video_defaults(row)
     result["stats"] = json.loads(row["stats_json"])
     return result
 
@@ -1326,20 +2442,55 @@ def list_channels() -> list[dict[str, Any]]:
 class ChannelPatch(BaseModel):
     niche: str | None = Field(default=None, max_length=200)
     language: str | None = Field(default=None, max_length=20)
+    system_prompt: str | None = Field(default=None, max_length=4000)
+    voice_name: str | None = Field(default=None, max_length=120)
+    voice_rate: float | None = Field(default=None)
+    voice_volume: float | None = Field(default=None)
+    subtitle_enabled: bool | None = None
+    subtitle_position: str | None = Field(default=None, max_length=20)
+    font_size: int | None = None
+    text_fore_color: str | None = Field(default=None, max_length=7)
+    stroke_color: str | None = Field(default=None, max_length=7)
+    stroke_width: float | None = Field(default=None)
+    video_defaults: dict[str, Any] | None = None
 
 
 class ChannelConnect(BaseModel):
     niche: str = Field(default="", max_length=200)
     language: str = Field(default="pt-BR", max_length=20)
+    system_prompt: str = Field(default="", max_length=4000)
+    voice_name: str = Field(default="pt-BR-FranciscaNeural", max_length=120)
+    voice_rate: float = 1.0
+    voice_volume: float = 1.0
+    subtitle_enabled: bool = True
+    subtitle_position: str = "bottom"
+    font_size: int = 56
+    text_fore_color: str = "#FFFFFF"
+    stroke_color: str = "#000000"
+    stroke_width: float = 1.5
+    video_defaults: dict[str, Any] = Field(default_factory=dict)
 
 
 @app.patch("/api/channels/{channel_id}")
 def patch_channel(channel_id: str, input: ChannelPatch) -> dict[str, Any]:
     with database() as db:
-        channel_row_or_404(db, channel_id)
+        channel = channel_row_or_404(db, channel_id)
     fields = input.model_dump(exclude_none=True)
-    if "language" in fields:
-        fields["language"] = clean_language(fields["language"])
+    profile_changed = set(fields).intersection({"language", *CHANNEL_PROFILE_FIELDS})
+    if profile_changed:
+        combined = dict(channel)
+        combined.update(fields)
+        # Changing only the language chooses a compatible default voice; an explicitly
+        # supplied incompatible voice remains a validation error.
+        if "language" in fields and "voice_name" not in fields:
+            combined["voice_name"] = default_voice_for_language(str(fields["language"]))
+        fields.update(normalize_channel_profile(combined))
+    if "video_defaults" in fields:
+        fields["video_defaults_json"] = json.dumps(
+            normalize_channel_video_defaults(fields.pop("video_defaults"), fallback=channel_video_defaults(channel))
+        )
+    if "system_prompt" in fields:
+        fields["system_prompt"] = fields["system_prompt"].strip()
     if fields:
         update_channel(channel_id, **fields)
     with database() as db:
@@ -1361,14 +2512,37 @@ async def delete_channel(channel_id: str) -> None:
 
 
 @app.get("/api/channels/youtube/connect")
-def youtube_connect(request: Request, niche: str = "", language: str = "pt-BR") -> Any:
+def youtube_connect(
+    request: Request, niche: str = "", language: str = "pt-BR", system_prompt: str = "",
+    voice_name: str = "pt-BR-FranciscaNeural", voice_rate: float = 1.0, voice_volume: float = 1.0,
+    subtitle_enabled: bool = True, subtitle_position: str = "bottom", font_size: int = 56,
+    text_fore_color: str = "#FFFFFF", stroke_color: str = "#000000", stroke_width: float = 1.5,
+    video_defaults: str = "",
+) -> Any:
     from google_auth_oauthlib.flow import Flow
 
+    session = session_from_request(request)
+    if not session:
+        raise HTTPException(status_code=401, detail="Sessão inválida ou expirada.")
     if not youtube_client_file().is_file():
         return HTMLResponse("<p>Coloque o OAuth client do Google Cloud em <code>runtime/secrets/youtube_client_secret.json</code> e tente de novo.</p>", status_code=409)
+    profile = normalize_channel_profile({
+        "language": language, "voice_name": voice_name, "voice_rate": voice_rate, "voice_volume": voice_volume,
+        "subtitle_enabled": subtitle_enabled, "subtitle_position": subtitle_position, "font_size": font_size,
+        "text_fore_color": text_fore_color, "stroke_color": stroke_color, "stroke_width": stroke_width,
+    })
+    try:
+        raw_video_defaults = json.loads(video_defaults) if video_defaults else {}
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=422, detail="Os parâmetros de vídeo do canal são inválidos.") from None
+    video_profile = normalize_channel_video_defaults(raw_video_defaults)
     flow = Flow.from_client_secrets_file(str(youtube_client_file()), scopes=YOUTUBE_SCOPES, redirect_uri=str(request.url_for("youtube_auth_callback")))
     url, state = flow.authorization_url(access_type="offline", prompt="consent")
-    oauth_flows[state] = (flow, {"niche": niche[:200], "language": clean_language(language)})
+    oauth_flows[state] = (
+        flow,
+        {"niche": niche[:200], "system_prompt": system_prompt.strip()[:4000], "video_defaults": video_profile, **profile},
+        session["token_hash"],
+    )
     return RedirectResponse(url)
 
 
@@ -1386,7 +2560,7 @@ def youtube_channel_info(credentials: Any) -> dict[str, Any] | None:
     }
 
 
-def save_youtube_channel(info: dict[str, Any], options: dict[str, str]) -> str:
+def save_youtube_channel(info: dict[str, Any], options: dict[str, Any]) -> str:
     """Upserts by YouTube channel id, so reconnecting a channel refreshes it (keeping its niche
     and language) instead of creating a duplicate."""
     with database() as db:
@@ -1397,20 +2571,25 @@ def save_youtube_channel(info: dict[str, Any], options: dict[str, str]) -> str:
                 (info["name"], info["handle"], json.dumps(info["stats"]), now(), existing["id"]),
             )
             return existing["id"]
+        profile = normalize_channel_profile(options)
+        video_defaults = normalize_channel_video_defaults(options.get("video_defaults", {}))
         channel_id = str(uuid4())
         db.execute(
-            "INSERT INTO channels(id, platform, name, handle, external_id, status, niche, language, stats_json, created_at, updated_at) VALUES (?, 'youtube', ?, ?, ?, 'connected', ?, ?, ?, ?, ?)",
-            (channel_id, info["name"], info["handle"], info["external_id"], options.get("niche", ""), options.get("language", "pt-BR"), json.dumps(info["stats"]), now(), now()),
+            "INSERT INTO channels(id, platform, name, handle, external_id, status, niche, language, system_prompt, voice_name, voice_rate, voice_volume, subtitle_enabled, subtitle_position, font_size, text_fore_color, stroke_color, stroke_width, video_defaults_json, stats_json, created_at, updated_at) VALUES (?, 'youtube', ?, ?, ?, 'connected', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (channel_id, info["name"], info["handle"], info["external_id"], options.get("niche", ""), profile["language"], options.get("system_prompt", ""), profile["voice_name"], profile["voice_rate"], profile["voice_volume"], int(profile["subtitle_enabled"]), profile["subtitle_position"], profile["font_size"], profile["text_fore_color"], profile["stroke_color"], profile["stroke_width"], json.dumps(video_defaults), json.dumps(info["stats"]), now(), now()),
         )
         return channel_id
 
 
 @app.get("/api/youtube/auth/callback", name="youtube_auth_callback")
 def youtube_auth_callback(request: Request, state: str = "", error: str = "") -> HTMLResponse:
-    pending = oauth_flows.pop(state, None)
-    if error or not pending:
+    pending = oauth_flows.get(state)
+    session = session_from_request(request)
+    if error or not pending or not session or not secrets.compare_digest(pending[2], session["token_hash"]):
+        oauth_flows.pop(state, None)
         return HTMLResponse(f"<p>Autorização do YouTube não concluída: {html.escape(error or 'sessão expirada, tente de novo')}.</p>", status_code=400)
-    flow, options = pending
+    oauth_flows.pop(state, None)
+    flow, options, _ = pending
     os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")  # the redirect is plain-http loopback
     flow.fetch_token(authorization_response=str(request.url))
     info = youtube_channel_info(flow.credentials)
@@ -1458,10 +2637,12 @@ async def tiktok_connect(input: ChannelConnect) -> dict[str, Any]:
     await upload_post_request("POST", "/api/uploadposts/users", json={"username": username})
     access_url = await upload_post_connect_link(username)
     channel_id = str(uuid4())
+    profile = normalize_channel_profile(input.model_dump())
+    video_defaults = normalize_channel_video_defaults(input.video_defaults)
     with database() as db:
         db.execute(
-            "INSERT INTO channels(id, platform, name, handle, external_id, status, niche, language, created_at, updated_at) VALUES (?, 'tiktok', 'TikTok (aguardando login)', '', ?, 'pending', ?, ?, ?, ?)",
-            (channel_id, username, input.niche.strip(), clean_language(input.language), now(), now()),
+            "INSERT INTO channels(id, platform, name, handle, external_id, status, niche, language, system_prompt, voice_name, voice_rate, voice_volume, subtitle_enabled, subtitle_position, font_size, text_fore_color, stroke_color, stroke_width, video_defaults_json, created_at, updated_at) VALUES (?, 'tiktok', 'TikTok (aguardando login)', '', ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (channel_id, username, input.niche.strip(), profile["language"], input.system_prompt.strip(), profile["voice_name"], profile["voice_rate"], profile["voice_volume"], int(profile["subtitle_enabled"]), profile["subtitle_position"], profile["font_size"], profile["text_fore_color"], profile["stroke_color"], profile["stroke_width"], json.dumps(video_defaults), now(), now()),
         )
         channel = row_as_channel(channel_row_or_404(db, channel_id))
     return {"channel": channel, "access_url": access_url}
@@ -2064,10 +3245,7 @@ async def run_operator(channel_id: str) -> dict[str, Any]:
             raise HTTPException(status_code=409, detail="Pulado: o vídeo anterior do operador ainda está sendo gerado.")
         format, language = operator["format"], channel["language"]
         topic = (await suggest_topics(channel, format, 1))[0]["topic"]
-        settings: dict[str, Any] = {"video_language": language}
-        prefix = language.split("-")[0]
-        if prefix in VOICE_BY_LANGUAGE and not str(generation_defaults(format).get("voice_name", "")).startswith(prefix):
-            settings["voice_name"] = VOICE_BY_LANGUAGE[prefix]
+        settings = channel_generation_settings(channel, format)
         script = ""
         if format == "long":
             written = await long_script(LongScriptInput(subject=topic, language=language, minutes=OPERATOR_MINUTES, niche=channel["niche"]))
@@ -2138,7 +3316,7 @@ async def prepare_operator_jobs() -> None:
 
 
 async def agent_tick() -> None:
-    for step in (publish_due_schedules, reconcile_processing_publications, run_due_operators, prepare_operator_jobs):
+    for step in (reconcile_stale_jobs, publish_due_schedules, reconcile_processing_publications, run_due_operators, prepare_operator_jobs):
         try:
             await step()
         except Exception:
@@ -2159,7 +3337,52 @@ async def no_cache_for_static_app(request: Request, call_next):
     with its old ?v=... script tags - without ever asking the server if anything changed.
     Bumping the query string then does nothing until a hard refresh. server.js (the non-Docker
     path) already disables caching for exactly this reason; this mirrors it for the gateway."""
-    response = await call_next(request)
+    trace_id = observability_trace_id(request.headers.get("X-Trace-Id", ""))
+    trace = {"spans": []}
+    token = ACTIVE_TRACE.set(trace)
+    started = time.perf_counter()
+    try:
+        path = request.url.path
+        exempt = {"/api/health", "/api/health/live", "/api/health/ready", "/api/auth/login", "/favicon.ico"}
+        protected = path.startswith("/api/") or path == "/docs" or path == "/openapi.json"
+        session = None
+        if protected and path not in exempt:
+            session = session_from_request(request)
+            if not session:
+                return JSONResponse({"detail": "Autenticação necessária."}, status_code=401)
+            if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+                supplied = request.headers.get("X-CSRF-Token", "")
+                if not secrets.compare_digest(supplied, session["csrf_token"]):
+                    return JSONResponse({"detail": "Token CSRF inválido."}, status_code=403)
+        response = await call_next(request)
+    except Exception as exc:
+        duration_ms = round((time.perf_counter() - started) * 1000, 1)
+        if request.url.path.startswith("/api/") and request.url.path != "/api/logs":
+            try:
+                record_observability_event(
+                    trace_id=trace_id, method=request.method, path=request.url.path,
+                    status_code=500, duration_ms=duration_ms, spans=trace["spans"],
+                    error=f"{request.method} {request.url.path} falhou: {type(exc).__name__}",
+                )
+            except Exception:
+                logging.getLogger("cockpit.observability").exception("Falha ao registrar evento")
+        raise
+    finally:
+        ACTIVE_TRACE.reset(token)
+    duration_ms = round((time.perf_counter() - started) * 1000, 1)
+    response.headers["X-Trace-Id"] = trace_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'"
+    if request.url.path.startswith("/api/") and request.url.path != "/api/logs":
+        try:
+            record_observability_event(
+                trace_id=trace_id, method=request.method, path=request.url.path,
+                status_code=response.status_code, duration_ms=duration_ms, spans=trace["spans"],
+            )
+        except Exception:
+            logging.getLogger("cockpit.observability").exception("Falha ao registrar evento")
     is_app_shell = request.url.path == "/" or request.url.path.startswith("/shared/") or request.url.path.endswith(".html")
     if request.method in {"GET", "HEAD"} and is_app_shell:
         response.headers["Cache-Control"] = "no-cache"
@@ -2169,6 +3392,21 @@ async def no_cache_for_static_app(request: Request, call_next):
 @app.get("/")
 def root() -> FileResponse:
     return FileResponse(STATIC_ROOT / "Cockpit.html")
+
+
+@app.get("/.image-slots.state.json")
+def image_slots_state() -> JSONResponse:
+    """The <image-slot> scaffold fetches this sidecar on every page load. Outside the
+    omelette runtime nothing ever writes it, so serve an empty store instead of 404ing
+    (the component treats both the same, but the 404 litters the browser console)."""
+    return JSONResponse({})
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> Response:
+    """Browsers request this unprompted (fresh loads, bookmarks, cached pages from before
+    the data-URI icon). Answer empty instead of 404ing."""
+    return Response(status_code=204)
 
 
 app.mount("/", StaticFiles(directory=STATIC_ROOT, html=True), name="static")
