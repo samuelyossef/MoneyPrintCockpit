@@ -6,6 +6,7 @@ import hashlib
 import html
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -19,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -26,6 +28,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
+from gateway.auth_crypto import admin_session_version, password_hash, session_token_hash, verify_password
 from gateway.growth.api import router as growth_router
 from gateway.growth.api import store as growth_store
 from gateway.growth.api import OpportunityScoreRequest, PlanningWorkflowRequest, YPPGoalRequest
@@ -67,13 +70,6 @@ def parse_time(value: str | None) -> datetime:
         return datetime.now(UTC)
 
 
-def password_hash(password: str, salt: str | None = None) -> dict[str, str]:
-    """PBKDF2 is deliberately stdlib-only so local setup has no extra secret dependency."""
-    salt_bytes = bytes.fromhex(salt) if salt else secrets.token_bytes(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt_bytes, 600_000)
-    return {"algorithm": "pbkdf2_sha256", "iterations": "600000", "salt": salt_bytes.hex(), "hash": digest.hex()}
-
-
 def configured_admin() -> dict[str, str] | None:
     try:
         data = json.loads(ADMIN_FILE.read_text(encoding="utf-8"))
@@ -81,20 +77,6 @@ def configured_admin() -> dict[str, str] | None:
         return None
     required = {"name", "email", "salt", "hash"}
     return data if required.issubset(data) else None
-
-
-def admin_session_version(admin: dict[str, str]) -> str:
-    """Fingerprint sessions against the configured password without storing it in SQLite."""
-    return hashlib.sha256(f"{admin['salt']}:{admin['hash']}".encode("utf-8")).hexdigest()
-
-
-def verify_password(password: str, admin: dict[str, str]) -> bool:
-    candidate = password_hash(password, str(admin["salt"]))
-    return secrets.compare_digest(candidate["hash"], str(admin["hash"]))
-
-
-def session_token_hash(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def api_key() -> str:
@@ -105,8 +87,12 @@ def api_key() -> str:
 
 def connect() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(DATABASE)
+    # API and workers share this database. The timeout serializes concurrent writers;
+    # initialization selects the journal mode supported by the runtime volume.
+    connection = sqlite3.connect(DATABASE, timeout=30.0)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA busy_timeout = 30000")
+    connection.execute("PRAGMA synchronous = NORMAL")
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
 
@@ -124,7 +110,47 @@ def database() -> Any:
         connection.close()
 
 
+@contextmanager
+def database_initialization_lock() -> Any:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = DATA_DIR / ".cockpit-db-init.lock"
+    with lock_path.open("a+b") as lock_file:
+        if os.name == "nt":
+            import msvcrt
+            lock_file.seek(0, os.SEEK_END)
+            if lock_file.tell() == 0:
+                lock_file.write(b"\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
 def initialize_database() -> None:
+    with database_initialization_lock():
+        _initialize_database_locked()
+
+def _initialize_database_locked() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(DATABASE, timeout=30.0)
+    try:
+        connection.execute("PRAGMA busy_timeout = 30000")
+        journal_mode = os.getenv("COCKPIT_SQLITE_JOURNAL_MODE", "WAL").upper()
+        if journal_mode not in {"WAL", "DELETE"}:
+            raise ValueError("COCKPIT_SQLITE_JOURNAL_MODE deve ser WAL ou DELETE.")
+        connection.execute(f"PRAGMA journal_mode = {journal_mode}")
+    finally:
+        connection.close()
     with database() as db:
         db.executescript(
             """
@@ -165,16 +191,45 @@ def initialize_database() -> None:
               text_fore_color TEXT NOT NULL DEFAULT '#FFFFFF', stroke_color TEXT NOT NULL DEFAULT '#000000',
               stroke_width REAL NOT NULL DEFAULT 1.5,
               video_defaults_json TEXT NOT NULL DEFAULT '{}',
+              visual_guides_json TEXT NOT NULL DEFAULT '{}',
+              publish_privacy TEXT NOT NULL DEFAULT 'private',
               stats_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT,
               UNIQUE(platform, external_id)
             );
             CREATE TABLE IF NOT EXISTS settings (
               key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS generation_batches (
+              id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+              client_request_id TEXT NOT NULL, request_hash TEXT NOT NULL,
+              input_json TEXT NOT NULL, created_at TEXT NOT NULL,
+              UNIQUE(project_id, client_request_id)
+            );
+            CREATE TABLE IF NOT EXISTS generation_batch_items (
+              id TEXT PRIMARY KEY, batch_id TEXT NOT NULL REFERENCES generation_batches(id),
+              channel_id TEXT NOT NULL REFERENCES channels(id), channel_name TEXT NOT NULL,
+              state TEXT NOT NULL, stage TEXT NOT NULL, context_json TEXT NOT NULL,
+              generated_json TEXT NOT NULL DEFAULT '{}', job_id TEXT REFERENCES video_jobs(id),
+              error TEXT, lease_owner TEXT, lease_until TEXT, submission_started_at TEXT,
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+              UNIQUE(batch_id, channel_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_generation_items_claim ON generation_batch_items(state, lease_until, created_at);
+            CREATE TABLE IF NOT EXISTS generation_quality (
+              item_id TEXT PRIMARY KEY REFERENCES generation_batch_items(id),
+              job_id TEXT UNIQUE REFERENCES video_jobs(id), state TEXT NOT NULL DEFAULT 'pending',
+              report_json TEXT NOT NULL DEFAULT '{}', updated_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS operators (
               channel_id TEXT PRIMARY KEY REFERENCES channels(id), enabled INTEGER NOT NULL DEFAULT 0, format TEXT NOT NULL DEFAULT 'short',
               cadence_hours INTEGER NOT NULL DEFAULT 24, next_run_at TEXT, last_run_at TEXT, last_error TEXT, updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS operator_runs (
+              id TEXT PRIMARY KEY, channel_id TEXT NOT NULL REFERENCES channels(id), slot_key TEXT NOT NULL,
+              state TEXT NOT NULL, job_id TEXT REFERENCES video_jobs(id), batch_id TEXT REFERENCES generation_batches(id), error TEXT,
+              started_at TEXT NOT NULL, finished_at TEXT, UNIQUE(channel_id, slot_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_operator_runs_channel ON operator_runs(channel_id, started_at DESC);
             CREATE TABLE IF NOT EXISTS video_analytics (
               publication_id TEXT PRIMARY KEY, captured_at TEXT NOT NULL, metrics_json TEXT NOT NULL, score INTEGER NOT NULL
             );
@@ -209,6 +264,8 @@ def initialize_database() -> None:
             db.execute("UPDATE video_jobs SET format = CASE WHEN json_extract(request_json, '$.video_aspect') = '16:9' THEN 'long' ELSE 'short' END")
         if "created_by" not in job_columns:
             db.execute("ALTER TABLE video_jobs ADD COLUMN created_by TEXT")
+        if "auto_publish_authorized" not in job_columns:
+            db.execute("ALTER TABLE video_jobs ADD COLUMN auto_publish_authorized INTEGER NOT NULL DEFAULT 0")
         if "progress_updated_at" not in job_columns:
             db.execute("ALTER TABLE video_jobs ADD COLUMN progress_updated_at TEXT")
             db.execute("UPDATE video_jobs SET progress_updated_at=updated_at WHERE progress_updated_at IS NULL")
@@ -217,6 +274,9 @@ def initialize_database() -> None:
             db.execute("UPDATE video_jobs SET last_observed_progress=progress")
         if "interruption_reason" not in job_columns:
             db.execute("ALTER TABLE video_jobs ADD COLUMN interruption_reason TEXT")
+        if "generation_item_id" not in job_columns:
+            db.execute("ALTER TABLE video_jobs ADD COLUMN generation_item_id TEXT")
+        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_video_jobs_generation_item ON video_jobs(generation_item_id) WHERE generation_item_id IS NOT NULL")
         session_columns = {column["name"] for column in db.execute("PRAGMA table_info(sessions)")}
         if "admin_version" not in session_columns:
             # Existing sessions intentionally become invalid after this security migration.
@@ -224,6 +284,8 @@ def initialize_database() -> None:
         channel_columns = {column["name"] for column in db.execute("PRAGMA table_info(channels)")}
         if "system_prompt" not in channel_columns:
             db.execute("ALTER TABLE channels ADD COLUMN system_prompt TEXT NOT NULL DEFAULT ''")
+        if "publish_privacy" not in channel_columns:
+            db.execute("ALTER TABLE channels ADD COLUMN publish_privacy TEXT NOT NULL DEFAULT 'private'")
         profile_columns = {
             "voice_name": "TEXT NOT NULL DEFAULT ''",
             "voice_rate": "REAL NOT NULL DEFAULT 1.0",
@@ -249,6 +311,28 @@ def initialize_database() -> None:
         publication_columns = {column["name"] for column in db.execute("PRAGMA table_info(publications)")}
         if "scheduled_at" not in publication_columns:
             db.execute("ALTER TABLE publications ADD COLUMN scheduled_at TEXT")
+        operator_columns = {column["name"] for column in db.execute("PRAGMA table_info(operators)")}
+        operator_additions = {
+            "auto_publish": "INTEGER NOT NULL DEFAULT 0",
+            "publish_days_json": "TEXT NOT NULL DEFAULT '[0,1,2,3,4,5,6]'",
+            "publish_time": "TEXT NOT NULL DEFAULT '12:00'",
+            "publish_timezone": "TEXT NOT NULL DEFAULT 'America/Sao_Paulo'",
+            "paused_reason": "TEXT",
+            "lease_owner": "TEXT",
+            "lease_until": "TEXT",
+        }
+        for column, definition in operator_additions.items():
+            if column not in operator_columns:
+                db.execute(f"ALTER TABLE operators ADD COLUMN {column} {definition}")
+        run_columns = {column["name"] for column in db.execute("PRAGMA table_info(operator_runs)")}
+        if "batch_id" not in run_columns:
+            db.execute("ALTER TABLE operator_runs ADD COLUMN batch_id TEXT")
+        if "auto_publish" not in publication_columns:
+            db.execute("ALTER TABLE publications ADD COLUMN auto_publish INTEGER NOT NULL DEFAULT 0")
+        if "auto_lease_owner" not in publication_columns:
+            db.execute("ALTER TABLE publications ADD COLUMN auto_lease_owner TEXT")
+        if "auto_lease_until" not in publication_columns:
+            db.execute("ALTER TABLE publications ADD COLUMN auto_lease_until TEXT")
         if "channel_id" not in publication_columns:
             db.execute("ALTER TABLE publications ADD COLUMN channel_id TEXT REFERENCES channels(id)")
             db.execute("UPDATE publications SET channel_id = (SELECT channel_id FROM video_jobs WHERE video_jobs.id = publications.job_id)")
@@ -259,6 +343,7 @@ def initialize_database() -> None:
                 "FROM video_jobs AS jobs JOIN channels ON channels.id = jobs.channel_id WHERE jobs.deleted_at IS NULL",
                 (now(), now()),
             )
+        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_publication_channel_slot ON publications(channel_id, scheduled_at) WHERE channel_id IS NOT NULL AND scheduled_at IS NOT NULL AND state IN ('auto_reserved', 'uploading', 'platform_scheduled')")
         existing = db.execute("SELECT value_json FROM settings WHERE key = 'generation-defaults'").fetchone()
         if not existing:
             db.execute(
@@ -282,11 +367,23 @@ def initialize_database() -> None:
                 ("generation-defaults", "generation-defaults:short", "generation-defaults:long"),
             )}
             base = settings_rows.get("generation-defaults", default_generation_settings())
-            defaults = normalize_channel_video_defaults({
+            defaults = {
                 "short": video_profile_from_settings("short", {**base, **FORMAT_PRESETS["short"], **settings_rows.get("generation-defaults:short", {})}),
                 "long": video_profile_from_settings("long", {**base, **FORMAT_PRESETS["long"], **settings_rows.get("generation-defaults:long", {})}),
-            })
+            }
+            for profile in defaults.values():
+                for field in CHANNEL_PROFILE_FIELDS:
+                    profile.pop(field, None)
             db.execute("UPDATE channels SET video_defaults_json=?", (json.dumps(defaults),))
+        if "visual_guides_json" not in channel_columns:
+            db.execute("ALTER TABLE channels ADD COLUMN visual_guides_json TEXT NOT NULL DEFAULT '{}'")
+        # Backfill format profiles from the old shared channel fields. Existing values in either
+        # format are preserved, so this is safe to run on every startup.
+        for row in db.execute("SELECT * FROM channels").fetchall():
+            normalized = channel_video_defaults(row)
+            raw = json.loads(row["video_defaults_json"] or "{}")
+            if raw != normalized:
+                db.execute("UPDATE channels SET video_defaults_json=? WHERE id=?", (json.dumps(normalized), row["id"]))
 
 
 def default_generation_settings() -> dict[str, Any]:
@@ -626,9 +723,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     except ObjectStorageUnavailable as exc:
         logging.getLogger("cockpit.growth").warning("Object storage indisponível; geração legada preservada: %s", exc)
     await reconcile_stale_jobs()
-    loop = asyncio.create_task(agent_loop())
     yield
-    loop.cancel()
 
 
 app = FastAPI(
@@ -1256,7 +1351,7 @@ BOUNDED_INT_FIELDS = {"paragraph_number": (1, 10), "video_clip_duration": (1, No
 
 
 def build_turbo_payload(subject: str, script: str, settings: dict[str, Any]) -> dict[str, Any]:
-    payload: dict[str, Any] = {"video_subject": subject.strip(), "video_script": script.strip()}
+    payload: dict[str, Any] = {"video_subject": subject.strip(), "video_script": script.strip(), "font_name": "Arial.ttf"}
     for key in TURBO_VIDEO_FIELDS:
         value = settings.get(key)
         # Turbo treats a blank transition as invalid and blank terms as "use these
@@ -1281,9 +1376,10 @@ def normalize_retry_payload(job: sqlite3.Row) -> tuple[dict[str, Any], list[str]
     if "target_minutes" in legacy:
         raw_settings["target_minutes"] = legacy["target_minutes"]
     warnings: list[str] = []
-    if raw_settings.get("video_source") not in {None, "pexels", "pixabay", "coverr"}:
+    curated = bool(job["generation_item_id"]) and raw_settings.get("video_source") == "local"
+    if raw_settings.get("video_source") not in ({None, "pexels", "pixabay", "coverr", "local"} if curated else {None, "pexels", "pixabay", "coverr"}):
         warnings.append("Fonte antiga convertida para Pexels.")
-    raw_settings["video_source"] = raw_settings.get("video_source") if raw_settings.get("video_source") in {"pexels", "pixabay", "coverr"} else "pexels"
+    raw_settings["video_source"] = raw_settings.get("video_source") if raw_settings.get("video_source") in ({"pexels", "pixabay", "coverr", "local"} if curated else {"pexels", "pixabay", "coverr"}) else "pexels"
     format = job["format"] if job["format"] in FORMAT_LOCKED else "short"
     settings = {**generation_defaults(format), **raw_settings, **FORMAT_LOCKED[format]}
     payload = build_turbo_payload(str(legacy.get("video_subject") or job["subject"]), str(legacy.get("video_script") or job["script"]), settings)
@@ -1296,16 +1392,23 @@ def job_max_words(format: str, settings: dict[str, Any]) -> int | None:
     """The narration budget the screen asked for: the Short's "Duração alvo" select, or the long
     video's target in minutes. None means no target was sent, so nothing is trimmed."""
     if format == "short":
-        return short_script_max_words(int(settings.get("paragraph_number", 5) or 5))
+        return short_script_max_words(int(settings.get("paragraph_number", 5) or 5), float(settings.get("voice_rate") or 1.0))
     try:
         minutes = float(settings.get("target_minutes") or 0)
     except (TypeError, ValueError):
         return None
-    return int(minutes * WORDS_PER_MINUTE) or None
+    return int(minutes * WORDS_PER_MINUTE * float(settings.get("voice_rate") or 1.0)) or None
 
 
 @app.post("/api/projects/{project_id}/jobs", status_code=202)
-async def create_job(project_id: str, input: JobCreate) -> dict[str, Any]:
+async def create_job(project_id: str, input: JobCreate, *, generation_item_id: str | None = None) -> dict[str, Any]:
+    if input.settings.get("video_source") == "local" and not generation_item_id:
+        raise HTTPException(status_code=422, detail="Materiais locais só podem ser enviados pelo curador da geração.")
+    if generation_item_id:
+        with database() as db:
+            existing = db.execute("SELECT * FROM video_jobs WHERE generation_item_id=?", (generation_item_id,)).fetchone()
+            if existing:
+                return row_as_job(existing, db)
     project = row_as_project(get_project_or_404(project_id))
     with database() as db:
         channels = [channel_row_or_404(db, channel_id) for channel_id in dict.fromkeys(input.channel_ids)]
@@ -1343,14 +1446,14 @@ async def create_job(project_id: str, input: JobCreate) -> dict[str, Any]:
             script_response = await turbo_request("POST", "/api/v1/scripts", json={
                 "video_subject": input.subject, "video_language": merged.get("video_language", "pt-BR"),
                 "paragraph_number": merged.get("paragraph_number", 5),
-                "video_script_prompt": short_script_prompt(str(merged.get("video_script_prompt", "")), int(merged.get("paragraph_number", 5) or 5)),
+                "video_script_prompt": short_script_prompt(str(merged.get("video_script_prompt", "")), int(merged.get("paragraph_number", 5) or 5), float(merged.get("voice_rate") or 1.0)),
                 "custom_system_prompt": merged.get("custom_system_prompt", ""),
             })
             script_text = str((unwrap(script_response.json()) or {}).get("video_script", "")).strip()
     # The chosen duration wins over whatever was written, pasted or generated, in every mode: a
     # longer script would stretch the narration past it, and the visuals are cut to fit the script.
     max_words = job_max_words(input.format, merged)
-    if script_text and max_words:
+    if script_text and max_words and not generation_item_id:
         script_text = trim_to_words(script_text, max_words)
     if follow_script and script_text and not str(merged.get("video_terms", "")).strip():
         terms, clip_seconds = await visual_terms(input.subject, script_text, float(merged.get("video_clip_duration") or 5), float(merged.get("voice_rate") or 1))
@@ -1364,8 +1467,8 @@ async def create_job(project_id: str, input: JobCreate) -> dict[str, Any]:
     persisted_request = {**request_payload, **({"target_minutes": merged["target_minutes"]} if "target_minutes" in merged else {})}
     with database() as db:
         db.execute(
-            "INSERT INTO video_jobs(id, project_id, turbo_task_id, subject, script, request_json, state, created_at, updated_at, format) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
-            (job_id, project_id, turbo_result["task_id"], input.subject.strip(), script_text, json.dumps(persisted_request), timestamp, timestamp, input.format),
+            "INSERT INTO video_jobs(id, project_id, turbo_task_id, subject, script, request_json, state, created_at, updated_at, format, generation_item_id) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)",
+            (job_id, project_id, turbo_result["task_id"], input.subject.strip(), script_text, json.dumps(persisted_request), timestamp, timestamp, input.format, generation_item_id),
         )
         # The channels picked now are the video's publish targets, waiting for approval.
         for channel in channels:
@@ -1439,6 +1542,8 @@ async def retry_job(job_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail="O Turbo não retornou task_id")
     with database() as db:
         db.execute("UPDATE video_jobs SET turbo_task_id=?, request_json=?, state='queued', progress=0, last_observed_progress=0, progress_updated_at=?, error=NULL, failed_stage=NULL, interruption_reason=NULL, updated_at=? WHERE id=?", (task_id, json.dumps(request), now(), now(), job_id))
+        if row["generation_item_id"]:
+            db.execute("UPDATE generation_quality SET state='pending', report_json='{}', updated_at=? WHERE item_id=? AND job_id=?", (now(), row["generation_item_id"], job_id))
         result = row_as_job(db.execute("SELECT * FROM video_jobs WHERE id=?", (job_id,)).fetchone(), db)
     result["warnings"] = warnings
     return result
@@ -1698,14 +1803,48 @@ async def llm_chat(
 
 
 def parse_json_object(content: str) -> dict[str, Any]:
-    """Kimi sometimes wraps the JSON in prose or a code fence; take the outermost object."""
-    try:
-        parsed = json.loads(content[content.index("{"): content.rindex("}") + 1])
-    except ValueError as exc:
-        raise HTTPException(status_code=502, detail="A IA não devolveu JSON válido") from exc
-    if not isinstance(parsed, dict):
-        raise HTTPException(status_code=502, detail="A IA não devolveu JSON válido")
-    return parsed
+    """Find a complete JSON object even when the model adds prose or code fences."""
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", content or ""):
+        try:
+            parsed, _ = decoder.raw_decode(content, match.start())
+        except ValueError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    raise HTTPException(status_code=502, detail="A IA não devolveu JSON válido")
+
+
+async def llm_json_object(
+    prompt: str,
+    *,
+    task: Literal["json", "outline", "script", "test"] = "json",
+    max_tokens: int | None = None,
+    fast_script: bool = False,
+    label: str = "esta etapa",
+) -> dict[str, Any]:
+    """Retry malformed structured output with the selected provider and model."""
+    for attempt in range(3):
+        retry_prompt = prompt
+        if attempt:
+            retry_prompt += (
+                "\nA resposta anterior veio vazia ou com JSON inválido. "
+                "Responda somente com um objeto JSON completo, sem markdown, comentários ou texto adicional."
+            )
+        content = await llm_chat(
+            retry_prompt, json_mode=True, task=task,
+            max_tokens=(max_tokens or NVIDIA_TASK_TOKEN_LIMITS[task]) + attempt * 512,
+            fast_script=fast_script,
+        )
+        try:
+            return parse_json_object(content)
+        except HTTPException as exc:
+            if exc.detail != "A IA não devolveu JSON válido":
+                raise
+    raise HTTPException(
+        status_code=502,
+        detail=f"A IA não devolveu JSON válido para {label} após 3 tentativas. Repita este canal ou escolha outro modelo no provedor configurado.",
+    )
 
 
 
@@ -1902,22 +2041,24 @@ SHORT_TARGET_SECONDS = {4: 60, 5: 75, 6: 90}  # mirrors the Shorts "Duração al
 SHORT_MIN_SECONDS = 60  # below this a Short is "curto demais" (see the word-count hint in moneyprinter-runtime.js)
 
 
-def short_script_max_words(paragraph_number: int) -> int:
+def short_script_max_words(paragraph_number: int, voice_rate: float = 1.0) -> int:
     seconds = SHORT_TARGET_SECONDS.get(paragraph_number, max(SHORT_TARGET_SECONDS.values()))
-    return round(seconds * WORDS_PER_MINUTE / 60)
+    return round(seconds * WORDS_PER_MINUTE * voice_rate / 60)
 
 
 def short_script_min_words() -> int:
     return round(SHORT_MIN_SECONDS * WORDS_PER_MINUTE / 60)
 
 
-def short_script_prompt(script_prompt: str, paragraph_number: int) -> str:
+def short_script_prompt(script_prompt: str, paragraph_number: int, voice_rate: float = 1.0) -> str:
     """Word-range rule Turbo's writer must hit (60–90 s of narration). Rides along with any
     custom requirements instead of replacing them."""
-    max_words, min_words = short_script_max_words(paragraph_number), short_script_min_words()
+    max_words = short_script_max_words(paragraph_number, voice_rate)
+    min_words = round(SHORT_MIN_SECONDS * WORDS_PER_MINUTE * voice_rate / 60)
     length_rule = f"O roteiro deve ter entre {min_words} e {max_words} palavras (narração de 60 a 90 segundos)."
     custom = (script_prompt or "").strip()
-    return f"{custom}\n{length_rule}".strip() if custom else length_rule
+    from gateway.editorial_quality import writing_brief
+    return "\n".join(part for part in (custom, length_rule, writing_brief("short")) if part)
 
 
 def trim_to_words(script: str, max_words: int) -> str:
@@ -1936,22 +2077,24 @@ class ShortScriptInput(BaseModel):
     subject: str = Field(min_length=1, max_length=500)
     language: str = Field(default="pt-BR", max_length=20)
     paragraph_number: int = Field(default=5, ge=1, le=10)
-    script_prompt: str = Field(default="", max_length=2000)
-    system_prompt: str = Field(default="", max_length=4000)
+    voice_rate: float = Field(default=1.0, ge=0.5, le=2.0)
+    script_prompt: str = Field(default="", max_length=4200)
+    system_prompt: str = Field(default="", max_length=12000)
 
 
 @app.post("/api/scripts/short")
 async def short_script(input: ShortScriptInput) -> dict[str, Any]:
-    max_words, min_words = short_script_max_words(input.paragraph_number), short_script_min_words()
+    max_words = short_script_max_words(input.paragraph_number, input.voice_rate)
+    min_words = round(SHORT_MIN_SECONDS * WORDS_PER_MINUTE * input.voice_rate / 60)
     # Turbo's writer only gets paragraph_number, so it often undershoots (e.g. 139 words ≈ 56 s
     # for a 60–90 s Short). State the word range explicitly in the prompt it already reads.
     response = await turbo_request("POST", "/api/v1/scripts", json={
         "video_subject": input.subject, "video_language": clean_language(input.language),
         "paragraph_number": input.paragraph_number,
-        "video_script_prompt": short_script_prompt(input.script_prompt, input.paragraph_number),
+        "video_script_prompt": short_script_prompt(input.script_prompt, input.paragraph_number, input.voice_rate),
         "custom_system_prompt": input.system_prompt,
     })
-    script = str((unwrap(response.json()) or {}).get("video_script", "")).strip()
+    script = clean_narration(str((unwrap(response.json()) or {}).get("video_script", "")))
     trimmed = trim_to_words(script, max_words)
     words = len(trimmed.split())
     return {"script": trimmed, "words": words, "trimmed": trimmed != script,
@@ -1962,13 +2105,17 @@ class LongScriptInput(BaseModel):
     subject: str = Field(min_length=1, max_length=500)
     language: str = Field(default="pt-BR", max_length=20)
     minutes: int = Field(default=8, ge=5, le=15)
+    voice_rate: float = Field(default=1.0, ge=0.5, le=2.0)
     niche: str = Field(default="", max_length=200)
-    requirements: str = Field(default="", max_length=2000)
-    system_prompt: str = Field(default="", max_length=4000)
+    requirements: str = Field(default="", max_length=4200)
+    system_prompt: str = Field(default="", max_length=12000)
 
 
 def clean_narration(text: str) -> str:
     """Kimi still slips in headings, bullets or bold now and then; the TTS would read the symbols aloud."""
+    text = re.sub(r"(?m)^\s*```[^\n]*$", "", text)
+    text = re.sub(r"\[([^\]]+)\]\(https?://[^)]+\)", r"\1", text)
+    text = re.sub(r"\[(?:pausa|pause|música|music|sfx|cena|scene)(?:\s*[:\-][^\]]*)?\]", "", text, flags=re.IGNORECASE)
     lines = (re.sub(r"^\s*(#+|[-*•]|\d+[.)])\s+", "", line).replace("**", "").strip() for line in text.splitlines())
     return "\n".join(line for line in lines if line)
 
@@ -1984,6 +2131,7 @@ def long_script_tokens(words: int, ceiling: int) -> int:
 
 async def long_script_events(input: LongScriptInput) -> AsyncIterator[tuple[str, dict[str, Any]]]:
     """Writes an editable long script and reports only safe UI progress events."""
+    from gateway.editorial_quality import writing_brief
     language = clean_language(input.language)
     requirements = input.requirements.strip()
     system_prompt = input.system_prompt.strip()
@@ -1992,7 +2140,8 @@ async def long_script_events(input: LongScriptInput) -> AsyncIterator[tuple[str,
     # stay narration-only, or the multi-step pipeline breaks. It's folded in as an extra, higher-weight
     # instruction on every call instead, same mechanism as `requirements` but framed as a standing rule.
     style = (f" Instruções de estilo do sistema, siga em tudo o que escrever: {system_prompt}." if system_prompt else "")
-    target_words = input.minutes * WORDS_PER_MINUTE
+    style += " " + writing_brief("long")
+    target_words = round(input.minutes * WORDS_PER_MINUTE * input.voice_rate)
 
     # The common 5-8 minute case used to incur an outline plus 4-5 serial
     # writes.  One bounded completion is both faster and coherent because the
@@ -2019,7 +2168,7 @@ async def long_script_events(input: LongScriptInput) -> AsyncIterator[tuple[str,
         result = {
             "title": str(generated.get("title") or input.subject), "script": trimmed_script,
             "trimmed": trimmed_script != script, "sections": ["Roteiro completo"],
-            "words": words, "estimated_minutes": round(words / WORDS_PER_MINUTE, 1),
+            "words": words, "estimated_minutes": round(words / (WORDS_PER_MINUTE * input.voice_rate), 1),
         }
         yield "progress", {"stage": "finalizing", "section": 1, "total": 1, "message": "Finalizando roteiro…"}
         yield "completed", result
@@ -2057,11 +2206,11 @@ async def long_script_events(input: LongScriptInput) -> AsyncIterator[tuple[str,
             fast_script=True,
         )))
     script = "\n\n".join(part for part in parts if part)
-    trimmed_script = trim_to_words(script, input.minutes * WORDS_PER_MINUTE)
+    trimmed_script = trim_to_words(script, target_words)
     words = len(trimmed_script.split())
     result = {
         "title": str(outline.get("title") or input.subject), "script": trimmed_script, "trimmed": trimmed_script != script,
-        "sections": [str(section["heading"]) for section in sections], "words": words, "estimated_minutes": round(words / WORDS_PER_MINUTE, 1),
+        "sections": [str(section["heading"]) for section in sections], "words": words, "estimated_minutes": round(words / (WORDS_PER_MINUTE * input.voice_rate), 1),
     }
     yield "progress", {"stage": "finalizing", "section": len(sections), "total": len(sections), "message": "Finalizando roteiro…"}
     yield "completed", result
@@ -2107,11 +2256,28 @@ def split_script(script: str, parts: int) -> list[str]:
     return [" ".join(words[i:i + chunk]) for i in range(0, len(words), chunk)]
 
 
-def narration_seconds(script: str, voice_rate: float = 1.0) -> float:
-    return len(script.split()) / (WORDS_PER_MINUTE / 60) / max(voice_rate, 0.1)
+def voice_words_per_minute(voice_name: str = "") -> int:
+    # The connected en-US Jenny voice produced 160 spoken words in 56.4 s on a real render.
+    return 170 if voice_name.casefold() == "en-us-jennyneural" else WORDS_PER_MINUTE
+
+
+def narration_seconds(script: str, voice_rate: float = 1.0, voice_name: str = "") -> float:
+    return len(script.split()) / (voice_words_per_minute(voice_name) / 60) / max(voice_rate, 0.1)
 
 
 MAX_VISUAL_TERMS = 80  # ponytail: cap on Pexels searches per video; raise alongside the API's hourly quota
+
+
+def visual_term_count(script: str, clip_seconds: float, voice_rate: float = 1.0) -> int:
+    if clip_seconds <= 0:
+        raise HTTPException(status_code=422, detail="A duração de cada clipe deve ser maior que zero.")
+    slots = max(1, math.ceil(narration_seconds(script, voice_rate) / clip_seconds))
+    if slots > MAX_VISUAL_TERMS:
+        raise HTTPException(status_code=422, detail=(
+            f"A duração escolhida exige {slots} buscas de filmagens, acima do limite de {MAX_VISUAL_TERMS}. "
+            "Aumente a duração de cada clipe ou reduza a duração do vídeo."
+        ))
+    return slots
 
 
 def _fill_visual_terms(terms: list[str], count: int) -> list[str]:
@@ -2136,26 +2302,24 @@ def _fill_visual_terms(terms: list[str], count: int) -> list[str]:
     return result[:count]
 
 
-async def visual_terms(subject: str, script: str, clip_seconds: float, voice_rate: float = 1.0) -> tuple[list[str], float]:
+async def visual_terms(subject: str, script: str, clip_seconds: float, voice_rate: float = 1.0, context: str = "") -> tuple[list[str], float]:
     """One stock-footage search term per script chunk, in narration order. Combined with Turbo's
     match_materials_to_script + sequential mode, this makes the footage follow what's being said
     instead of cycling a handful of subject-wide terms across the whole video."""
-    seconds = narration_seconds(script, voice_rate)
-    slots = max(1, -(-int(seconds) // max(int(clip_seconds), 1)))
-    count = min(slots, MAX_VISUAL_TERMS)
-    effective_clip_seconds = clip_seconds if slots <= MAX_VISUAL_TERMS else seconds / MAX_VISUAL_TERMS
+    slots = visual_term_count(script, clip_seconds, voice_rate)
+    count = slots
     chunks = split_script(script, count) or [subject]
     numbered = "\n".join(f"{index + 1}. {chunk}" for index, chunk in enumerate(chunks))
-    generated = parse_json_object(await llm_chat(
-        f"Tema do vídeo: {subject}\nTrechos numerados da narração, na ordem em que aparecem:\n{numbered}\n"
+    generated = await llm_json_object(
+        f"Tema do vídeo: {subject}\nContexto editorial: {context[:5000]}\nTrechos numerados da narração, na ordem em que aparecem:\n{numbered}\n"
         "Para cada trecho, gere uma busca de banco de vídeos em INGLÊS (1 a 3 palavras) que mostre algo filmável e "
         "concreto do que é dito naquele trecho: uma cena, objeto, ação ou lugar. Nada abstrato, sem nomes próprios, "
         "sem texto na tela. Os termos devem ser diferentes entre si - não repita o tema geral em todos.\n"
         f'Responda apenas JSON: {{"terms": lista com exatamente {len(chunks)} strings, na mesma ordem dos trechos}}',
-        json_mode=True,
-    ))
+        label="as palavras-chave das filmagens",
+    )
     raw_terms = [str(term).strip() for term in generated.get("terms") or [] if str(term).strip()]
-    return _fill_visual_terms(raw_terms, len(chunks)), effective_clip_seconds
+    return _fill_visual_terms(raw_terms, len(chunks)), clip_seconds
 
 
 class VisualTermsInput(BaseModel):
@@ -2177,6 +2341,7 @@ def approve_job(job_id: str) -> dict[str, Any]:
         job = job_row_or_404(db, job_id)
         if job["state"] != "completed":
             raise HTTPException(status_code=409, detail="Só vídeos concluídos podem ser aprovados")
+        require_quality_approval(db, job)
         if not db.execute("SELECT 1 FROM artifacts WHERE job_id=? AND kind='video'", (job_id,)).fetchone():
             raise HTTPException(status_code=409, detail="O vídeo final não foi encontrado")
         stored = db.execute("SELECT value_json FROM job_metadata WHERE job_id=?", (job_id,)).fetchone()
@@ -2184,6 +2349,14 @@ def approve_job(job_id: str) -> dict[str, Any]:
             raise HTTPException(status_code=409, detail="Defina título, descrição e tags válidos antes de aprovar")
         db.execute("UPDATE video_jobs SET state='approved', updated_at=? WHERE id=?", (now(), job_id))
         return row_as_job(job_row_or_404(db, job_id), db)
+
+
+def require_quality_approval(db: sqlite3.Connection, job: sqlite3.Row) -> None:
+    if not job["generation_item_id"]:
+        return
+    quality = db.execute("SELECT state FROM generation_quality WHERE item_id=? AND job_id=?", (job["generation_item_id"], job["id"])).fetchone()
+    if not quality or quality["state"] != "approved":
+        raise HTTPException(status_code=409, detail="A revisão final do vídeo ainda não aprovou este trabalho. Confira o relatório da geração.")
 
 
 # youtube.readonly is what lets the callback find out which channel was picked on Google's consent screen.
@@ -2218,8 +2391,8 @@ CHANNEL_PROFILE_FIELDS = (
 CHANNEL_PROFILE_COLORS = {"text_fore_color", "stroke_color"}
 CHANNEL_PROFILE_POSITIONS = {"bottom", "center", "top"}
 CHANNEL_VIDEO_PROFILE_FIELDS = {
-    "short": ("paragraph_number", "video_clip_duration", "video_count", "video_concat_mode", "video_transition_mode", "video_clip_speed", "bgm_type", "bgm_volume"),
-    "long": ("target_minutes", "video_clip_duration", "video_concat_mode", "video_transition_mode", "video_clip_speed", "bgm_type", "bgm_volume"),
+    "short": (*CHANNEL_PROFILE_FIELDS, "paragraph_number", "video_clip_duration", "video_count", "video_concat_mode", "video_transition_mode", "video_clip_speed", "bgm_type", "bgm_volume"),
+    "long": (*CHANNEL_PROFILE_FIELDS, "target_minutes", "video_clip_duration", "video_concat_mode", "video_transition_mode", "video_clip_speed", "bgm_type", "bgm_volume"),
 }
 VIDEO_TRANSITIONS = {"", "Shuffle", "FadeIn", "FadeOut", "SlideIn", "SlideOut", "ZoomIn", "ZoomOut"}
 VIDEO_CONCAT_MODES = {"script", "random"}
@@ -2240,8 +2413,17 @@ def default_voice_for_language(language: str) -> str:
 
 
 def video_profile_from_settings(format: Literal["long", "short"], settings: dict[str, Any]) -> dict[str, Any]:
-    """Keep only user-facing render controls that are safe to make channel-specific."""
+    """Keep the channel's format-specific voice, caption and render controls."""
     common = {
+        "voice_name": settings.get("voice_name", "pt-BR-FranciscaNeural"),
+        "voice_rate": settings.get("voice_rate", 1.0),
+        "voice_volume": settings.get("voice_volume", 1.0),
+        "subtitle_enabled": settings.get("subtitle_enabled", True),
+        "subtitle_position": settings.get("subtitle_position", "bottom"),
+        "font_size": settings.get("font_size", 56),
+        "text_fore_color": settings.get("text_fore_color", "#FFFFFF"),
+        "stroke_color": settings.get("stroke_color", "#000000"),
+        "stroke_width": settings.get("stroke_width", 1.5),
         "video_clip_duration": settings.get("video_clip_duration", 6 if format == "long" else 4),
         "video_concat_mode": settings.get("video_concat_mode", "script"),
         "video_transition_mode": settings.get("video_transition_mode", ""),
@@ -2254,17 +2436,27 @@ def video_profile_from_settings(format: Literal["long", "short"], settings: dict
     return {"target_minutes": settings.get("target_minutes", 8), **common}
 
 
-def default_channel_video_defaults() -> dict[str, dict[str, Any]]:
-    return {format: video_profile_from_settings(format, generation_defaults(format)) for format in ("short", "long")}
+def default_channel_video_defaults(language: str = "pt-BR") -> dict[str, dict[str, Any]]:
+    profiles = {format: video_profile_from_settings(format, generation_defaults(format)) for format in ("short", "long")}
+    for profile in profiles.values():
+        profile["voice_name"] = default_voice_for_language(language)
+    return profiles
 
 
-def normalize_channel_video_defaults(values: Any, *, fallback: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
-    """Validate the render controls stored on a channel, merging PATCH values by format."""
+def channel_video_profile_fallback(profile: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Copy the legacy shared channel profile to both formats for older API clients."""
+    defaults = default_channel_video_defaults(str(profile.get("language") or "pt-BR"))
+    media = {field: profile[field] for field in CHANNEL_PROFILE_FIELDS if field in profile}
+    return {format: {**defaults[format], **media} for format in ("short", "long")}
+
+
+def normalize_channel_video_defaults(values: Any, *, fallback: dict[str, Any] | None = None, language: str = "pt-BR") -> dict[str, dict[str, Any]]:
+    """Validate voice, captions and render settings stored independently per format."""
     if values is None:
         values = {}
     if not isinstance(values, dict):
         raise HTTPException(status_code=422, detail="Os parâmetros de vídeo do canal devem ser um objeto.")
-    base = fallback if fallback is not None else default_channel_video_defaults()
+    base = fallback if fallback is not None else default_channel_video_defaults(language)
     result: dict[str, dict[str, Any]] = {}
     for format in ("short", "long"):
         raw = values.get(format, {})
@@ -2276,6 +2468,8 @@ def normalize_channel_video_defaults(values: Any, *, fallback: dict[str, Any] | 
             raise HTTPException(status_code=422, detail=f"Parâmetro de vídeo não suportado: {sorted(unknown)[0]}.")
         current = dict(base.get(format, {}))
         current.update(raw)
+        media = normalize_channel_profile({"language": language, **current})
+        media.pop("language")  # language remains channel-wide; only voice and captions vary by format.
         try:
             clip_duration = int(current["video_clip_duration"])
             clip_speed = float(current["video_clip_speed"])
@@ -2312,7 +2506,7 @@ def normalize_channel_video_defaults(values: Any, *, fallback: dict[str, Any] | 
                 raise HTTPException(status_code=422, detail="Duração ou quantidade de vídeos do Short inválida.") from None
             if paragraph_number not in {4, 5, 6} or not 1 <= video_count <= 5:
                 raise HTTPException(status_code=422, detail="Shorts aceitam duração de 60, 75 ou 90 segundos e de 1 a 5 vídeos.")
-            result[format] = {"paragraph_number": paragraph_number, "video_count": video_count, **profile}
+            result[format] = {**media, "paragraph_number": paragraph_number, "video_count": video_count, **profile}
         else:
             try:
                 target_minutes = int(current["target_minutes"])
@@ -2320,7 +2514,7 @@ def normalize_channel_video_defaults(values: Any, *, fallback: dict[str, Any] | 
                 raise HTTPException(status_code=422, detail="Duração do vídeo longo inválida.") from None
             if target_minutes not in {5, 8, 10, 15}:
                 raise HTTPException(status_code=422, detail="Vídeos longos aceitam 5, 8, 10 ou 15 minutos.")
-            result[format] = {"target_minutes": target_minutes, **profile}
+            result[format] = {**media, "target_minutes": target_minutes, **profile}
     return result
 
 
@@ -2330,7 +2524,9 @@ def channel_video_defaults(channel: sqlite3.Row | dict[str, Any]) -> dict[str, d
         values = json.loads(raw) if isinstance(raw, str) else raw
     except json.JSONDecodeError:
         values = {}
-    return normalize_channel_video_defaults(values)
+    legacy = normalize_channel_profile(dict(channel))
+    fallback = channel_video_profile_fallback(legacy)
+    return normalize_channel_video_defaults(values, fallback=fallback, language=legacy["language"])
 
 
 def normalize_channel_profile(values: dict[str, Any], *, require_all: bool = True) -> dict[str, Any]:
@@ -2370,7 +2566,9 @@ def normalize_channel_profile(values: dict[str, Any], *, require_all: bool = Tru
 
 
 def channel_generation_settings(channel: sqlite3.Row | dict[str, Any], format: Literal["long", "short"]) -> dict[str, Any]:
-    profile = normalize_channel_profile(dict(channel))
+    values = dict(channel)
+    values.update(channel_video_defaults(channel)[format])
+    profile = normalize_channel_profile(values)
     return {"video_language": profile.pop("language"), **profile, **channel_video_defaults(channel)[format]}
 
 
@@ -2399,10 +2597,23 @@ def job_language(db: sqlite3.Connection, job: sqlite3.Row) -> str:
 
 
 def row_as_channel(row: sqlite3.Row) -> dict[str, Any]:
-    result = {key: row[key] for key in ("id", "platform", "name", "handle", "external_id", "status", "niche", "language", "system_prompt", *CHANNEL_PROFILE_FIELDS, "created_at", "updated_at")}
+    result = {key: row[key] for key in ("id", "platform", "name", "handle", "external_id", "status", "niche", "language", "system_prompt", "publish_privacy", *CHANNEL_PROFILE_FIELDS, "created_at", "updated_at")}
     result["subtitle_enabled"] = bool(result["subtitle_enabled"])
     result["video_defaults"] = channel_video_defaults(row)
+    result["visual_guides"] = json.loads(row["visual_guides_json"] or "{}")
     result["stats"] = json.loads(row["stats_json"])
+    return result
+
+
+def normalize_visual_guides(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict) or set(value) - {"short", "long"}:
+        raise HTTPException(status_code=422, detail="Envie apenas os guias visuais short e long.")
+    result = {}
+    for format in ("short", "long"):
+        guide = value.get(format, "")
+        if not isinstance(guide, str) or len(guide) > 2000:
+            raise HTTPException(status_code=422, detail="Cada guia visual deve ter até 2.000 caracteres.")
+        result[format] = guide.strip()
     return result
 
 
@@ -2443,6 +2654,7 @@ class ChannelPatch(BaseModel):
     niche: str | None = Field(default=None, max_length=200)
     language: str | None = Field(default=None, max_length=20)
     system_prompt: str | None = Field(default=None, max_length=4000)
+    publish_privacy: Literal["private", "public"] | None = None
     voice_name: str | None = Field(default=None, max_length=120)
     voice_rate: float | None = Field(default=None)
     voice_volume: float | None = Field(default=None)
@@ -2453,12 +2665,14 @@ class ChannelPatch(BaseModel):
     stroke_color: str | None = Field(default=None, max_length=7)
     stroke_width: float | None = Field(default=None)
     video_defaults: dict[str, Any] | None = None
+    visual_guides: dict[str, str] | None = None
 
 
 class ChannelConnect(BaseModel):
     niche: str = Field(default="", max_length=200)
     language: str = Field(default="pt-BR", max_length=20)
     system_prompt: str = Field(default="", max_length=4000)
+    publish_privacy: Literal["private", "public"] = "private"
     voice_name: str = Field(default="pt-BR-FranciscaNeural", max_length=120)
     voice_rate: float = 1.0
     voice_volume: float = 1.0
@@ -2469,6 +2683,7 @@ class ChannelConnect(BaseModel):
     stroke_color: str = "#000000"
     stroke_width: float = 1.5
     video_defaults: dict[str, Any] = Field(default_factory=dict)
+    visual_guides: dict[str, str] = Field(default_factory=dict)
 
 
 @app.patch("/api/channels/{channel_id}")
@@ -2476,6 +2691,8 @@ def patch_channel(channel_id: str, input: ChannelPatch) -> dict[str, Any]:
     with database() as db:
         channel = channel_row_or_404(db, channel_id)
     fields = input.model_dump(exclude_none=True)
+    if "visual_guides" in fields:
+        fields["visual_guides_json"] = json.dumps(normalize_visual_guides(fields.pop("visual_guides")), ensure_ascii=False)
     profile_changed = set(fields).intersection({"language", *CHANNEL_PROFILE_FIELDS})
     if profile_changed:
         combined = dict(channel)
@@ -2485,9 +2702,21 @@ def patch_channel(channel_id: str, input: ChannelPatch) -> dict[str, Any]:
         if "language" in fields and "voice_name" not in fields:
             combined["voice_name"] = default_voice_for_language(str(fields["language"]))
         fields.update(normalize_channel_profile(combined))
-    if "video_defaults" in fields:
+    raw_video_defaults = fields.pop("video_defaults", None)
+    language = str(fields.get("language", channel["language"]))
+    if profile_changed or raw_video_defaults is not None:
+        fallback = channel_video_defaults(channel)
+        if raw_video_defaults is None:
+            raw_video_defaults = {"short": {}, "long": {}}
+        if profile_changed:
+            # Keep legacy API updates functional by applying shared fields to both formats.
+            for format in ("short", "long"):
+                for key in profile_changed.intersection(CHANNEL_PROFILE_FIELDS):
+                    fallback[format][key] = fields[key]
+                if "language" in profile_changed and "voice_name" not in profile_changed:
+                    fallback[format]["voice_name"] = default_voice_for_language(language)
         fields["video_defaults_json"] = json.dumps(
-            normalize_channel_video_defaults(fields.pop("video_defaults"), fallback=channel_video_defaults(channel))
+            normalize_channel_video_defaults(raw_video_defaults, fallback=fallback, language=language)
         )
     if "system_prompt" in fields:
         fields["system_prompt"] = fields["system_prompt"].strip()
@@ -2517,7 +2746,7 @@ def youtube_connect(
     voice_name: str = "pt-BR-FranciscaNeural", voice_rate: float = 1.0, voice_volume: float = 1.0,
     subtitle_enabled: bool = True, subtitle_position: str = "bottom", font_size: int = 56,
     text_fore_color: str = "#FFFFFF", stroke_color: str = "#000000", stroke_width: float = 1.5,
-    video_defaults: str = "",
+    publish_privacy: Literal["private", "public"] = "private", video_defaults: str = "", visual_guides: str = "",
 ) -> Any:
     from google_auth_oauthlib.flow import Flow
 
@@ -2535,12 +2764,16 @@ def youtube_connect(
         raw_video_defaults = json.loads(video_defaults) if video_defaults else {}
     except json.JSONDecodeError:
         raise HTTPException(status_code=422, detail="Os parâmetros de vídeo do canal são inválidos.") from None
-    video_profile = normalize_channel_video_defaults(raw_video_defaults)
+    video_profile = normalize_channel_video_defaults(raw_video_defaults, fallback=channel_video_profile_fallback(profile), language=profile["language"])
+    try:
+        guides = normalize_visual_guides(json.loads(visual_guides) if visual_guides else {})
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=422, detail="Os guias visuais do canal são inválidos.") from None
     flow = Flow.from_client_secrets_file(str(youtube_client_file()), scopes=YOUTUBE_SCOPES, redirect_uri=str(request.url_for("youtube_auth_callback")))
     url, state = flow.authorization_url(access_type="offline", prompt="consent")
     oauth_flows[state] = (
         flow,
-        {"niche": niche[:200], "system_prompt": system_prompt.strip()[:4000], "video_defaults": video_profile, **profile},
+        {"niche": niche[:200], "system_prompt": system_prompt.strip()[:4000], "publish_privacy": publish_privacy, "video_defaults": video_profile, "visual_guides": guides, **profile},
         session["token_hash"],
     )
     return RedirectResponse(url)
@@ -2572,11 +2805,11 @@ def save_youtube_channel(info: dict[str, Any], options: dict[str, Any]) -> str:
             )
             return existing["id"]
         profile = normalize_channel_profile(options)
-        video_defaults = normalize_channel_video_defaults(options.get("video_defaults", {}))
+        video_defaults = normalize_channel_video_defaults(options.get("video_defaults", {}), fallback=channel_video_profile_fallback(profile), language=profile["language"])
         channel_id = str(uuid4())
         db.execute(
-            "INSERT INTO channels(id, platform, name, handle, external_id, status, niche, language, system_prompt, voice_name, voice_rate, voice_volume, subtitle_enabled, subtitle_position, font_size, text_fore_color, stroke_color, stroke_width, video_defaults_json, stats_json, created_at, updated_at) VALUES (?, 'youtube', ?, ?, ?, 'connected', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (channel_id, info["name"], info["handle"], info["external_id"], options.get("niche", ""), profile["language"], options.get("system_prompt", ""), profile["voice_name"], profile["voice_rate"], profile["voice_volume"], int(profile["subtitle_enabled"]), profile["subtitle_position"], profile["font_size"], profile["text_fore_color"], profile["stroke_color"], profile["stroke_width"], json.dumps(video_defaults), json.dumps(info["stats"]), now(), now()),
+            "INSERT INTO channels(id, platform, name, handle, external_id, status, niche, language, system_prompt, publish_privacy, voice_name, voice_rate, voice_volume, subtitle_enabled, subtitle_position, font_size, text_fore_color, stroke_color, stroke_width, video_defaults_json, visual_guides_json, stats_json, created_at, updated_at) VALUES (?, 'youtube', ?, ?, ?, 'connected', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (channel_id, info["name"], info["handle"], info["external_id"], options.get("niche", ""), profile["language"], options.get("system_prompt", ""), options.get("publish_privacy", "private"), profile["voice_name"], profile["voice_rate"], profile["voice_volume"], int(profile["subtitle_enabled"]), profile["subtitle_position"], profile["font_size"], profile["text_fore_color"], profile["stroke_color"], profile["stroke_width"], json.dumps(video_defaults), json.dumps(normalize_visual_guides(options.get("visual_guides", {}))), json.dumps(info["stats"]), now(), now()),
         )
         return channel_id
 
@@ -2633,16 +2866,17 @@ async def tiktok_connect(input: ChannelConnect) -> dict[str, Any]:
     """TikTok goes through one Upload-Post profile per Cockpit channel; the user links the
     TikTok account on Upload-Post's own page (their TikTok app is audited, ours would need
     a TikTok review plus an HTTPS redirect). The channel stays "pending" until /refresh sees it."""
+    visual_guides = normalize_visual_guides(input.visual_guides)
     username = f"mp-{uuid4().hex[:16]}"
     await upload_post_request("POST", "/api/uploadposts/users", json={"username": username})
     access_url = await upload_post_connect_link(username)
     channel_id = str(uuid4())
     profile = normalize_channel_profile(input.model_dump())
-    video_defaults = normalize_channel_video_defaults(input.video_defaults)
+    video_defaults = normalize_channel_video_defaults(input.video_defaults, fallback=channel_video_profile_fallback(profile), language=profile["language"])
     with database() as db:
         db.execute(
-            "INSERT INTO channels(id, platform, name, handle, external_id, status, niche, language, system_prompt, voice_name, voice_rate, voice_volume, subtitle_enabled, subtitle_position, font_size, text_fore_color, stroke_color, stroke_width, video_defaults_json, created_at, updated_at) VALUES (?, 'tiktok', 'TikTok (aguardando login)', '', ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (channel_id, username, input.niche.strip(), profile["language"], input.system_prompt.strip(), profile["voice_name"], profile["voice_rate"], profile["voice_volume"], int(profile["subtitle_enabled"]), profile["subtitle_position"], profile["font_size"], profile["text_fore_color"], profile["stroke_color"], profile["stroke_width"], json.dumps(video_defaults), now(), now()),
+            "INSERT INTO channels(id, platform, name, handle, external_id, status, niche, language, system_prompt, publish_privacy, voice_name, voice_rate, voice_volume, subtitle_enabled, subtitle_position, font_size, text_fore_color, stroke_color, stroke_width, video_defaults_json, visual_guides_json, created_at, updated_at) VALUES (?, 'tiktok', 'TikTok (aguardando login)', '', ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (channel_id, username, input.niche.strip(), profile["language"], input.system_prompt.strip(), input.publish_privacy, profile["voice_name"], profile["voice_rate"], profile["voice_volume"], int(profile["subtitle_enabled"]), profile["subtitle_position"], profile["font_size"], profile["text_fore_color"], profile["stroke_color"], profile["stroke_width"], json.dumps(video_defaults), json.dumps(visual_guides), now(), now()),
         )
         channel = row_as_channel(channel_row_or_404(db, channel_id))
     return {"channel": channel, "access_url": access_url}
@@ -2697,7 +2931,7 @@ def youtube_description(metadata: dict[str, Any]) -> str:
     return description[:5000]
 
 
-def youtube_upload(credentials: Any, video_path: Path, metadata: dict[str, Any]) -> str:
+def youtube_upload(credentials: Any, video_path: Path, metadata: dict[str, Any], publish_at: datetime | None = None, publish_privacy: str = "private") -> str:
     from googleapiclient.discovery import build
     from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaFileUpload
@@ -2709,8 +2943,10 @@ def youtube_upload(credentials: Any, video_path: Path, metadata: dict[str, Any])
             "title": metadata["title"], "description": youtube_description(metadata), "tags": metadata["tags"],
             "categoryId": metadata["category_id"], "defaultLanguage": language, "defaultAudioLanguage": language,
         },
-        "status": {"privacyStatus": "private", "selfDeclaredMadeForKids": False, "containsSyntheticMedia": True},
+        "status": {"privacyStatus": "private" if publish_at else publish_privacy, "selfDeclaredMadeForKids": False, "containsSyntheticMedia": True},
     }
+    if publish_at:
+        body["status"]["publishAt"] = as_utc(publish_at).isoformat().replace("+00:00", "Z")
     youtube = build("youtube", "v3", credentials=credentials, cache_discovery=False)
     media = MediaFileUpload(str(video_path), mimetype="video/mp4", chunksize=8 * 1024 * 1024, resumable=True)
     upload = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
@@ -2735,12 +2971,13 @@ async def download_turbo_file(remote_path: str, target: Path) -> None:
                     file.write(chunk)
 
 
-async def tiktok_upload(username: str, video_path: Path, metadata: dict[str, Any]) -> tuple[str, str]:
+async def tiktok_upload(username: str, video_path: Path, metadata: dict[str, Any], publish_privacy: str = "private") -> tuple[str, str]:
     """Returns (external_id, state): Upload-Post normally answers async with a request_id
     ("processing", reconciled later); a synchronous answer is already the final post."""
     hashtags = " ".join("#" + re.sub(r"\s+", "", tag) for tag in metadata["tags"])
     caption = "\n\n".join(part for part in (metadata["title"], metadata["description"], hashtags) if part)[:2200]
-    form = {"user": username, "platform[]": "tiktok", "title": caption, "privacy_level": "SELF_ONLY", "is_aigc": "true", "async_upload": "true"}
+    privacy_level = "PUBLIC_TO_EVERYONE" if publish_privacy == "public" else "SELF_ONLY"
+    form = {"user": username, "platform[]": "tiktok", "title": caption, "privacy_level": privacy_level, "is_aigc": "true", "async_upload": "true"}
     # ponytail: whole file in memory (Shorts are tens of MB); stream it if long videos start pushing gateway RAM.
     files = {"video": ("video.mp4", video_path.read_bytes(), "video/mp4")}
     async with httpx.AsyncClient(timeout=httpx.Timeout(30, read=300)) as client:
@@ -2793,7 +3030,7 @@ class PublishInput(BaseModel):
     publish_at: datetime | None = None  # future: validate now, upload when the agent loop reaches it
 
 
-async def publish_to_channel(job_id: str, channel: sqlite3.Row, video: Any, metadata: dict[str, Any], confirm_not_uploaded: bool) -> None:
+async def publish_to_channel(job_id: str, channel: sqlite3.Row, video: Any, metadata: dict[str, Any], confirm_not_uploaded: bool, auto_publish_at: datetime | None = None) -> None:
     """`video` is an async callable returning the local MP4, so the download happens only after a claim succeeds."""
     platform, label = channel["platform"], PLATFORM_LABELS[channel["platform"]]
     # A "reconciliation_required" upload may already be live; only the operator can say it isn't.
@@ -2801,10 +3038,11 @@ async def publish_to_channel(job_id: str, channel: sqlite3.Row, video: Any, meta
     with database() as db:
         # Atomic claim, so a double click or a second tab can't start a parallel upload.
         claimed = db.execute(
-            "INSERT INTO publications(id, job_id, platform, channel_id, state, attempts, created_at, updated_at) VALUES (?, ?, ?, ?, 'uploading', 1, ?, ?) "
-            "ON CONFLICT(job_id, platform) DO UPDATE SET channel_id=excluded.channel_id, state='uploading', attempts=publications.attempts+1, error=NULL, updated_at=excluded.updated_at "
+            "INSERT INTO publications(id, job_id, platform, channel_id, state, attempts, auto_publish, created_at, updated_at) VALUES (?, ?, ?, ?, 'uploading', 1, ?, ?, ?) "
+            "ON CONFLICT(job_id, platform) DO UPDATE SET channel_id=excluded.channel_id, state='uploading', attempts=publications.attempts+1, "
+            "auto_publish=excluded.auto_publish, scheduled_at=CASE WHEN excluded.auto_publish=0 THEN NULL ELSE publications.scheduled_at END, error=NULL, updated_at=excluded.updated_at "
             f"WHERE publications.state NOT IN ({','.join('?' * len(blocked))})",
-            (str(uuid4()), job_id, platform, channel["id"], now(), now(), *blocked),
+            (str(uuid4()), job_id, platform, channel["id"], int(auto_publish_at is not None), now(), now(), *blocked),
         ).rowcount
     if not claimed:
         raise HTTPException(status_code=409, detail=f"{channel['name']}: já está sendo enviado, já foi publicado ou tem resultado incerto. Confira no {label} antes de reenviar.")
@@ -2819,6 +3057,16 @@ async def publish_to_channel(job_id: str, channel: sqlite3.Row, video: Any, meta
     try:
         video_path = await video()
         credentials = await asyncio.to_thread(youtube_credentials, channel["id"]) if platform == "youtube" else None
+        if auto_publish_at:
+            with database() as db:
+                db.execute("BEGIN IMMEDIATE")
+                current = db.execute("SELECT * FROM operators WHERE channel_id=?", (channel["id"],)).fetchone()
+                if not current or not current["enabled"] or not current["auto_publish"] or current["paused_reason"]:
+                    raise HTTPException(status_code=409, detail="A publicação automática foi desativada ou pausada.")
+                if auto_publish_at <= datetime.now(UTC) + timedelta(minutes=5):
+                    auto_publish_at = next_publish_slot(current, db)
+                    db.execute("UPDATE publications SET scheduled_at=?, updated_at=? WHERE job_id=? AND channel_id=? AND state='uploading'",
+                               (auto_publish_at.isoformat(), now(), job_id, channel["id"]))
     except BaseException as exc:  # nothing has reached the platform yet, so a plain retry stays safe
         message = str(getattr(exc, "detail", exc))[:500] or "Envio cancelado"
         finish("failed", error=message)
@@ -2828,9 +3076,9 @@ async def publish_to_channel(job_id: str, channel: sqlite3.Row, video: Any, meta
     try:
         # ponytail: uploads run inside the request, one channel after another; move to a background task if long videos hit browser/proxy timeouts.
         if platform == "youtube":
-            external_id, state = await asyncio.to_thread(youtube_upload, credentials, video_path, metadata), "published"
+            external_id, state = await asyncio.to_thread(youtube_upload, credentials, video_path, metadata, auto_publish_at, "private" if auto_publish_at else channel["publish_privacy"]), "platform_scheduled" if auto_publish_at else "published"
         else:
-            external_id, state = await tiktok_upload(channel["external_id"], video_path, metadata)
+            external_id, state = await tiktok_upload(channel["external_id"], video_path, metadata, channel["publish_privacy"])
     except PublishRejected as exc:
         finish("failed", error=str(exc)[:500])
         raise HTTPException(status_code=502, detail=f"{channel['name']}: a plataforma recusou o envio: {exc}") from exc
@@ -2851,6 +3099,7 @@ async def publish_job(job_id: str, input: PublishInput | None = None) -> dict[st
         job = job_row_or_404(db, job_id)
         if job["state"] != "approved":
             raise HTTPException(status_code=409, detail="Aprove o vídeo antes de publicar.")
+        require_quality_approval(db, job)
         artifact = db.execute("SELECT * FROM artifacts WHERE job_id=? AND kind='video' ORDER BY created_at LIMIT 1", (job_id,)).fetchone()
         stored = db.execute("SELECT value_json FROM job_metadata WHERE job_id=?", (job_id,)).fetchone()
         if not artifact or not stored:
@@ -3166,9 +3415,9 @@ async def refresh_analytics() -> dict[str, Any]:
 def list_schedule() -> list[dict[str, Any]]:
     with database() as db:
         return [dict(row) for row in db.execute(
-            "SELECT p.job_id, p.channel_id, p.platform, p.scheduled_at, jobs.subject, channels.name AS channel_name, json_extract(meta.value_json, '$.title') AS title "
+            "SELECT p.job_id, p.channel_id, p.platform, p.state, p.auto_publish, p.external_id, p.scheduled_at, jobs.subject, channels.name AS channel_name, json_extract(meta.value_json, '$.title') AS title "
             "FROM publications AS p JOIN video_jobs AS jobs ON jobs.id = p.job_id LEFT JOIN channels ON channels.id = p.channel_id "
-            "LEFT JOIN job_metadata AS meta ON meta.job_id = jobs.id WHERE p.state='scheduled' AND jobs.deleted_at IS NULL ORDER BY p.scheduled_at"
+            "LEFT JOIN job_metadata AS meta ON meta.job_id = jobs.id WHERE p.state IN ('scheduled','auto_reserved','platform_scheduled') AND jobs.deleted_at IS NULL ORDER BY p.scheduled_at"
         )]
 
 
@@ -3185,6 +3434,39 @@ class OperatorInput(BaseModel):
     format: Literal["long", "short"] = "short"
     cadence_hours: Literal[12, 24, 48, 168] = 24
     next_run_at: datetime | None = None
+    auto_publish: bool = False
+    publish_days: list[int] = Field(default_factory=lambda: list(range(7)), min_length=1, max_length=7)
+    publish_time: str = "12:00"
+    publish_timezone: str = "America/Sao_Paulo"
+
+
+def next_publish_slot(operator: sqlite3.Row, db: sqlite3.Connection, reference: datetime | None = None) -> datetime:
+    zone = ZoneInfo(operator["publish_timezone"])
+    hour, minute = map(int, operator["publish_time"].split(":"))
+    days = set(json.loads(operator["publish_days_json"]))
+    start = as_utc(reference or datetime.now(UTC)) + timedelta(hours=1)
+    local_day = start.astimezone(zone).date()
+    for offset in range(60):
+        date = local_day + timedelta(days=offset)
+        if date.weekday() not in days:
+            continue
+        local = datetime(date.year, date.month, date.day, hour, minute, tzinfo=zone)
+        slot = local.astimezone(UTC)
+        if slot <= start or slot.astimezone(zone).replace(tzinfo=None) != local.replace(tzinfo=None):
+            continue
+        occupied = db.execute(
+            "SELECT 1 FROM publications WHERE channel_id=? AND scheduled_at=? AND state IN ('scheduled', 'auto_reserved', 'uploading', 'platform_scheduled', 'published')",
+            (operator["channel_id"], slot.isoformat()),
+        ).fetchone()
+        if not occupied:
+            return slot
+    raise HTTPException(status_code=409, detail="Não há janela livre nos próximos 60 dias.")
+
+
+def pause_operator(channel_id: str, reason: str, job_id: str | None = None) -> None:
+    with database() as db:
+        db.execute("UPDATE operators SET paused_reason=?, updated_at=? WHERE channel_id=?", (reason[:500], now(), channel_id))
+    notify(f"operator-paused:{channel_id}:{job_id or reason}", "operator_paused", "Automação pausada", reason, job_id)
 
 
 @app.get("/api/agents/operators")
@@ -3193,17 +3475,38 @@ def list_operators() -> dict[str, Any]:
         operators = [
             {"channel_id": row["id"], "channel_name": row["name"], "platform": row["platform"], "enabled": bool(row["enabled"]),
              "format": row["format"] or "short", "cadence_hours": row["cadence_hours"] or 24,
-             "next_run_at": row["next_run_at"], "last_run_at": row["last_run_at"], "last_error": row["last_error"]}
+             "next_run_at": row["next_run_at"], "last_run_at": row["last_run_at"], "last_error": row["last_error"],
+             "auto_publish": bool(row["auto_publish"]), "publish_days": json.loads(row["publish_days_json"] or "[0,1,2,3,4,5,6]"),
+             "publish_time": row["publish_time"], "publish_timezone": row["publish_timezone"], "paused_reason": row["paused_reason"],
+             "last_run": dict(db.execute("SELECT id, state, job_id, batch_id, error, started_at FROM operator_runs WHERE channel_id=? ORDER BY started_at DESC LIMIT 1", (row["id"],)).fetchone() or {}),
+             "next_publication": dict(db.execute(
+                 "SELECT p.job_id, p.state, p.scheduled_at, p.external_id, j.subject FROM publications p JOIN video_jobs j ON j.id=p.job_id "
+                 "WHERE p.channel_id=? AND p.auto_publish=1 AND p.state IN ('auto_reserved','uploading','platform_scheduled') "
+                 "ORDER BY p.scheduled_at LIMIT 1", (row["id"],)
+             ).fetchone() or {})}
             for row in db.execute(
                 "SELECT channels.id, channels.name, channels.platform, operators.enabled, operators.format, operators.cadence_hours, "
-                "operators.next_run_at, operators.last_run_at, operators.last_error FROM channels LEFT JOIN operators ON operators.channel_id = channels.id "
+                "operators.next_run_at, operators.last_run_at, operators.last_error, operators.auto_publish, operators.publish_days_json, operators.publish_time, operators.publish_timezone, operators.paused_reason FROM channels LEFT JOIN operators ON operators.channel_id = channels.id "
                 "WHERE channels.status='connected' AND channels.deleted_at IS NULL ORDER BY channels.created_at"
             )
         ]
+        operator_jobs = (
+            "FROM video_jobs AS jobs JOIN publications AS p ON p.job_id = jobs.id "
+            "LEFT JOIN channels ON channels.id = p.channel_id "
+            "WHERE jobs.created_by='operator' AND jobs.deleted_at IS NULL"
+        )
         awaiting = [dict(row) for row in db.execute(
-            "SELECT id, subject, format, completed_at FROM video_jobs WHERE created_by='operator' AND state='completed' AND deleted_at IS NULL ORDER BY completed_at DESC"
+            "SELECT jobs.id, jobs.subject, jobs.format, jobs.completed_at, channels.name AS channel_name "
+            f"{operator_jobs} AND jobs.state='completed' AND (jobs.generation_item_id IS NULL OR EXISTS ("
+            "SELECT 1 FROM generation_quality q WHERE q.item_id=jobs.generation_item_id AND q.state='approved')) "
+            "ORDER BY jobs.completed_at DESC LIMIT 50"
         )]
-    return {"operators": operators, "awaiting_approval": awaiting}
+        in_progress = [dict(row) for row in db.execute(
+            "SELECT jobs.id, jobs.subject, jobs.format, jobs.state, jobs.error, jobs.created_at, channels.name AS channel_name "
+            f"{operator_jobs} AND jobs.state IN ('queued', 'running', 'failed', 'interrupted') "
+            "ORDER BY jobs.created_at DESC LIMIT 50"
+        )]
+    return {"operators": operators, "awaiting_approval": awaiting, "in_progress": in_progress}
 
 
 @app.put("/api/agents/operators/{channel_id}")
@@ -3214,55 +3517,217 @@ def put_operator(channel_id: str, input: OperatorInput) -> dict[str, Any]:
             raise HTTPException(status_code=409, detail="O canal não está conectado. Reconecte em Canais.")
         if channel["platform"] != "youtube" and input.format == "long":
             raise HTTPException(status_code=409, detail="TikTok recebe apenas Shorts.")
+        if input.auto_publish and channel["platform"] != "youtube":
+            raise HTTPException(status_code=422, detail="Publicação automática está disponível apenas no YouTube.")
+        if len(set(input.publish_days)) != len(input.publish_days) or any(day not in range(7) for day in input.publish_days):
+            raise HTTPException(status_code=422, detail="Dias da grade inválidos.")
+        if not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", input.publish_time):
+            raise HTTPException(status_code=422, detail="Horário da grade inválido.")
+        try:
+            ZoneInfo(input.publish_timezone)
+        except ZoneInfoNotFoundError:
+            raise HTTPException(status_code=422, detail="Fuso horário inválido.") from None
         next_run = as_utc(input.next_run_at) if input.next_run_at else datetime.now(UTC) + timedelta(hours=input.cadence_hours)
         db.execute(
-            "INSERT INTO operators(channel_id, enabled, format, cadence_hours, next_run_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(channel_id) DO UPDATE SET enabled=excluded.enabled, format=excluded.format, cadence_hours=excluded.cadence_hours, next_run_at=excluded.next_run_at, updated_at=excluded.updated_at",
-            (channel_id, int(input.enabled), input.format, input.cadence_hours, next_run.isoformat(), now()),
+            "INSERT INTO operators(channel_id, enabled, format, cadence_hours, next_run_at, auto_publish, publish_days_json, publish_time, publish_timezone, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(channel_id) DO UPDATE SET enabled=excluded.enabled, format=excluded.format, cadence_hours=excluded.cadence_hours, next_run_at=excluded.next_run_at, auto_publish=excluded.auto_publish, publish_days_json=excluded.publish_days_json, publish_time=excluded.publish_time, publish_timezone=excluded.publish_timezone, paused_reason=NULL, updated_at=excluded.updated_at",
+            (channel_id, int(input.enabled), input.format, input.cadence_hours, next_run.isoformat(), int(input.auto_publish), json.dumps(input.publish_days), input.publish_time, input.publish_timezone, now()),
         )
     return next(operator for operator in list_operators()["operators"] if operator["channel_id"] == channel_id)
 
 
 @app.post("/api/agents/operators/{channel_id}/run")
-async def run_operator(channel_id: str) -> dict[str, Any]:
-    """Starts one video for the channel and stops there: the loop writes its metadata, but approving
-    and publishing stay with the user."""
+async def run_operator(channel_id: str, scheduled: bool = False) -> dict[str, Any]:
+    """Claim a channel run before calling providers so two workers cannot generate twice."""
+    run_id = str(uuid4())
     with database() as db:
+        db.execute("BEGIN IMMEDIATE")
         operator = db.execute("SELECT * FROM operators WHERE channel_id=?", (channel_id,)).fetchone()
+        if not operator:
+            raise HTTPException(status_code=404, detail="Salve o operador deste canal antes de rodar.")
         channel = db.execute("SELECT * FROM channels WHERE id=? AND deleted_at IS NULL", (channel_id,)).fetchone()
+        if scheduled and (not operator["enabled"] or operator["paused_reason"] or not operator["next_run_at"] or operator["next_run_at"] > now()):
+            return {"job": None, "error": "Operador não está pronto para a execução agendada."}
         busy = db.execute(
-            "SELECT 1 FROM video_jobs AS jobs JOIN publications ON publications.job_id = jobs.id "
-            "WHERE publications.channel_id=? AND jobs.created_by='operator' AND jobs.state IN ('queued', 'running') AND jobs.deleted_at IS NULL",
+            "SELECT 1 FROM video_jobs AS jobs JOIN publications ON publications.job_id=jobs.id "
+            "WHERE publications.channel_id=? AND jobs.created_by='operator' AND jobs.state IN ('queued','running') AND jobs.deleted_at IS NULL",
             (channel_id,),
         ).fetchone()
-    if not operator:
-        raise HTTPException(status_code=404, detail="Salve o operador deste canal antes de rodar.")
-    job, error = None, None
+        pending_batch = db.execute("SELECT 1 FROM operator_runs WHERE channel_id=? AND state IN ('running','queued') LIMIT 1", (channel_id,)).fetchone()
+        lease_active = operator["lease_until"] and operator["lease_until"] > now()
+        if busy or pending_batch or lease_active:
+            return {"job": None, "error": "Pulado: o vídeo anterior do operador ainda está sendo gerado."}
+        slot_key = operator["next_run_at"] if scheduled else f"manual:{run_id}"
+        db.execute(
+            "INSERT OR IGNORE INTO operator_runs(id, channel_id, slot_key, state, started_at) VALUES (?, ?, ?, 'running', ?)",
+            (run_id, channel_id, slot_key, now()),
+        )
+        if not db.execute("SELECT 1 FROM operator_runs WHERE id=?", (run_id,)).fetchone():
+            return {"job": None, "error": "Esta janela já foi executada."}
+        next_run = (datetime.now(UTC) + timedelta(hours=operator["cadence_hours"])).isoformat()
+        db.execute(
+            "UPDATE operators SET lease_owner=?, lease_until=?, next_run_at=CASE WHEN ? THEN ? ELSE next_run_at END, last_run_at=?, updated_at=? WHERE channel_id=?",
+            (run_id, (datetime.now(UTC) + timedelta(hours=1)).isoformat(), int(scheduled), next_run, now(), now(), channel_id),
+        )
+    batch, error = None, None
     try:
         if not channel or channel["status"] != "connected":
             raise HTTPException(status_code=409, detail="O canal não está conectado. Reconecte em Canais.")
-        if busy:  # Turbo renders one video at a time; stacking the operator's queue only delays everything
-            raise HTTPException(status_code=409, detail="Pulado: o vídeo anterior do operador ainda está sendo gerado.")
-        format, language = operator["format"], channel["language"]
-        topic = (await suggest_topics(channel, format, 1))[0]["topic"]
-        settings = channel_generation_settings(channel, format)
-        script = ""
-        if format == "long":
-            written = await long_script(LongScriptInput(subject=topic, language=language, minutes=OPERATOR_MINUTES, niche=channel["niche"]))
-            script = written["script"]
-        project = get_or_create_project(PROJECT_NAMES[format], language)
-        job = await create_job(project["id"], JobCreate(subject=topic, script=script, format=format, channel_ids=[channel_id], settings=settings))
-        with database() as db:
-            db.execute("UPDATE video_jobs SET created_by='operator' WHERE id=?", (job["id"],))
+        from gateway.auto_generation import AutoGenerationInput, create_auto_batch
+        format = operator["format"]
+        project = get_or_create_project(PROJECT_NAMES[format], channel["language"])
+        batch = create_auto_batch(project["id"], AutoGenerationInput(format=format, channel_ids=[channel_id], client_request_id=run_id))
     except Exception as exc:
         error = str(getattr(exc, "detail", exc))[:500] or "Falha no operador"
-    next_run = datetime.now(UTC) + timedelta(hours=operator["cadence_hours"])
     with database() as db:
-        db.execute(
-            "UPDATE operators SET last_run_at=?, next_run_at=?, last_error=?, updated_at=? WHERE channel_id=?",
-            (now(), next_run.isoformat(), error, now(), channel_id),
-        )
-    return {"job": job, "error": error}
+        db.execute("UPDATE operator_runs SET state=?, batch_id=?, error=?, finished_at=? WHERE id=?",
+                   ("failed" if error else "queued", batch["batch_id"] if batch else None, error, now() if error else None, run_id))
+        if error:
+            db.execute("UPDATE operators SET lease_owner=NULL, lease_until=NULL, last_error=?, updated_at=? WHERE channel_id=? AND lease_owner=?",
+                       (error, now(), channel_id, run_id))
+    if error and scheduled:
+        pause_operator(channel_id, error)
+    return {"job": None, "batch_id": batch["batch_id"] if batch else None, "error": error}
+
+
+def youtube_video_status(credentials: Any, video_id: str) -> dict[str, Any] | None:
+    from googleapiclient.discovery import build
+
+    youtube = build("youtube", "v3", credentials=credentials, cache_discovery=False)
+    items = youtube.videos().list(part="status", id=video_id).execute().get("items") or []
+    return items[0].get("status") if items else None
+
+
+async def verify_auto_youtube_publication(job_id: str, channel_id: str, external_id: str, slot: datetime) -> None:
+    credentials = await asyncio.to_thread(youtube_credentials, channel_id)
+    status = await asyncio.to_thread(youtube_video_status, credentials, external_id)
+    if not status:
+        raise HTTPException(status_code=502, detail="O YouTube não retornou o vídeo enviado.")
+    privacy = status.get("privacyStatus")
+    if privacy == "public":
+        if datetime.now(UTC) < slot - timedelta(minutes=2):
+            raise HTTPException(status_code=502, detail="O vídeo ficou público antes do horário programado.")
+        with database() as db:
+            db.execute("UPDATE publications SET state='published', updated_at=? WHERE job_id=? AND channel_id=? AND state='platform_scheduled'",
+                       (now(), job_id, channel_id))
+        return
+    published_at = status.get("publishAt")
+    if privacy != "private" or not published_at or abs((parse_time(published_at) - slot).total_seconds()) > 60:
+        raise HTTPException(status_code=502, detail="O YouTube não confirmou a publicação programada.")
+    if datetime.now(UTC) > slot + timedelta(minutes=15):
+        raise HTTPException(status_code=502, detail="O vídeo continua privado após o horário programado.")
+
+
+async def auto_publish_operator_job(job_id: str) -> None:
+    with database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        job = job_row_or_404(db, job_id)
+        target = db.execute(
+            "SELECT p.*, c.name AS channel_name, c.status AS channel_status, c.platform, o.auto_publish AS operator_auto_publish, o.enabled, "
+            "o.paused_reason, o.publish_days_json, o.publish_time, o.publish_timezone "
+            "FROM publications p JOIN channels c ON c.id=p.channel_id JOIN operators o ON o.channel_id=c.id "
+            "WHERE p.job_id=? AND c.deleted_at IS NULL AND c.platform='youtube'",
+            (job_id,),
+        ).fetchone()
+        if not target or not target["operator_auto_publish"] or not target["enabled"] or target["paused_reason"]:
+            return
+        if target["state"] in ("platform_scheduled", "published", "reconciliation_required", "uploading"):
+            return
+        if target["state"] not in ("pending", "auto_reserved"):
+            return
+        if target["state"] == "auto_reserved" and target["auto_lease_until"] and target["auto_lease_until"] > now():
+            return
+        if job["state"] not in ("completed", "approved") or not job["auto_publish_authorized"]:
+            return
+        require_quality_approval(db, job)
+        if target["channel_status"] != "connected" or not youtube_token_file(target["channel_id"]).is_file():
+            raise HTTPException(status_code=409, detail="Canal sem autorização válida. Reconecte em Canais.")
+        artifact = db.execute("SELECT remote_path FROM artifacts WHERE job_id=? AND kind='video' LIMIT 1", (job_id,)).fetchone()
+        stored = db.execute("SELECT value_json FROM job_metadata WHERE job_id=?", (job_id,)).fetchone()
+        if not artifact or not stored:
+            raise HTTPException(status_code=409, detail="Vídeo final ou metadados ausentes.")
+        metadata, errors, _ = normalize_youtube_metadata(json.loads(stored["value_json"]))
+        if errors:
+            raise HTTPException(status_code=409, detail="Metadados inválidos: " + ", ".join(errors))
+        slot = parse_time(target["scheduled_at"]) if target["state"] == "auto_reserved" else next_publish_slot(target, db)
+        if slot <= datetime.now(UTC) + timedelta(hours=1):
+            slot = next_publish_slot(target, db)
+        claimed = db.execute(
+            "UPDATE publications SET state='auto_reserved', scheduled_at=?, auto_publish=1, auto_lease_owner=?, auto_lease_until=?, updated_at=? "
+            "WHERE id=? AND state IN ('pending','auto_reserved') AND (auto_lease_until IS NULL OR auto_lease_until <= ? OR state='pending')",
+            (slot.isoformat(), str(uuid4()), (datetime.now(UTC) + timedelta(hours=3)).isoformat(), now(), target["id"], now()),
+        ).rowcount
+        if not claimed:
+            return
+        channel = channel_row_or_404(db, target["channel_id"])
+    with tempfile.TemporaryDirectory() as folder:
+        video_path = Path(folder) / "video.mp4"
+        async def video() -> Path:
+            await download_turbo_file(artifact["remote_path"], video_path)
+            if not video_path.is_file() or video_path.stat().st_size == 0:
+                raise HTTPException(status_code=502, detail="O vídeo final está vazio.")
+            with database() as db:
+                current = db.execute(
+                    "SELECT o.enabled, o.auto_publish, o.paused_reason, c.status FROM operators o "
+                    "JOIN channels c ON c.id=o.channel_id WHERE o.channel_id=?", (channel["id"],)
+                ).fetchone()
+                if not current or not current["enabled"] or not current["auto_publish"] or current["paused_reason"] or current["status"] != "connected":
+                    raise HTTPException(status_code=409, detail="Autorização automática ou conexão do canal mudou durante o preparo.")
+                if not youtube_token_file(channel["id"]).is_file():
+                    raise HTTPException(status_code=409, detail="Autorização do YouTube ausente.")
+                db.execute("UPDATE video_jobs SET state='approved', updated_at=? WHERE id=? AND state='completed'", (now(), job_id))
+            return video_path
+        await publish_to_channel(job_id, channel, video, {**metadata, "format": job["format"]}, False, slot)
+    with database() as db:
+        publication = db.execute("SELECT external_id, scheduled_at FROM publications WHERE job_id=? AND channel_id=? AND state='platform_scheduled'",
+                                 (job_id, channel["id"])).fetchone()
+    if publication:
+        await verify_auto_youtube_publication(job_id, channel["id"], publication["external_id"], parse_time(publication["scheduled_at"]))
+
+
+async def prepare_auto_publications() -> None:
+    with database() as db:
+        jobs = [dict(row) for row in db.execute(
+            "SELECT jobs.id, p.channel_id FROM video_jobs jobs JOIN publications p ON p.job_id=jobs.id "
+            "JOIN operators o ON o.channel_id=p.channel_id "
+            "WHERE jobs.created_by='operator' AND jobs.auto_publish_authorized=1 AND jobs.deleted_at IS NULL AND jobs.state IN ('completed','approved') "
+            "AND p.state IN ('pending','auto_reserved') AND o.enabled=1 AND o.auto_publish=1 AND o.paused_reason IS NULL "
+            "AND EXISTS(SELECT 1 FROM job_metadata m WHERE m.job_id=jobs.id)"
+        )]
+    for row in jobs:
+        try:
+            await auto_publish_operator_job(row["id"])
+        except Exception as exc:
+            with database() as db:
+                db.execute(
+                    "UPDATE publications SET auto_lease_owner=NULL, auto_lease_until=NULL WHERE job_id=? AND channel_id=? AND state='auto_reserved'",
+                    (row["id"], row["channel_id"]),
+                )
+            pause_operator(row["channel_id"], str(getattr(exc, "detail", exc)), row["id"])
+
+
+async def reconcile_auto_publications() -> None:
+    with database() as db:
+        uncertain = [dict(row) for row in db.execute(
+            "SELECT p.id, p.job_id, p.channel_id FROM publications p WHERE p.auto_publish=1 AND p.state='uploading' "
+            "AND (p.auto_lease_until IS NULL OR p.auto_lease_until <= ?)", (now(),)
+        )]
+    for row in uncertain:
+        with database() as db:
+            db.execute("UPDATE publications SET state='reconciliation_required', error=?, updated_at=? WHERE id=? AND state='uploading'",
+                       ("Envio interrompido; confira o YouTube antes de tentar novamente.", now(), row["id"]))
+        pause_operator(row["channel_id"], "Resultado do upload incerto; confira o YouTube.", row["job_id"])
+    with database() as db:
+        scheduled = [dict(row) for row in db.execute(
+            "SELECT p.job_id, p.channel_id, p.external_id, p.scheduled_at FROM publications p "
+            "WHERE p.auto_publish=1 AND p.state='platform_scheduled' AND p.scheduled_at <= ?",
+            ((datetime.now(UTC) + timedelta(minutes=15)).isoformat(),),
+        )]
+    for row in scheduled:
+        try:
+            await verify_auto_youtube_publication(row["job_id"], row["channel_id"], row["external_id"], parse_time(row["scheduled_at"]))
+        except Exception as exc:
+            pause_operator(row["channel_id"], str(getattr(exc, "detail", exc)), row["job_id"])
 
 
 async def publish_due_schedules() -> None:
@@ -3295,9 +3760,9 @@ async def reconcile_processing_publications() -> None:
 
 async def run_due_operators() -> None:
     with database() as db:
-        due = [row["channel_id"] for row in db.execute("SELECT channel_id FROM operators WHERE enabled=1 AND next_run_at <= ?", (now(),))]
+        due = [row["channel_id"] for row in db.execute("SELECT channel_id FROM operators WHERE enabled=1 AND paused_reason IS NULL AND next_run_at <= ?", (now(),))]
     for channel_id in due:
-        await run_operator(channel_id)  # records its own errors and always moves next_run_at forward
+        await run_operator(channel_id, scheduled=True)
 
 
 async def prepare_operator_jobs() -> None:
@@ -3313,10 +3778,48 @@ async def prepare_operator_jobs() -> None:
                 await generate_metadata(job_id)
         except Exception as exc:
             logger.warning("Operador: o trabalho %s não avançou: %s", job_id, getattr(exc, "detail", exc))
+            with database() as db:
+                channel = db.execute(
+                    "SELECT p.channel_id FROM publications p JOIN operators o ON o.channel_id=p.channel_id "
+                    "WHERE p.job_id=? AND o.auto_publish=1 LIMIT 1", (job_id,)
+                ).fetchone()
+            if channel:
+                pause_operator(channel["channel_id"], str(getattr(exc, "detail", exc)), job_id)
+
+
+def pause_failed_operator_jobs() -> None:
+    with database() as db:
+        failed = [dict(row) for row in db.execute(
+            "SELECT j.id, j.error, p.channel_id FROM video_jobs j JOIN publications p ON p.job_id=j.id "
+            "JOIN operators o ON o.channel_id=p.channel_id WHERE j.created_by='operator' AND j.state IN ('failed','interrupted') "
+            "AND o.enabled=1 AND o.auto_publish=1 AND o.paused_reason IS NULL AND j.updated_at > o.updated_at"
+        )]
+    for row in failed:
+        pause_operator(row["channel_id"], row["error"] or "Geração falhou; confira o trabalho.", row["id"])
+
+
+def recover_operator_leases() -> None:
+    with database() as db:
+        rows = [dict(row) for row in db.execute(
+            "SELECT channel_id, lease_owner FROM operators WHERE lease_owner IS NOT NULL AND lease_until <= ?", (now(),)
+        )]
+        for row in rows:
+            db.execute("UPDATE operator_runs SET state='interrupted', error=?, finished_at=? WHERE id=? AND state='running'",
+                       ("Worker interrompido antes da conclusão da execução.", now(), row["lease_owner"]))
+            db.execute("UPDATE operators SET lease_owner=NULL, lease_until=NULL, paused_reason=?, updated_at=? WHERE channel_id=? AND lease_owner=?",
+                       ("Execução interrompida; confira o trabalho antes de reativar.", now(), row["channel_id"], row["lease_owner"]))
+    for row in rows:
+        notify(f"operator-interrupted:{row['lease_owner']}", "operator_paused", "Automação pausada",
+               "Worker interrompido; confira o trabalho antes de reativar.")
 
 
 async def agent_tick() -> None:
-    for step in (reconcile_stale_jobs, publish_due_schedules, reconcile_processing_publications, run_due_operators, prepare_operator_jobs):
+    for check in (recover_operator_leases, pause_failed_operator_jobs):
+        try:
+            check()
+        except Exception:
+            logger.exception("Passo %s do laço de agentes falhou", check.__name__)
+    for step in (reconcile_stale_jobs, reconcile_auto_publications, publish_due_schedules, reconcile_processing_publications, run_due_operators, prepare_operator_jobs, prepare_auto_publications):
         try:
             await step()
         except Exception:
@@ -3409,4 +3912,7 @@ def favicon() -> Response:
     return Response(status_code=204)
 
 
+from gateway.auto_generation import router as auto_generation_router
+
+app.include_router(auto_generation_router)
 app.mount("/", StaticFiles(directory=STATIC_ROOT, html=True), name="static")

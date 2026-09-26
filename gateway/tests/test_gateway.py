@@ -127,8 +127,12 @@ class GatewayContractTests(unittest.TestCase):
                 db.execute("INSERT INTO channels(id, platform, name, status, language, created_at, updated_at) VALUES (?, 'youtube', ?, 'connected', ?, ?, ?)", (language, language, language, self.main.now(), self.main.now()))
         self.main.initialize_database()
         with self.main.database() as db:
-            voices = {row["language"]: row["voice_name"] for row in db.execute("SELECT language, voice_name FROM channels")}
+            rows = [self.main.row_as_channel(row) for row in db.execute("SELECT * FROM channels")]
+        voices = {row["language"]: row["voice_name"] for row in rows}
         self.assertEqual(voices, {"pt-BR": "pt-BR-FranciscaNeural", "en-US": "en-US-JennyNeural", "es-ES": "es-ES-ElviraNeural", "de-DE": "de-DE-KatjaNeural"})
+        for row in rows:
+            self.assertEqual(row["video_defaults"]["short"]["voice_name"], row["video_defaults"]["long"]["voice_name"])
+            self.assertEqual(row["video_defaults"]["short"]["subtitle_position"], row["video_defaults"]["long"]["subtitle_position"])
 
     def test_channel_video_defaults_migration_snapshots_each_format(self):
         with self.main.database() as db:
@@ -424,6 +428,7 @@ class GatewayContractTests(unittest.TestCase):
         self.assertEqual(payload["video_clip_duration"], 1)
         self.assertEqual(payload["video_count"], 2)
         self.assertEqual(payload["video_subject"], "tema")
+        self.assertEqual(payload["font_name"], "Arial.ttf")
         self.assertEqual(payload["video_concat_mode"], "sequential")
         self.assertEqual(payload["voice_rate"], 1.2)
         self.assertNotIn("video_transition_mode", payload)
@@ -693,6 +698,35 @@ class GatewayContractTests(unittest.TestCase):
         self.assertFalse(payload["subtitle_enabled"])
         self.assertEqual(payload["font_size"], 70)
 
+    def test_channel_voice_and_caption_profiles_are_independent_by_format(self):
+        from unittest.mock import patch
+        self._completed_job()
+        self._connected(("yt", "youtube"))
+        saved = self.main.patch_channel("yt", self.main.ChannelPatch(video_defaults={
+            "short": {"voice_name": "pt-BR-AntonioNeural", "voice_rate": 1.2, "voice_volume": 1.5,
+                      "subtitle_enabled": False, "subtitle_position": "center", "font_size": 64},
+            "long": {"voice_name": "pt-BR-FranciscaNeural", "voice_rate": 0.8, "voice_volume": 0.6,
+                     "subtitle_enabled": True, "subtitle_position": "bottom", "font_size": 48},
+        }))
+        self.assertEqual((saved["video_defaults"]["short"]["voice_name"], saved["video_defaults"]["long"]["voice_name"]),
+                         ("pt-BR-AntonioNeural", "pt-BR-FranciscaNeural"))
+        self.assertEqual((saved["video_defaults"]["short"]["subtitle_enabled"], saved["video_defaults"]["long"]["subtitle_enabled"]),
+                         (False, True))
+        sent = []
+
+        async def fake_turbo(_method, path, **kwargs):
+            if path == "/api/v1/videos":
+                sent.append(kwargs["json"])
+            return type("Response", (), {"json": lambda self: {"data": {"task_id": f"profile-{len(sent)}"}}})()
+
+        with patch.object(self.main, "turbo_request", new=fake_turbo):
+            asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="short", format="short", channel_ids=["yt"])))
+            asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="long", format="long", channel_ids=["yt"])))
+        self.assertEqual([(item["voice_name"], item["voice_rate"], item["subtitle_enabled"], item["subtitle_position"], item["font_size"]) for item in sent], [
+            ("pt-BR-AntonioNeural", 1.2, False, "center", 64),
+            ("pt-BR-FranciscaNeural", 0.8, True, "bottom", 48),
+        ])
+
     def test_channel_video_profile_overrides_project_but_job_settings_can_override_it(self):
         from unittest.mock import patch
         self._completed_job()
@@ -954,30 +988,23 @@ class GatewayContractTests(unittest.TestCase):
             video_defaults={"short": {"video_clip_duration": 8, "video_count": 3, "video_concat_mode": "random", "video_transition_mode": "FadeIn", "video_clip_speed": 1.2, "bgm_type": "random", "bgm_volume": 0.4}},
         ))
         self.main.put_operator(channel_id, self.main.OperatorInput(enabled=True, format="short", cadence_hours=24))
-        sent = []
-
-        async def fake_turbo(method, path, **kwargs):
-            if path == "/api/v1/scripts":  # "script" concat mode asks Turbo to write the Short first when none was given
-                return type("Response", (), {"json": lambda self: {"data": {"video_script": ""}}})()
-            sent.append(kwargs["json"])
-            return type("Response", (), {"json": lambda self: {"data": {"task_id": "t1"}}})()
-
-        with patch.object(self.main, "suggest_topics", new=self._async_return([{"topic": "Tema do operador"}])), \
-                patch.object(self.main, "turbo_request", new=fake_turbo):
-            first = asyncio.run(self.main.run_operator(channel_id))
-            second = asyncio.run(self.main.run_operator(channel_id))
+        first = asyncio.run(self.main.run_operator(channel_id))
+        second = asyncio.run(self.main.run_operator(channel_id))
         self.assertIsNone(first["error"])
+        self.assertTrue(first["batch_id"])
         self.assertIn("Pulado", second["error"])
-        self.assertEqual(len(sent), 1)
-        self.assertEqual((sent[0]["voice_name"], sent[0]["voice_rate"], sent[0]["voice_volume"]), ("pt-BR-AntonioNeural", 1.2, 1.5))
-        self.assertEqual((sent[0]["subtitle_enabled"], sent[0]["subtitle_position"], sent[0]["font_size"]), (False, "top", 64))
-        self.assertEqual((sent[0]["video_clip_duration"], sent[0]["video_count"], sent[0]["video_clip_speed"], sent[0]["bgm_volume"]), (8, 3, 1.2, 0.4))
         with self.main.database() as db:
-            job = db.execute("SELECT created_by, subject, state FROM video_jobs").fetchone()
+            item = db.execute("SELECT context_json, state FROM generation_batch_items WHERE batch_id=?", (first["batch_id"],)).fetchone()
             operator = db.execute("SELECT next_run_at FROM operators").fetchone()
-        self.assertEqual(tuple(job), ("operator", "Tema do operador", "queued"))
+        settings = json.loads(item["context_json"])["settings"]
+        self.assertEqual(item["state"], "queued")
+        self.assertEqual((settings["voice_name"], settings["voice_rate"], settings["voice_volume"]), ("pt-BR-AntonioNeural", 1.2, 1.5))
+        self.assertEqual((settings["subtitle_enabled"], settings["subtitle_position"], settings["font_size"]), (False, "top", 64))
+        self.assertEqual((settings["video_clip_duration"], settings["video_count"], settings["video_clip_speed"], settings["bgm_volume"]), (8, 3, 1.2, 0.4))
         self.assertGreater(operator["next_run_at"], datetime.now(UTC).isoformat())
-        self.assertTrue(self.main.list_operators()["operators"][0]["enabled"])
+        listing = self.main.list_operators()
+        self.assertTrue(listing["operators"][0]["enabled"])
+        self.assertEqual(listing["operators"][0]["last_run"]["batch_id"], first["batch_id"])
 
     def test_strategy_uses_trends_and_drops_subjects_already_made(self):
         from unittest.mock import patch
@@ -1023,7 +1050,7 @@ class GatewayContractTests(unittest.TestCase):
         from unittest.mock import patch
         script = " ".join(f"palavra{i}" for i in range(60))  # ~24s of narration at 150 wpm
 
-        async def fake_chat(prompt, json_mode=False):
+        async def fake_chat(prompt, json_mode=False, **kwargs):
             self.assertIn("Trechos numerados", prompt)
             return json.dumps({"terms": ["ocean waves", "ocean waves", "coral reef"]})  # a duplicate the model repeated
 
@@ -1033,17 +1060,35 @@ class GatewayContractTests(unittest.TestCase):
         self.assertEqual(len(terms), 5)  # one per ~5s chunk of the 24s narration
         self.assertEqual(len(set(terms)), len(terms))  # the repeated "ocean waves" got deduped, then padded back out distinctly
 
-    def test_visual_terms_caps_search_count_and_stretches_clip_length(self):
+    def test_visual_terms_retries_invalid_json_with_same_model(self):
+        from unittest.mock import patch
+        responses = iter(["", '```json\n{"terms": ["sunrise"]}\n```'])
+        calls = []
+
+        async def fake_chat(prompt, **kwargs):
+            calls.append((prompt, kwargs))
+            return next(responses)
+
+        with patch.object(self.main, "llm_chat", new=fake_chat):
+            terms, _ = asyncio.run(self.main.visual_terms("sol da manhã", "sunrise", clip_seconds=5))
+        self.assertEqual(terms, ["sunrise"])
+        self.assertEqual(len(calls), 2)
+        self.assertIn("JSON inválido", calls[1][0])
+        self.assertTrue(all(call[1]["json_mode"] for call in calls))
+        self.assertEqual(self.main.parse_json_object('prefixo {inválido} e {"terms": ["sunrise"]}'), {"terms": ["sunrise"]})
+
+    def test_visual_terms_rejects_search_count_above_limit_without_changing_clip_length(self):
         from unittest.mock import patch
         script = " ".join(f"palavra{i}" for i in range(4000))  # far more than MAX_VISUAL_TERMS slots at 1s clips
 
         async def fake_chat(prompt, json_mode=False):
             return json.dumps({"terms": ["ocean"]})
 
-        with patch.object(self.main, "llm_chat", new=fake_chat):
-            terms, clip_seconds = asyncio.run(self.main.visual_terms("oceano", script, clip_seconds=1))
-        self.assertEqual(len(terms), self.main.MAX_VISUAL_TERMS)
-        self.assertGreater(clip_seconds, 1)  # stretched so the capped term count still covers the whole narration
+        from fastapi import HTTPException
+        with patch.object(self.main, "llm_chat", new=fake_chat), self.assertRaises(HTTPException) as raised:
+            asyncio.run(self.main.visual_terms("oceano", script, clip_seconds=1))
+        self.assertEqual(raised.exception.status_code, 422)
+        self.assertIn("Aumente a duração de cada clipe", raised.exception.detail)
 
     def test_create_job_script_mode_aligns_terms_and_locks_sequential(self):
         from unittest.mock import patch

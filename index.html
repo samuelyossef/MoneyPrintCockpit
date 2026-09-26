@@ -1,72 +1,12 @@
 <!doctype html>
-<html lang="pt-BR" data-theme="light">
+<html lang="pt-BR">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="refresh" content="0;url=/Cockpit.html" />
   <title>MoneyPrinter — Cockpit</title>
-  <link rel="icon" href="data:," />
-
-  <!-- ========================================================
-       Tipografia do Sistema (Google Fonts)
-       - Inter: Fonte sem serifa primária para UI e leitura
-       - JetBrains Mono: Fonte monoespaçada para métricas e logs
-       - Instrument Serif: Fonte serifada para detalhes editoriais
-       ======================================================== -->
-
-  <!-- ========================================================
-       Estilos CSS Compartilhados e Específicos
-       - shell.css: Design system, reset, grid, sidebar e topbar
-       - cockpit.css: Estilos dos cartões de vídeo, forms e pipeline
-       ======================================================== -->
-  <link rel="stylesheet" href="shared/shell.css" />
-  <link rel="stylesheet" href="shared/cockpit.css" />
 </head>
 <body>
-  <!-- ========================================================
-       Estrutura Principal da Aplicação (Layout em Grid/Flex)
-       ======================================================== -->
-  <div class="app">
-    <!-- Barra lateral de navegação (injetada dinamicamente via JS) -->
-    <aside class="sidebar" id="sidebar-root"></aside>
-
-    <!-- Área de conteúdo central -->
-    <div class="main">
-      <!-- Barra superior: status, alternância de tema, busca e perfil -->
-      <div class="topbar" id="topbar-root"></div>
-
-      <!-- Área de rolagem vertical com cabeçalho e corpo da view ativa -->
-      <div class="view-body-scroll">
-        <div class="view-hd-main" id="viewHead"></div>
-        <div id="viewBody"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Camadas de fundo para fechar menus em telas menores (Backdrops) -->
-  <div class="sb-backdrop"></div>
-  <div class="dr-backdrop"></div>
-
-  <!-- Drawer Lateral: Painel deslizante para inspeção rápida de logs/detalhes -->
-  <aside class="drawer" aria-label="Inspeção rápida">
-    <div class="dr-hd" id="drHead"></div>
-    <div class="dr-bd" id="drBody"></div>
-    <div class="dr-ft" id="drFoot"></div>
-  </aside>
-
-  <!-- Contêiner flutuante para notificações Toast -->
-  <div class="toast-wrap" id="toasts"></div>
-
-  <!-- ========================================================
-       Scripts da Aplicação (Ordem de Execução Sequencial)
-       1. image-slot.js: Utilitário para slots e placeholders visuais
-       2. cockpit-data.js: Mock de dados, canais, vídeos e métricas
-       3. cockpit-views.js: Funções de renderização de cada tela
-       4. cockpit-app.js: Roteamento, drawer, tema e inicialização
-       ======================================================== -->
-  <script src="shared/image-slot.js"></script>
-  <script src="shared/cockpit-data.js"></script>
-  <script src="shared/cockpit-views.js?v=20260922growth"></script>
-  <script src="shared/moneyprinter-runtime.js?v=20260922growth"></script>
-  <script src="shared/cockpit-app.js?v=20260922growth"></script>
+  <p>Abra o <a href="/Cockpit.html">MoneyPrinter Cockpit</a>.</p>
 </body>
 </html>

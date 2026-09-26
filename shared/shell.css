@@ -475,3 +475,4 @@ body.sidebar-open .sb-backdrop { opacity: 1; pointer-events: auto; }
   .view-filters { gap: 6px; }
   .view-search { flex: 1 1 100%; }
 }
+.view-tab[hidden], [data-production-pane][hidden], [data-agpane][hidden] { display: none !important; }

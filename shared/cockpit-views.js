@@ -156,7 +156,7 @@ window.CKV = (function () {
     const download = videoUrl(v, "download");
     return `
       ${download ? `<a class="pop-item" href="${download}" download style="text-decoration:none;color:inherit"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg><span>Baixar MP4</span></a>` : ""}
-      <div class="pop-item" data-toast="Publicação ainda não configurada: conecte o Upload-Post"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 21V9M7 14l5-5 5 5M5 3h14"/></svg><span>Publicar no YouTube</span></div>
+      ${v[4] ? `<button class="pop-item" type="button" data-open-library="${esc(v[4])}" data-library-kind="${kind}"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 21V9M7 14l5-5 5 5M5 3h14"/></svg><span>Preparar publicação</span></button>` : ""}
       ${download ? `<div class="pop-item" data-copy="${download}"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg><span>Copiar link</span></div>` : ""}
       <div class="pop-item" data-vid-del-kind="${kind}" data-vid-del-idx="${i}" style="color:var(--err)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6h16Z"/></svg><span>Excluir vídeo</span></div>`;
   };
@@ -413,9 +413,9 @@ window.CKV = (function () {
       </div>`;
     const ytIcon = `<svg viewBox="0 0 24 24" width="18" height="18" fill="#fff"><path d="M9 7.5v9l8-4.5-8-4.5Z"/></svg>`;
     const tkIcon = `<svg viewBox="0 0 24 24" width="17" height="17" fill="#fff"><path d="M16.6 5.8c-.7-.7-1.1-1.7-1.1-2.7h-2.9v12.6c0 1.3-1.1 2.4-2.4 2.4a2.4 2.4 0 1 1 0-4.8c.2 0 .5 0 .7.1V10.3a5.3 5.3 0 0 0-.7 0 5.3 5.3 0 1 0 5.3 5.3V9.1a7 7 0 0 0 4.1 1.3V7.5c-1.1 0-2.1-.4-3-1.1a4.8 4.8 0 0 1 0-.6Z"/></svg>`;
-    return `<div style="display:flex;align-items:center;gap:14px;width:100%">
+    return `<div class="channel-head" style="display:flex;align-items:center;gap:14px;width:100%">
       <div style="flex:1"><div class="view-hd-title">Canais</div><div class="view-hd-sub">Contas conectadas, plataformas e métricas de publicação</div></div>
-      <div style="display:flex;gap:12px">${stat("#dc2626", "Canais YouTube", yt, ytIcon)}${stat("#000000", "Canais TikTok", tk, tkIcon)}</div>
+      <div class="channel-head-stats" style="display:flex;gap:12px">${stat("#dc2626", "Canais YouTube", yt, ytIcon)}${stat("#000000", "Canais TikTok", tk, tkIcon)}</div>
     </div>`;
   }
   const CH_STATUS = { connected: ["active", "Conectado"], pending: ["pending", "Aguardando login"], expired: ["past_due", "Expirado"] };
@@ -434,7 +434,7 @@ window.CKV = (function () {
         <div class="view-filters-spacer"></div><span class="rows-count" id="chCount">${rows.length} canais</span>
         <button class="btn primary sm" id="newChBtn">+ Conectar canal</button>
       </div>
-      <div class="tablewrap"><table>
+      <div class="tablewrap"><table class="channel-table">
         <thead><tr><th>Canal</th><th>Plataforma</th><th class="num">Seguidores</th><th class="num">Vídeos</th><th class="num">Views totais</th><th>Idioma</th><th>Status</th></tr></thead>
         <tbody id="chBody">${rows.length ? canalRows(rows) : empty}</tbody>
       </table></div>`;
@@ -454,8 +454,12 @@ window.CKV = (function () {
     return D.CHANNELS.find(x => x.id === id) || null;
   }
   function newCanalRec() {
-    return { platform: "YouTube", niche: "", language: "pt-BR", voice_name: "pt-BR-FranciscaNeural", voice_rate: 1, voice_volume: 1, subtitle_enabled: true, subtitle_position: "bottom", font_size: 56, text_fore_color: "#FFFFFF", stroke_color: "#000000", stroke_width: 1.5,
-      video_defaults: { short: { paragraph_number: 5, video_count: 1, video_clip_duration: 4, video_concat_mode: "script", video_transition_mode: "", video_clip_speed: 1, bgm_type: "", bgm_volume: 0.2 }, long: { target_minutes: 8, video_clip_duration: 6, video_concat_mode: "script", video_transition_mode: "", video_clip_speed: 1, bgm_type: "", bgm_volume: 0.2 } } };
+    const media = { voice_name: "pt-BR-FranciscaNeural", voice_rate: 1, voice_volume: 1, subtitle_enabled: true, text_fore_color: "#FFFFFF", stroke_color: "#000000", stroke_width: 1.5 };
+    return { platform: "YouTube", niche: "", language: "pt-BR", publish_privacy: "private", visual_guides: { short: "", long: "" }, voice_name: media.voice_name, voice_rate: media.voice_rate, voice_volume: media.voice_volume, subtitle_enabled: media.subtitle_enabled, subtitle_position: "bottom", font_size: 56, text_fore_color: media.text_fore_color, stroke_color: media.stroke_color, stroke_width: media.stroke_width,
+      video_defaults: {
+        short: { ...media, subtitle_position: "center", font_size: 64, paragraph_number: 5, video_count: 1, video_clip_duration: 4, video_concat_mode: "script", video_transition_mode: "", video_clip_speed: 1, bgm_type: "", bgm_volume: 0.2 },
+        long: { ...media, subtitle_position: "bottom", font_size: 48, target_minutes: 8, video_clip_duration: 6, video_concat_mode: "script", video_transition_mode: "", video_clip_speed: 1, bgm_type: "", bgm_volume: 0.2 },
+      } };
   }
   function canal(c, tab, editing, isNew) {
     editing = editing || isNew;
@@ -483,38 +487,53 @@ window.CKV = (function () {
       const duration = format === "short"
         ? profileField("Duração alvo", videoSelect(format, "paragraph_number", current.paragraph_number, [[4, "60 s"], [5, "75 s"], [6, "90 s"]]))
         : profileField("Duração alvo", videoSelect(format, "target_minutes", current.target_minutes, [[5, "5 minutos"], [8, "8 minutos"], [10, "10 minutos"], [15, "15 minutos"]]));
+      // Keep every language in the DOM: changing the language while editing must
+      // reveal its voices without re-rendering the channel form.
+      const voiceOptions = CH_VOICES;
+      const subtitleEnabled = editing
+        ? `<label style="display:flex;align-items:center;gap:7px;height:34px"><input type="checkbox" class="cbx" data-vfield="${format}.subtitle_enabled" ${current.subtitle_enabled ? "checked" : ""} /> Ativadas por padrão</label>`
+        : esc(current.subtitle_enabled ? "Ativadas" : "Desativadas");
       return `
+        <div class="dr-sec" style="margin:4px 0 10px">Voz e legendas</div>
+        <div class="grid2 channel-profile-grid" style="margin:0 0 18px">
+          ${profileField("Voz sintética padrão", videoSelect(format, "voice_name", current.voice_name, voiceOptions))}
+          ${profileField("Velocidade da voz", videoSelect(format, "voice_rate", current.voice_rate, [[0.8, "0.8×"], [1, "1.0×"], [1.2, "1.2×"], [1.5, "1.5×"]]))}
+          ${profileField("Volume da voz", videoSelect(format, "voice_volume", current.voice_volume, [[0.6, "60%"], [1, "100%"], [1.5, "150%"], [2, "200%"]]))}
+          ${profileField("Legendas", subtitleEnabled)}
+          ${profileField("Posição da legenda", videoSelect(format, "subtitle_position", current.subtitle_position, [["bottom", "Inferior"], ["center", "Centro"], ["top", "Superior"]]))}
+          ${profileField("Tamanho da legenda", videoNumber(format, "font_size", current.font_size, 12, 120))}
+          ${profileField("Espessura da borda", videoNumber(format, "stroke_width", current.stroke_width, 0, 10, "0.1"))}
+          ${profileField("Cor do texto", editing ? `<input class="np-input" style="width:100%" data-vfield="${format}.text_fore_color" value="${esc(current.text_fore_color)}" />` : esc(current.text_fore_color))}
+          ${profileField("Cor da borda", editing ? `<input class="np-input" style="width:100%" data-vfield="${format}.stroke_color" value="${esc(current.stroke_color)}" />` : esc(current.stroke_color))}
+        </div>
+        <div class="dr-sec" style="margin:4px 0 10px">Parâmetros de vídeo</div>
         <div class="grid2 channel-profile-grid" style="margin:0">
           ${duration}
           ${profileField("Duração de cada clipe", videoNumber(format, "video_clip_duration", current.video_clip_duration, 1, 30) + " s")}
-          ${format === "short" ? profileField("Vídeos gerados", videoNumber(format, "video_count", current.video_count, 1, 5)) : ""}
+          ${format === "short" ? profileField("Vídeos gerados", videoSelect(format, "video_count", current.video_count, [[1, "1"], [2, "2"], [3, "3"], [4, "4"], [5, "5"]])) : ""}
           ${profileField("Imagens", videoSelect(format, "video_concat_mode", current.video_concat_mode, [["script", "Seguir o roteiro"], ["random", "Aleatória"]]))}
           ${profileField("Transição", videoSelect(format, "video_transition_mode", current.video_transition_mode, [["", "Nenhuma"], ["Shuffle", "Aleatória"], ["FadeIn", "Fade in"], ["FadeOut", "Fade out"], ["SlideIn", "Slide in"], ["SlideOut", "Slide out"], ["ZoomIn", "Zoom in"], ["ZoomOut", "Zoom out"]]))}
           ${profileField("Velocidade do clipe", videoSelect(format, "video_clip_speed", current.video_clip_speed, [[0.8, "0.8×"], [1, "1.0×"], [1.2, "1.2×"], [1.5, "1.5×"]]))}
           ${profileField("Trilha sonora (BGM)", videoSelect(format, "bgm_type", current.bgm_type, [["", "Sem música de fundo"], ["random", "Aleatória"]]))}
           ${profileField("Volume da música", videoSelect(format, "bgm_volume", current.bgm_volume, [[0.1, "10%"], [0.2, "20%"], [0.4, "40%"], [0.6, "60%"]]))}
+        </div>
+        <div style="margin-top:18px"><label class="dr-sec" style="display:block;margin-bottom:7px">Guia visual deste formato</label>
+          <div class="card-note" style="margin-bottom:7px">Descreva o estilo desejado e elementos que devem ser evitados. O curador confere cada imagem e clipe com este guia.</div>
+          ${editing ? `<textarea class="np-input" style="width:100%;min-height:100px;resize:vertical" data-visual-guide="${format}" maxlength="2000">${esc((c.visual_guides || {})[format] || "")}</textarea>` : `<div style="white-space:pre-wrap">${esc((c.visual_guides || {})[format] || "Nenhum guia visual definido.")}</div>`}
         </div>`;
     };
     const videoProfile = () => {
       const formats = c.platform === "TikTok" ? [["short", "Shorts"]] : [["short", "Shorts"], ["long", "Vídeo longo"]];
-      return `<div class="card" style="margin:14px 0 0;grid-column:1/-1;width:100%"><div class="card-hd"><span class="card-title">Parâmetros de vídeo</span></div>
+      return `<div class="card" style="margin:14px 0 0;grid-column:1/-1;width:100%"><div class="card-hd"><span class="card-title">Configuração por formato</span></div>
         <div class="card-bd"><div class="view-tabs" data-channel-video-tabs style="margin:0 0 14px">${formats.map(([format, label], index) => `<button class="view-tab ${index === 0 ? "is-active" : ""}" type="button" data-channel-video-tab="${format}">${label}</button>`).join("")}</div>
           ${formats.map(([format], index) => `<div data-channel-video-pane="${format}"${index ? " hidden" : ""}>${videoProfileFields(format)}</div>`).join("")}
         </div></div>`;
     };
     const profile = (fullRow = false) => `
-      <div class="card" style="margin:14px 0 0;${fullRow ? "grid-column:1/-1;width:100%" : "max-width:760px"}"><div class="card-hd"><span class="card-title">Voz e Legendas</span></div>
+      <div class="card" style="margin:14px 0 0;${fullRow ? "grid-column:1/-1;width:100%" : "max-width:760px"}"><div class="card-hd"><span class="card-title">Idioma e publicação</span></div>
         <div class="card-bd"><div class="grid2 ${fullRow ? "channel-profile-grid" : ""}" style="margin:0">
           ${profileField("Idioma da narração padrão", sel("language", c.language, CH_LANGS))}
-          ${profileField("Voz sintética padrão", sel("voice_name", c.voice_name, CH_VOICES))}
-          ${profileField("Velocidade da voz", sel("voice_rate", String(c.voice_rate), [["0.8", "0.8×"], ["1", "1.0×"], ["1.2", "1.2×"], ["1.5", "1.5×"]]))}
-          ${profileField("Volume da voz", sel("voice_volume", String(c.voice_volume), [["0.6", "60%"], ["1", "100%"], ["1.5", "150%"], ["2", "200%"]]))}
-          ${profileField("Legendas", editing ? `<label style="display:flex;align-items:center;gap:7px;height:34px"><input type="checkbox" class="cbx" data-cfield="subtitle_enabled" ${c.subtitle_enabled ? "checked" : ""} /> Ativadas por padrão</label>` : esc(c.subtitle_enabled ? "Ativadas" : "Desativadas"))}
-          ${profileField("Posição da legenda", sel("subtitle_position", c.subtitle_position, [["bottom", "Inferior"], ["center", "Centro"], ["top", "Superior"]]))}
-          ${profileField("Tamanho da legenda", txt("font_size", c.font_size, "56"))}
-          ${profileField("Espessura da borda", txt("stroke_width", c.stroke_width, "1.5"))}
-          ${profileField("Cor do texto", txt("text_fore_color", c.text_fore_color, "#FFFFFF"))}
-          ${profileField("Cor da borda", txt("stroke_color", c.stroke_color, "#000000"))}
+          ${profileField("Visibilidade padrão", sel("publish_privacy", c.publish_privacy || "private", [["private", "Sempre como privado"], ["public", "Sempre como público"]]))}
         </div></div></div>`;
     const kpi = (label, value) => `<div class="kpi" style="cursor:default"><div class="kpi-label">${label}</div><div class="kpi-value">${D.fmtInt(value || 0)}</div></div>`;
     const panes = {
@@ -530,7 +549,7 @@ window.CKV = (function () {
             <div class="card-note" style="font-family:inherit;line-height:1.55">
               <b>YouTube:</b> abre o login do Google em outra aba; escolha o canal e autorize. Nome, @handle e inscritos vêm do próprio YouTube.<br>
               <b>TikTok:</b> exige a chave Upload-Post em Configurações; abre a página do Upload-Post para você entrar na conta TikTok.<br>
-              Os vídeos são sempre publicados como <b>privados</b>.
+              A visibilidade padrão pode ser alterada neste perfil antes de conectar o canal.
             </div>
           </div></div>` : `
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px">
@@ -551,7 +570,7 @@ window.CKV = (function () {
           <div class="card-bd"><dl class="kv">
             <dt>Status</dt><dd>${chStatus(c.status)}</dd>
             <dt>Via</dt><dd>${c.platform === "TikTok" ? "Upload-Post" : "Google OAuth (YouTube Data API)"}</dd>
-            <dt>Publicação</dt><dd>Sempre como <b>privado</b></dd>
+            <dt>Publicação</dt><dd>Sempre como <b>${c.publish_privacy === "public" ? "público" : "privado"}</b></dd>
           </dl>
           <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn sm primary" data-ch-act="reconnect">Reconectar</button>
@@ -1219,7 +1238,7 @@ window.CKV = (function () {
   // ==========================================================================
   /**
    * Renderiza o estúdio principal de criação de vídeos:
-   * - Configuração do tópico (com chips de sugestão rápida)
+   * - Configuração do tópico e seleção de canal
    * - Roteiro personalizado opcional
    * - Seleção de canal cadastrado
    * - Monitor do pipeline em tempo real com 5 etapas:
@@ -1248,20 +1267,14 @@ window.CKV = (function () {
       </div>`;
   }
   function gerador(scope) {
-    return screenTabs([
-      ["gerar", "Gerador", studioCreative(scope, "long")],
-      ["parametros", "Parâmetros de vídeo", studioParams("long")],
-      ["prompt", "Prompt do sistema", systemPromptPane("long")],
-      ["biblioteca", "Biblioteca", libraryCard("long")],
-    ]);
+    return `<div class="card-note" style="margin-bottom:14px"><button class="btn sm" type="button" data-view="criar">Trocar canal ou formato</button> · Os parâmetros seguem o perfil do canal; alterações nesta tela valem apenas para esta geração.</div>
+      ${studioCreative(scope, "long")}
+      <details class="card" id="genAdvanced" style="margin-top:16px"><summary class="card-hd" style="cursor:pointer"><span class="card-title">Opções avançadas desta geração</span></summary><div class="card-bd">${studioParams("long")}${systemPromptPane("long")}</div></details>`;
   }
   function youtubeShorts(scope) {
-    return screenTabs([
-      ["gerar", "Gerador", studioCreative(scope, "short")],
-      ["parametros", "Parâmetros de vídeo", studioParams("short")],
-      ["prompt", "Prompt do sistema", systemPromptPane("short")],
-      ["biblioteca", "Biblioteca", libraryCard("short")],
-    ]);
+    return `<div class="card-note" style="margin-bottom:14px"><button class="btn sm" type="button" data-view="criar">Trocar canal ou formato</button> · Os parâmetros seguem o perfil do canal; alterações nesta tela valem apenas para esta geração.</div>
+      ${studioCreative(scope, "short")}
+      <details class="card" id="genAdvanced" style="margin-top:16px"><summary class="card-hd" style="cursor:pointer"><span class="card-title">Opções avançadas desta geração</span></summary><div class="card-bd">${studioParams("short")}${systemPromptPane("short")}</div></details>`;
   }
   /* One form, two formats: the engine (Turbo, approval, publishing) is shared; what differs is the
      aspect, the duration control, the script writer and which channels may receive the video.
@@ -1269,20 +1282,20 @@ window.CKV = (function () {
      "Gerador" tab; studioParams (voice/render/subtitle knobs) gets its own tab. */
   function studioCreative(scope, format) {
     const isLong = format === "long";
-    const chips = ["Psicologia", "Profundezas", "Hábitos Ricos", "Espaço", "História Oculta"];
     const steps = [["Roteiro IA", "doc"], ["Keywords", "search"], ["Voz e Legendas", "mic"], ["Filmagens Stock", "grid"], ["Render HD", "activity"]];
     return `
       <div class="grid-2-1">
         <div class="card" style="margin-bottom:0" data-format="${format}">
           <div class="card-hd"><span class="card-title">${isLong ? "Vídeo longo para YouTube" : "Short para YouTube e TikTok"}</span><span class="spacer"></span><span class="badge plan-pro">${isLong ? "16:9 · 5–15 min" : "9:16 · 60–90 s"}</span></div>
           <div class="card-bd" style="display:flex;flex-direction:column;gap:16px">
+            <div class="card-note" style="padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2, var(--surface))">
+              <strong>Geração automática com IA do canal</strong><br>
+              Este botão usa o provedor de IA configurado, o perfil e os prompts do canal, o prompt desta tela e os parâmetros de vídeo. Se estiverem vazios, gera tema, requisitos personalizados, roteiro e palavras-chave; em seguida, inicia a renderização. ${isLong ? "Os campos preenchidos são preservados; o vídeo longo é gerado para um canal por vez." : "Para um canal, os campos preenchidos são preservados; para dois, servem de base à adaptação individual."} A automação recorrente fica em Canais → Operador automático; este botão gera agora.
+            </div>
             <div>
-              <label class="dr-sec" style="margin:0 0 7px">Tema / tópico do vídeo</label>
-              <textarea class="np-input" id="genTopicInput" rows="2" style="width:100%;resize:vertical" placeholder="Ex: 5 fatos inacreditáveis sobre as profundezas do oceano"></textarea>
-              <div style="display:flex;flex-wrap:wrap;gap:7px;margin-top:9px">
-                ${chips.map(c => `<button class="btn sm" type="button" data-chip="${c}">${c}</button>`).join("")}
-              </div>
-              <div class="card-note" style="margin-top:8px">A IA gera o roteiro completo e as palavras-chave de filmagem a partir deste tema.</div>
+              <label class="dr-sec" style="margin:0 0 7px">Tema / tópico do vídeo (opcional)</label>
+              <textarea class="np-input" id="genTopicInput" rows="2" style="width:100%;resize:vertical" placeholder="Deixe vazio para gerar a partir do canal, ou escreva uma ideia para adaptar"></textarea>
+              <div class="card-note" style="margin-top:8px">${isLong ? "O tema e o roteiro respeitam o canal e os parâmetros de duração e voz." : "Cada canal selecionado recebe seu próprio Short, inclusive quando os canais são da mesma plataforma."}</div>
             </div>
             <div>
               <div style="display:flex;justify-content:space-between;align-items:center;margin:0 0 7px"><label class="dr-sec" style="margin:0">Roteiro (opcional)</label>${isLong
@@ -1292,30 +1305,34 @@ window.CKV = (function () {
               <div class="card-note" id="genScriptStats" style="margin-top:6px;font-family:inherit"></div>
             </div>
             <details>
-              <summary class="dr-sec" style="margin:0;cursor:pointer">Configurações avançadas do roteiro</summary>
+              <summary class="dr-sec" style="margin:0;cursor:pointer">Roteiro e filmagens: opções avançadas</summary>
               <div style="display:flex;flex-direction:column;gap:12px;margin-top:10px">
                 <div>
                   <label class="dr-sec" style="margin:0 0 7px">Requisitos personalizados do roteiro</label>
                   <textarea class="np-input" id="genScriptRequirements" rows="2" style="width:100%;resize:vertical" placeholder="Ex: use um tom mais leve, estilo TikTok, com uma abertura mais intrigante"></textarea>
                 </div>
               </div>
-            </details>
             <div id="genTermsRow">
               <div style="display:flex;justify-content:space-between;align-items:center;margin:0 0 7px"><label class="dr-sec" style="margin:0">Palavras-chave das filmagens (opcional)</label><button class="btn sm" type="button" id="genTermsAiBtn">Gerar palavras-chave</button></div>
               <input class="np-input" id="genTermsInput" style="width:100%" placeholder="deep ocean, ocean life — separadas por vírgula (em inglês o Pexels acha mais)" />
             </div>
-            <div>
-              <label class="dr-sec" style="margin:0 0 7px">${isLong ? "Selecione o canal" : "Publicar nos canais"}</label>
+            </details>
+            <div id="genChannelRow" ${isLong && localStorage.getItem("moneyprint-create-channel-long") ? "hidden" : ""}>
+              <label class="dr-sec" style="margin:0 0 7px">${isLong ? "Selecione o canal" : "Segundo canal (opcional)"}</label>
               ${isLong
-                ? `<select class="set-select" id="genChannelSelect" style="width:100%"><option value="">Escolher depois</option>${D.CHANNELS.filter(c => c.status === "connected" && c.platform === "YouTube").map(c => `<option value="${esc(c.id)}">${esc(c.name)} · YouTube</option>`).join("")}</select>`
+                ? `<select class="set-select" id="genChannelSelect" style="width:100%"><option value="">Selecione um canal</option>${D.CHANNELS.filter(c => c.status === "connected" && c.platform === "YouTube").map(c => `<option value="${esc(c.id)}">${esc(c.name)} · YouTube</option>`).join("")}</select>`
                 : `<div id="genChannelList" style="display:flex;flex-direction:column;gap:6px"></div>`}
-              <div class="card-note" id="genChannelProfileNote" style="margin-top:6px;font-family:inherit">Sem canal selecionado: serão usados os padrões técnicos do projeto.</div>
-              <div class="card-note" style="margin-top:6px;font-family:inherit">Canais conectados em <a href="#" data-view="clientes" style="color:var(--accent)">Canais</a>.${isLong ? " Vídeos longos vão só para o YouTube." : " No máximo um canal por plataforma."}</div>
+              <div class="card-note" style="margin-top:6px;font-family:inherit">${isLong ? "Vídeos longos vão só para um canal do YouTube por geração." : "O canal principal veio de Criar. Você pode adicionar mais um canal; cada um receberá seu próprio Short."}</div>
             </div>
-            <button class="btn primary" id="genStartBtn" style="padding:11px">${isLong ? "Gerar vídeo longo" : "Gerar Short"}</button>
+            <div class="card-note" id="genChannelProfileNote" style="font-family:inherit">Selecione um canal para gerar.</div>
+            <button class="btn primary" id="genStartBtn" style="padding:11px">${isLong ? "Gerar vídeo longo automaticamente" : "Gerar Short automaticamente"}</button>
           </div>
         </div>
         <div style="display:flex;flex-direction:column;gap:20px">
+          <div class="card" style="margin-bottom:0">
+            <div class="card-hd"><span class="card-title">Resultados da geração automática por canal</span><span class="spacer"></span><span class="card-note" id="genBatchStatus">Aguardando</span></div>
+            <div class="card-bd" id="genBatchResults" aria-live="polite"><span class="card-note">Os temas, requisitos, roteiros e palavras-chave gerados aparecerão aqui, separados por canal.</span></div>
+          </div>
           <div class="card" style="margin-bottom:0">
             <div class="card-hd"><span class="card-title">Pipeline em tempo real</span><span class="spacer"></span><button class="btn sm" id="genStopBtn" style="display:none">Parar</button><span class="card-note" id="genPipelineNote">Pronto para gerar</span></div>
             <div class="card-bd">
@@ -1342,7 +1359,7 @@ window.CKV = (function () {
               <div style="display:flex;gap:8px;margin-top:14px">
                 <button class="btn primary" id="genDownloadBtn" style="flex:1" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg> Baixar MP4</button>
                 <button class="btn" id="genPublishBtn" style="flex:1" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px"><path d="M12 21V9M7 14l5-5 5 5M5 3h14"/></svg> Publicar (privado)</button>
-                <button class="btn" data-toast="Caminho copiado"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> Copiar Caminho</button>
+                <button class="btn" id="genCopyLinkBtn" type="button" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> Copiar link</button>
               </div>
               <div id="genMetaBox" hidden>
                 <div class="dr-sec" style="margin-top:18px">Metadados da publicação</div>
@@ -1406,7 +1423,7 @@ window.CKV = (function () {
               <input class="np-input" id="genVideoCount" style="width:100%" type="number" min="1" max="5" value="1" /></div>`}
             <div><label class="dr-sec" style="margin:0 0 7px">Imagens</label>
               <select class="set-select" id="genConcatMode" style="width:100%"><option value="script" selected>Seguir o roteiro (recomendado)</option><option value="random">Aleatória</option></select>
-              <div class="card-note" style="margin-top:6px">"Seguir o roteiro" busca uma filmagem para cada trecho narrado, na ordem. Gere as palavras-chave antes para ver quantos cortes vão ser usados.</div></div>
+              <div class="card-note" style="margin-top:6px">"Seguir o roteiro" busca uma filmagem para cada trecho narrado, na ordem. As palavras-chave são preparadas ao clicar em Gerar.</div></div>
             <div><label class="dr-sec" style="margin:0 0 7px">Transição</label>
               <select class="set-select" id="genTransition" style="width:100%"><option value="">Nenhuma</option><option value="Shuffle">Aleatória</option><option value="FadeIn">Fade in</option><option value="FadeOut">Fade out</option><option value="SlideIn">Slide in</option><option value="SlideOut">Slide out</option><option value="ZoomIn">Zoom in</option><option value="ZoomOut">Zoom out</option></select></div>
             <div><label class="dr-sec" style="margin:0 0 7px">Velocidade do clipe</label>
@@ -1447,14 +1464,16 @@ window.CKV = (function () {
 
   /* ── Agentes ────────────────────────────────── */
   /* Panes are filled by MoneyPrinterRuntime.bindAgents when opened: they all need live Gateway data. */
-  function agentes() {
-    const tabs = [["estrategia", "Estratégia"], ["analytics", "Analytics"], ["agendamento", "Agendamento"], ["operador", "Operador automático"]];
+  function agentes(visible) {
+    const tabs = [["estrategia", "Estratégia"], ["analytics", "Analytics"], ["agendamento", "Agendamento"], ["operador", "Operador automático"], ["revisoes", "Revisões de vídeo"]];
+    const shown = Array.isArray(visible) && visible.length ? visible : tabs.map(tab => tab[0]);
+    const initial = shown[0];
     return `
-      <div class="card" style="margin-bottom:0" id="agentsCard">
-        <div class="view-tabs" id="agTabs" style="padding:0 18px;flex-wrap:wrap">${tabs.map((t, i) =>
-          `<button class="view-tab ${i ? "" : "is-active"}" data-agtab="${t[0]}">${t[1]}</button>`).join("")}</div>
+      <div class="card" style="margin-bottom:0" id="agentsCard" data-initial-tab="${initial}">
+        <div class="view-tabs" id="agTabs" style="padding:0 18px;flex-wrap:wrap">${tabs.map(t =>
+          `<button class="view-tab ${t[0] === initial ? "is-active" : ""}" data-agtab="${t[0]}" ${shown.includes(t[0]) ? "" : "hidden"}>${t[1]}</button>`).join("")}</div>
         <div class="card-bd">
-          <div data-agpane="estrategia">
+          <div data-agpane="estrategia" ${initial === "estrategia" ? "" : "hidden"}>
             <div class="card-note" style="font-family:inherit;margin-bottom:12px">Sugere temas a partir do nicho do canal, do que está em alta no YouTube e do que você já produziu.</div>
             <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
               <div class="md-field" style="min-width:220px"><label>Canal</label><select class="set-select" style="width:100%" id="agStrategyChannel"><option value="">Selecione um canal…</option></select></div>
@@ -1463,20 +1482,26 @@ window.CKV = (function () {
             </div>
             <div id="agStrategyList" style="display:flex;flex-direction:column;gap:10px;margin-top:16px"></div>
           </div>
-          <div data-agpane="analytics" hidden>
+          <div data-agpane="analytics" ${initial === "analytics" ? "" : "hidden"}>
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
               <span class="card-note" style="font-family:inherit;flex:1">Desempenho real dos vídeos publicados no YouTube. A nota (0–100) compara cada vídeo com a mediana do próprio canal.</span>
               <button class="btn sm" id="agAnalyticsBtn" type="button">Atualizar métricas</button>
             </div>
             <div id="agAnalyticsBody" style="margin-top:12px"></div>
           </div>
-          <div data-agpane="agendamento" hidden><div id="agScheduleBody"></div></div>
-          <div data-agpane="operador" hidden>
-            <div class="card-note" style="font-family:inherit;margin-bottom:12px">Gera vídeos sozinho na frequência escolhida e prepara os metadados. Nada é publicado sem a sua aprovação.</div>
+          <div data-agpane="agendamento" ${initial === "agendamento" ? "" : "hidden"}><div id="agScheduleBody"></div></div>
+          <div data-agpane="operador" ${initial === "operador" ? "" : "hidden"}>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+              <span class="card-note" style="font-family:inherit;flex:1">Gera vídeos sozinho na frequência escolhida e prepara os metadados. Nada é publicado sem a sua aprovação.</span>
+              <button class="btn sm" id="agOperatorRefreshBtn" type="button">Atualizar trabalhos</button>
+            </div>
             <div id="agOperatorBody" style="display:flex;flex-direction:column;gap:12px"></div>
+            <div class="dr-sec" style="margin-top:20px">Trabalhos do operador</div>
+            <div id="agInProgressBody"></div>
             <div class="dr-sec" style="margin-top:20px">Aguardando sua aprovação</div>
             <div id="agAwaitingBody"></div>
           </div>
+          <div data-agpane="revisoes" ${initial === "revisoes" ? "" : "hidden"}><div class="card-note" style="margin-bottom:12px">Execuções por canal, curadoria visual e relatórios de qualidade. Abra uma geração para escolher outra imagem ou clipe e retomar um trecho pausado.</div><button class="btn sm" id="agReviewsRefresh" type="button">Atualizar revisões</button><div id="agReviewsBody" style="margin-top:12px"></div></div>
         </div>
       </div>`;
   }
@@ -1510,8 +1535,8 @@ window.CKV = (function () {
   /* ── Growth OS ──────────────────────────────── */
   function growth() {
     const channelOptions = D.CHANNELS.map(channel => `<option value="${esc(channel.id)}">${esc(channel.name)} · ${esc(channel.platform)}</option>`).join("");
-    const metric = (id, label, value) => `<div class="md-field"><label for="${id}">${label}</label><input class="np-input" id="${id}" type="number" min="0" step="any" value="${value}" style="width:100%" /></div>`;
-    const dimension = (id, label, value) => `<div class="md-field"><label for="${id}">${label}</label><input class="np-input" id="${id}" type="number" min="0" max="100" value="${value}" style="width:100%" /></div>`;
+    const metric = (id, label, example) => `<div class="md-field"><label for="${id}">${label}</label><input class="np-input" id="${id}" type="number" min="0" step="any" placeholder="Exemplo: ${example}" style="width:100%" /></div>`;
+    const dimension = (id, label, example) => `<div class="md-field"><label for="${id}">${label}</label><input class="np-input" id="${id}" type="number" min="0" max="100" placeholder="Exemplo: ${example}" style="width:100%" /></div>`;
     return `
       <div id="growthRoot">
         <div class="card" style="margin-bottom:16px">
@@ -1528,7 +1553,7 @@ window.CKV = (function () {
           <div class="card" style="margin:0">
             <div class="card-hd"><span class="card-title">Meta YPP qualificada</span></div>
             <div class="card-bd">
-              <div class="grid2" style="margin:0">
+              <div class="card-note" style="margin-bottom:10px">Preencha com métricas reais do canal antes de calcular. Campos vazios não são tratados como resultados medidos.</div><div class="grid2" style="margin:0">
                 ${metric("growthSubscribers", "Inscritos atuais", 742)}
                 ${metric("growthSubscriberTarget", "Meta de inscritos", 1000)}
                 ${metric("growthWatchHours", "Horas qualificadas", 2860)}
@@ -1601,7 +1626,7 @@ window.CKV = (function () {
   function notifRows(list) {
     if (!list.length) return `<div class="empty"><div class="empty-t">Nenhuma notificação</div><div class="empty-s">Você está em dia.</div></div>`;
     return list.map(n => `
-      <div class="alert-row ${n.read ? "" : "is-unread"}" data-notif="${n.id}" data-goto="${n.view}" style="cursor:pointer">
+      <div class="alert-row ${n.read ? "" : "is-unread"}" data-notif="${n.id}" data-goto="${n.view}" ${n.job_id ? `data-job-id="${esc(n.job_id)}"` : ""} style="cursor:pointer">
         <span class="sev-dot ${n.sev === "ok" ? "info" : n.sev}" style="${n.sev === "ok" ? "background:var(--ok);box-shadow:0 0 0 3px var(--ok-soft, rgba(16,185,129,.18))" : ""}"></span>
         <span class="alert-main"><span class="alert-title">${esc(n.title)}${n.read ? "" : ' <span class="badge plan-pro" style="margin-left:6px;font-size:10px">nova</span>'}</span>
           <div class="alert-meta"><span>${esc(n.sub)}</span></div></span>
@@ -1609,7 +1634,7 @@ window.CKV = (function () {
       </div>`).join("");
   }
 
-  return { overview, usuarios, logs, billing, clientes, custosIA, videoGrids, configuracoes, gerador, notificacoes,
+  return { overview, usuarios, logs, billing, clientes, custosIA, videoGrids, configuracoes, gerador, notificacoes, libraryCard,
            alertRows, userRows, logRows, orgRows, userDrawer, logDrawer, orgDrawer, perfilUsuario, filtersBar,
            organizacao, orgRec, newOrgRec, canais, canaisHead, canalRows, canalRec, newCanalRec, canal, videoList, youtubeShorts, agentes, assistantChat, growth, jobsWorkers };
 })();

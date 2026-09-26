@@ -5,6 +5,7 @@ services:
       dockerfile: gateway/Dockerfile
     environment:
       APP_DATA_DIR: /runtime
+      COCKPIT_SQLITE_JOURNAL_MODE: ${COCKPIT_SQLITE_JOURNAL_MODE:-DELETE}
       TURBO_BASE_URL: http://moneyprinterturbo:8080
       GROWTH_DATABASE_URL: postgresql://${GROWTH_POSTGRES_USER:-moneyprinter}:${GROWTH_POSTGRES_PASSWORD:-moneyprinter-local}@postgresql:5432/${GROWTH_POSTGRES_DB:-moneyprinter}
       TEMPORAL_ADDRESS: temporal:7233
@@ -37,8 +38,55 @@ services:
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/api/health/ready')"]
       interval: 15s
-      timeout: 5s
+      timeout: 20s
+      start_period: 90s
       retries: 5
+
+  cockpit-operator:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    command: ["python", "-m", "gateway.operator_worker"]
+    environment:
+      APP_DATA_DIR: /runtime
+      COCKPIT_SQLITE_JOURNAL_MODE: ${COCKPIT_SQLITE_JOURNAL_MODE:-DELETE}
+      TURBO_BASE_URL: http://moneyprinterturbo:8080
+      MPT_API_KEY_FILE: /run/secrets/mpt_api_key
+      COCKPIT_ADMIN_FILE: /runtime/secrets/admin.json
+      SHORT_STALE_MINUTES: ${SHORT_STALE_MINUTES:-45}
+      LONG_STALE_MINUTES: ${LONG_STALE_MINUTES:-180}
+      QUEUE_STALE_MINUTES: ${QUEUE_STALE_MINUTES:-360}
+    volumes:
+      - ./runtime:/runtime
+    secrets:
+      - mpt_api_key
+    depends_on:
+      cockpit-api:
+        condition: service_healthy
+      moneyprinterturbo:
+        condition: service_healthy
+    restart: unless-stopped
+
+  cockpit-generation-worker:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    command: ["python", "-m", "gateway.generation_worker"]
+    environment:
+      APP_DATA_DIR: /runtime
+      COCKPIT_SQLITE_JOURNAL_MODE: ${COCKPIT_SQLITE_JOURNAL_MODE:-DELETE}
+      TURBO_BASE_URL: http://moneyprinterturbo:8080
+      MPT_API_KEY_FILE: /run/secrets/mpt_api_key
+    volumes:
+      - ./runtime:/runtime
+    secrets:
+      - mpt_api_key
+    depends_on:
+      cockpit-api:
+        condition: service_healthy
+      moneyprinterturbo:
+        condition: service_healthy
+    restart: unless-stopped
 
   moneyprinterturbo:
     build:
@@ -55,13 +103,19 @@ services:
     volumes:
       - ./runtime/moneyprinter/config.toml:/MoneyPrinterTurbo/config.toml:ro
       - moneyprinter-storage:/MoneyPrinterTurbo/storage
+      - ./runtime/curated_materials:/MoneyPrinterTurbo/storage/local_videos/curated:ro
+      - type: bind
+        source: ${ARIAL_FONT_FILE:-C:/Windows/Fonts/arial.ttf}
+        target: /MoneyPrinterTurbo/resource/fonts/Arial.ttf
+        read_only: true
     depends_on:
       redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ping')"]
       interval: 20s
-      timeout: 8s
+      timeout: 20s
+      start_period: 90s
       retries: 10
 
   redis:

@@ -57,7 +57,7 @@
   <aside class="assistant-panel" id="assistantPanel" aria-label="Chat do assistente" aria-hidden="true">
     <div class="assistant-panel-header">
       <div class="assistant-panel-heading"><span class="assistant-avatar">MP</span><div><strong>Assistente</strong><div class="assistant-panel-caption">Converse sobre o Growth OS e outras funções</div></div></div>
-      <button class="icon-btn" id="assistantPanelClose" type="button" aria-label="Fechar chat" title="Fechar chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      <div style="display:flex;gap:5px"><button class="btn sm" id="assistantPanelExpand" type="button" aria-label="Expandir chat" title="Expandir chat">Expandir</button><button class="icon-btn" id="assistantPanelClose" type="button" aria-label="Fechar chat" title="Fechar chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
     </div>
     <div class="assistant-panel-content" id="assistantPanelContent"></div>
   </aside>
@@ -76,6 +76,7 @@
   <script src="shared/cockpit-data.js"></script>
   <script src="shared/cockpit-views.js?v=20260922assistant-chat"></script>
   <script src="shared/moneyprinter-runtime.js?v=20260922assistant-chat"></script>
-  <script src="shared/cockpit-app.js?v=20260922assistant-chat"></script>
+  <script src="shared/cockpit-flow.js?v=20260924simplify"></script>
+  <script src="shared/cockpit-app.js?v=20260924simplify"></script>
 </body>
 </html>

@@ -30,9 +30,21 @@ O healthcheck de readiness é `GET /api/health/ready`; liveness é `GET /api/hea
 
 O Turbo baixa até três materiais em paralelo, reutiliza um cache local de 10 GB por 14 dias e usa Pexels, Pixabay e Coverr nessa ordem quando um provedor não retorna um clipe válido. As variáveis `MATERIAL_*` em `.env.example` permitem ajustar esses limites sem colocar chaves no Docker ou no navegador. O encoder final continua sendo `libx264`; não há redução de resolução, FPS, áudio ou legendas.
 
-As telas mantidas são: visão geral, canais, gerador longo, Shorts, agentes, analytics, logs, jobs, notificações, configurações e login.
+O menu principal segue o trabalho diário: **Início**, **Criar**, **Produções**, **Canais**, **Crescimento** e **Resultados**. Em Criar, escolha primeiro o canal e depois Short ou vídeo longo; o perfil do canal preenche os parâmetros, e os ajustes desta geração ficam em Opções avançadas. Produções reúne trabalhos, revisões, biblioteca e publicação. O chat fica no botão Chat; notificações, configurações e logs ficam no topo.
 
-Publicações reais continuam uma ação explícita do operador; a reconstrução e os testes não publicam nem consomem créditos externos.
+Rascunhos são guardados por canal e formato no navegador. Ao abrir um canal pela primeira vez, um rascunho antigo compatível com aquele canal é recuperado sem apagar a cópia original. As rotas de API e os dados persistidos no servidor mantêm os contratos anteriores.
+
+Publicações manuais continuam uma ação explícita do operador. Em **Agentes → Operador**, cada canal do YouTube pode receber autorização individual para publicação automática e uma grade de dias, horário e fuso IANA. A autorização começa desligada. O worker `cockpit-operator` gera o vídeo na cadência configurada, verifica arquivo e metadados, envia ao YouTube como privado com `publishAt` e reconcilia a publicação pública. TikTok e canais sem autorização continuam em revisão. Falhas pausam o operador e aparecem em Agentes/Notificações; salvar novamente o operador após corrigir a causa limpa a pausa. Envios de resultado incerto exigem conferência no YouTube antes de qualquer nova tentativa.
+
+O agendador roda no serviço `cockpit-operator`, separado da API. `docker compose ps cockpit-operator` e `docker compose logs cockpit-operator --tail 100` mostram seu estado. Os testes locais simulam o YouTube e não publicam nem consomem créditos externos; a validação real requer uma conta de teste e um projeto de API habilitado para publicação pública.
+
+## Qualidade da geração por canal
+
+Os roteiros gerados recebem orientações de abertura, progressão, exemplos concretos, conclusão e texto próprio para narração. Uma reprovação editorial permite uma tentativa automática de correção; roteiros enviados ou revisados manualmente continuam sob controle do usuário. O painel mostra duração estimada, quantidade de palavras e frases longas. Essas estimativas não substituem a duração medida no áudio.
+
+A curadoria compara até cinco candidatos por cena e escolhe entre os aprovados por relevância, movimento e variedade. Downloads priorizam a versão Full HD disponível para evitar transferir 4K desnecessariamente. Até três cenas são avaliadas simultaneamente; resultados concluídos são persistidos e reaproveitados na retomada. A inspeção final também avalia até três quadros simultaneamente, sem bloquear a renovação da reserva do worker durante o processamento de mídia.
+
+A revisão final mede o áudio com FFmpeg e bloqueia volume de pico de -40 dB ou menos e silêncios acima de quatro segundos, além dos controles existentes de imagem e duração. Essa medição avalia o áudio misturado: não transcreve a voz nem comprova pronúncia ou sincronização labial. Os provedores e perfis configurados continuam sendo utilizados.
 
 ## Growth OS P0
 

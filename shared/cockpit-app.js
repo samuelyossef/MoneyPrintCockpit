@@ -12,7 +12,7 @@
  */
 (function () {
   // Referências aos módulos de dados (CK) e templates visuais (CKV)
-  const D = window.CK, V = window.CKV;
+  const D = window.CK, V = window.CKV, F = window.CockpitFlow;
   const LS = "lattice-cockpit-v1"; // Chave de persistência no localStorage
   const safe = value => String(value == null ? "" : value).replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 
@@ -24,8 +24,12 @@
    * - render: Função de template em `cockpit-views.js` responsável pelo HTML
    */
   const VIEWS = {
-    overview:  { title: "Visão geral", sub: "Estado do MoneyPrinter em tempo real", render: V.overview },
-    clientes:  { title: "Canais", sub: "Contas conectadas, plataformas e métricas de publicação", render: V.canais },
+    overview:  { title: "Início", sub: "Estado do MoneyPrinter em tempo real", render: V.overview },
+    criar:     { title: "Criar", sub: "Escolha um canal e o formato do vídeo", render: F.criar },
+    producoes: { title: "Produções", sub: "Trabalhos, revisões, biblioteca e publicação", render: F.producoes },
+    clientes:  { title: "Canais", sub: "Contas, perfis e automação", render: F.canais },
+    crescimento: { title: "Crescimento", sub: "Estratégia e planejamento", render: F.crescimento },
+    resultados: { title: "Resultados", sub: "Métricas dos canais e vídeos publicados", render: F.resultados },
     logs:      { title: "Logs e traces", sub: "Fluxo de eventos, erros e latência por requisição", render: V.logs },
     notificacoes: { title: "Notificações", sub: "Alertas de geração, provedores e sistema", render: V.notificacoes },
     custos:    { title: "Analytics", sub: "Desempenho da plataforma e dos canais conectados", render: V.custosIA },
@@ -33,31 +37,20 @@
     gerador:   { title: "Gerador de Vídeo", sub: "Vídeos longos 16:9 para YouTube", render: V.gerador },
     youtube:   { title: "Shorts", sub: "Vídeos verticais para YouTube Shorts e TikTok", render: V.youtubeShorts },
     agentes:   { title: "Agentes", sub: "Estratégia, analytics, agendamento e operador automático", render: V.agentes },
-    assistant: { title: "Assistente", sub: "Use linguagem natural para trabalhar com o MoneyPrinter", render: V.assistantChat },
     growth:    { title: "Growth OS", sub: "Metas YPP, oportunidade e planejamento durável", render: V.growth },
     jobsWorkers: { title: "Jobs e workers", sub: "Trabalhos na fila, em andamento ou com falha", render: V.jobsWorkers },
   };
 
   const NAV = {
     super: [
-      { section: "Plataforma", items: [
-        { v: "overview", label: "Visão geral", icon: "grid" },
-        { v: "clientes", label: "Canais", icon: "spark", get count() { return D.CHANNELS.length ? String(D.CHANNELS.length) : ""; } },
+      { section: "Trabalho", items: [
+        { v: "overview", label: "Início", icon: "grid" },
+        { v: "criar", label: "Criar", icon: "spark" },
+        { v: "producoes", label: "Produções", icon: "yt", get count() { return D.PENDING_JOBS && D.PENDING_JOBS.length ? String(D.PENDING_JOBS.length) : ""; } },
+        { v: "clientes", label: "Canais", icon: "building", get count() { return D.CHANNELS.length ? String(D.CHANNELS.length) : ""; } },
+        { v: "crescimento", label: "Crescimento", icon: "activity" },
+        { v: "resultados", label: "Resultados", icon: "activity" },
       ]},
-      { section: "Sistema", items: [{ v: "notificacoes", label: "Notificações", icon: "bell", count: "" }]},
-      { section: "Studio", items: [
-        { v: "assistant", label: "Assistente", icon: "spark" },
-        { v: "growth", label: "Growth OS", icon: "activity" },
-        { v: "gerador", label: "Gerador de Vídeo", icon: "spark" },
-        { v: "youtube", label: "Shorts", icon: "yt" },
-        { v: "agentes", label: "Agentes", icon: "spark" },
-        { v: "custos", label: "Analytics", icon: "activity" },
-      ]},
-      { section: "Observabilidade", items: [
-        { v: "logs", label: "Logs e traces", icon: "logs" },
-        { v: "jobsWorkers", label: "Jobs e workers", icon: "activity", get count() { return D.PENDING_JOBS && D.PENDING_JOBS.length ? String(D.PENDING_JOBS.length) : ""; } },
-      ]},
-      { section: "Conta", items: [{ v: "config", label: "Configurações", icon: "settings" }]},
     ],
   };
 
@@ -84,11 +77,14 @@
   /* ── estado ─────────────────────────────────── */
   const saved = (() => { try { return JSON.parse(localStorage.getItem(LS)) || {}; } catch (e) { return {}; } })();
   const S = Object.assign({
-    view: "overview", persona: "super", org: "all", ws: "AI Platform",
+    view: "overview", persona: "super", org: "all", ws: "AI Platform", productionFormat: "short", productionTab: "jobs",
     period: "30d", env: "Produção", theme: "light", soon: null,
   }, saved);
   const save = () => { try { localStorage.setItem(LS, JSON.stringify(S)); } catch (e) {} };
-  const scope = () => ({ org: S.org, period: S.period, env: S.env, cfgTab: S.cfgTab });
+  const scope = () => ({ org: S.org, period: S.period, env: S.env, cfgTab: S.cfgTab, productionFormat: S.productionFormat, productionTab: S.productionTab });
+  const legacyAssistant = S.view === "assistant";
+  const legacyViews = { jobsWorkers: "producoes", agentes: "crescimento", growth: "crescimento", custos: "resultados", assistant: "overview" };
+  if (legacyViews[S.view]) { S.view = legacyViews[S.view]; save(); }
 
   document.documentElement.setAttribute("data-theme", S.theme);
 
@@ -107,7 +103,7 @@
         ${groups.map(g => `
           <div class="sb-section"><span class="sb-label">${g.section}</span></div>
           <div class="sb-nav">${g.items.map(it => `
-            <button class="sb-item ${it.v === S.view || (S.view === "soon" && it.v === "soon:" + S.soon) ? "is-active" : ""}" data-view="${it.v}" title="${it.label}">
+            <button class="sb-item ${it.v === S.view || (it.v === "criar" && ["gerador", "youtube"].includes(S.view)) ? "is-active" : ""}" data-view="${it.v}" title="${it.label}">
               ${ic(it.icon)}<span class="sb-label">${it.label}</span>${it.v === "notificacoes" ? (D.NOTIFICATIONS.filter(n => !n.read).length ? `<span class="count">${D.NOTIFICATIONS.filter(n => !n.read).length}</span>` : "") : (it.count ? `<span class="count">${it.count}</span>` : "")}
             </button>`).join("")}</div>`).join("")}
         </div>
@@ -131,14 +127,16 @@
         <span class="top-pill">LLM: <b style="font-weight:600">${safe(llm)}</b></span>
         <span class="top-pill"><span class="dot" style="background:${active ? "var(--warn)" : "var(--ok)"}"></span> ${safe(task)}</span>
         <button class="icon-btn assistant-panel-toggle" id="assistantPanelToggle" type="button" aria-label="Abrir chat do assistente" aria-expanded="false" title="Abrir chat do assistente">${ic("spark")}<span>Chat</span></button>
+        <button class="icon-btn" type="button" data-view="config" aria-label="Configurações" title="Configurações">${ic("settings")}</button>
+        <button class="icon-btn" type="button" data-view="logs" aria-label="Logs e traces" title="Logs e traces">${ic("logs")}</button>
         <button class="icon-btn" id="themeBtn" aria-label="Alternar tema">${ic(S.theme === "dark" ? "sun" : "moon")}</button>
         <div class="ctx">
           <button class="icon-btn" data-pop="notifPop" aria-label="Notificações">${ic("bell")}</button>
           <div class="pop to-right" id="notifPop" style="min-width:320px">
             <div class="pop-label">Notificações</div>
-            ${D.ALERTS.slice(0, 5).map(a => `<button class="pop-item" data-goto="${a.view}">
-              <span class="sev-dot ${a.sev}" style="margin-top:5px"></span>
-              <span><span style="color:var(--ink)">${a.title}</span><div class="sub">${a.org} · ${a.time}</div></span></button>`).join("")}
+            ${D.ALERTS.slice(0, 5).map(a => `<button class="pop-item" data-goto="${safe(a.view)}" ${a.job_id ? `data-job-id="${safe(a.job_id)}"` : ""}>
+              <span class="sev-dot ${safe(a.sev)}" style="margin-top:5px"></span>
+              <span><span style="color:var(--ink)">${safe(a.title)}</span><div class="sub">${safe(a.sub || "")} · ${safe(a.time || "")}</div></span></button>`).join("")}
           </div>
         </div>
       </div>`;
@@ -190,6 +188,8 @@
   }
 
   function go(view) {
+    if (view === "assistant") { setAssistantPanelOpen(true); document.body.classList.add("assistant-panel-expanded"); return; }
+    view = legacyViews[view] || view;
     if (view.startsWith("soon:")) { S.soon = view.slice(5); S.view = "soon"; }
     else { S.view = view; }
     save(); closePops(); renderSidebar(); renderView();
@@ -223,7 +223,16 @@
     const per = t.closest("[data-persona]");
     if (per) { S.persona = per.dataset.persona; S.view = "overview"; closePops(); save(); renderSidebar(); renderView(); return; }
     const nav = t.closest("[data-view]"); if (nav) { go(nav.dataset.view); return; }
-    const goto = t.closest("[data-goto]"); if (goto) { go(goto.dataset.goto); return; }
+    const goto = t.closest("[data-goto]"); if (goto) { if (goto.dataset.jobId) D.__openJob?.(goto.dataset.jobId); else go(goto.dataset.goto); return; }
+    const library = t.closest("[data-open-library]");
+    if (library) {
+      S.productionFormat = library.dataset.libraryKind === "horiz" ? "long" : "short";
+      S.productionTab = "library"; go("producoes");
+      const select = document.getElementById("ytLibrarySelect");
+      if (select) select.value = library.dataset.openLibrary;
+      select?.scrollIntoView({ block: "nearest" });
+      return;
+    }
     const copy = t.closest("[data-copy]");
     if (copy) {
       closePops();
@@ -246,6 +255,7 @@
     if (t.closest(".sb-backdrop")) { document.body.classList.remove("sidebar-open"); return; }
     if (t.closest(".dr-backdrop") || t.closest("#drClose")) { closeDrawer(); return; }
     if (t.closest("#assistantPanelToggle")) { setAssistantPanelOpen(!document.body.classList.contains("assistant-panel-open")); return; }
+    if (t.closest("#assistantPanelExpand")) { document.body.classList.toggle("assistant-panel-expanded"); return; }
     if (t.closest("#assistantPanelClose") || t.closest("#assistantPanelBackdrop")) { setAssistantPanelOpen(false); return; }
     if (t.closest("#newOrgBtn")) { draft = V.newOrgRec(); S.orgTab = "dados"; go("orgnew"); return; }
     if (t.closest("#newChBtn")) { draftCh = V.newCanalRec(); S.chTab = "dados"; go("canalnovo"); return; }
@@ -328,6 +338,7 @@
 
   function setAssistantPanelOpen(open) {
     document.body.classList.toggle("assistant-panel-open", open);
+    if (!open) document.body.classList.remove("assistant-panel-expanded");
     const panel = document.getElementById("assistantPanel");
     const backdrop = document.getElementById("assistantPanelBackdrop");
     const toggle = document.getElementById("assistantPanelToggle");
@@ -364,7 +375,11 @@
       const [format, field] = el.dataset.vfield.split(".");
       rec.video_defaults = rec.video_defaults || {};
       rec.video_defaults[format] = rec.video_defaults[format] || {};
-      rec.video_defaults[format][field] = el.value.trim();
+      rec.video_defaults[format][field] = el.type === "checkbox" ? el.checked : el.type === "number" ? Number(el.value) : el.value.trim();
+    });
+    document.querySelectorAll("#viewBody [data-visual-guide]").forEach(el => {
+      rec.visual_guides = rec.visual_guides || { short: "", long: "" };
+      rec.visual_guides[el.dataset.visualGuide] = el.value.trim();
     });
   }
   function currentChannel() {
@@ -379,11 +394,8 @@
     if (!rec) return;
     collectChannel(rec);
     window.MoneyPrinterRuntime.saveChannel(rec.id, {
-      niche: rec.niche, language: rec.language, system_prompt: rec.system_prompt || "",
-      voice_name: rec.voice_name, voice_rate: Number(rec.voice_rate), voice_volume: Number(rec.voice_volume),
-      subtitle_enabled: !!rec.subtitle_enabled, subtitle_position: rec.subtitle_position,
-      font_size: Number(rec.font_size), text_fore_color: rec.text_fore_color, stroke_color: rec.stroke_color,
-      stroke_width: Number(rec.stroke_width), video_defaults: rec.video_defaults,
+      niche: rec.niche, language: rec.language, system_prompt: rec.system_prompt || "", publish_privacy: rec.publish_privacy || "private",
+      video_defaults: rec.video_defaults, visual_guides: rec.visual_guides || { short: "", long: "" },
     })
       .then(() => { S.chEditing = 0; save(); renderView(); showToast("Canal salvo"); })
       .catch(error => showToast(error.message));
@@ -566,15 +578,44 @@
   /* ── comportamentos por view ────────────────── */
   function afterRender() {
     const body = document.getElementById("viewBody");
+    const createRoot = body.querySelector("#createRoot");
+    if (createRoot) {
+      const channel = createRoot.querySelector("#createChannel"), format = createRoot.querySelector("#createFormat"), next = createRoot.querySelector("#createContinue"), note = createRoot.querySelector("#createProfileNote");
+      const update = () => {
+        const selected = D.CHANNELS.find(item => item.id === channel.value);
+        const longAllowed = selected && selected.platform === "YouTube";
+        format.querySelector('[value="long"]').disabled = !longAllowed;
+        if (!longAllowed && format.value === "long") format.value = "short";
+        next.disabled = !selected;
+        note.textContent = selected ? `${selected.name} · ${format.value === "long" ? "Vídeo longo" : "Short"} · voz, legendas e duração virão do perfil do canal.` : "O perfil do canal preencherá voz, legendas, duração e parâmetros do vídeo.";
+      };
+      channel.addEventListener("change", update); format.addEventListener("change", update);
+      next.addEventListener("click", () => {
+        if (!channel.value) return;
+        window.MoneyPrinterRuntime.selectCreateChannel(format.value, channel.value);
+        go(format.value === "long" ? "gerador" : "youtube");
+      });
+      update();
+    }
+    const productionTabs = body.querySelector("#productionTabs");
+    if (productionTabs) productionTabs.addEventListener("click", event => {
+      const tab = event.target.closest("[data-production-tab]"); if (!tab) return;
+      S.productionTab = tab.dataset.productionTab; save();
+      productionTabs.querySelectorAll("[data-production-tab]").forEach(item => item.classList.toggle("is-active", item === tab));
+      body.querySelectorAll("[data-production-pane]").forEach(pane => { pane.hidden = pane.dataset.productionPane !== tab.dataset.productionTab; });
+    });
+    body.querySelectorAll("[data-library-format]").forEach(tab => tab.addEventListener("click", () => { S.productionFormat = tab.dataset.libraryFormat; S.productionTab = "library"; save(); renderView(); }));
     const channelLanguage = body.querySelector('[data-cfield="language"]');
-    const channelVoice = body.querySelector('[data-cfield="voice_name"]');
+    const channelVoices = [...body.querySelectorAll('[data-vfield$=".voice_name"]')];
     const syncChannelVoices = () => {
-      if (!channelLanguage || !channelVoice) return;
+      if (!channelLanguage) return;
       const prefix = `${channelLanguage.value.split("-")[0]}-`;
-      [...channelVoice.options].forEach(option => { option.hidden = !option.value.startsWith(prefix); });
-      if (!channelVoice.value.startsWith(prefix)) channelVoice.value = [...channelVoice.options].find(option => option.value.startsWith(prefix))?.value || "";
+      channelVoices.forEach(channelVoice => {
+        [...channelVoice.options].forEach(option => { option.hidden = !option.value.startsWith(prefix); });
+        if (!channelVoice.value.startsWith(prefix)) channelVoice.value = [...channelVoice.options].find(option => option.value.startsWith(prefix))?.value || "";
+      });
     };
-    if (channelLanguage && channelVoice) {
+    if (channelLanguage && channelVoices.length) {
       syncChannelVoices();
       channelLanguage.addEventListener("change", syncChannelVoices);
     }
@@ -623,34 +664,32 @@
     /* notificações: marcar como lida / marcar todas */
     const notifBody = body.querySelector("#notifBody");
     if (notifBody) {
-      notifBody.addEventListener("click", e => {
+      notifBody.addEventListener("click", async e => {
         const row = e.target.closest("[data-notif]"); if (!row) return;
-        const n = D.NOTIFICATIONS.find(x => x.id === +row.dataset.notif);
-        if (n && !n.read) { n.read = true; renderSidebar(); renderView(); }
+        const n = D.NOTIFICATIONS.find(x => String(x.id) === row.dataset.notif);
+        if (n && !n.read) {
+          try {
+            await window.MoneyPrinterRuntime.request(`/notifications/${encodeURIComponent(n.id)}/read`, { method: "PATCH" });
+            n.read = true; renderSidebar(); renderView();
+          } catch (error) { showToast(error.message); }
+        }
       });
       const allBtn = body.querySelector("#notifReadAll");
-      if (allBtn) allBtn.addEventListener("click", e => {
+      if (allBtn) allBtn.addEventListener("click", async e => {
         e.stopPropagation();
-        D.NOTIFICATIONS.forEach(n => n.read = true);
-        renderSidebar(); renderView(); showToast("Todas as notificações marcadas como lidas");
+        try {
+          await window.MoneyPrinterRuntime.request("/notifications/read-all", { method: "POST" });
+          D.NOTIFICATIONS.forEach(n => n.read = true);
+          renderSidebar(); renderView(); showToast("Todas as notificações marcadas como lidas");
+        } catch (error) { showToast(error.message); }
       });
     }
 
     /* Gerador de vídeo real, via Gateway same-origin. */
-    const chipBtns = body.querySelectorAll("[data-chip]");
-    if (chipBtns.length) {
-      const topicInput = body.querySelector("#genTopicInput");
-      chipBtns.forEach(b => b.addEventListener("click", () => {
-        chipBtns.forEach(x => x.classList.remove("primary"));
-        b.classList.add("primary");
-        if (topicInput) topicInput.value = b.dataset.chip;
-      }));
-    }
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindGenerator(body, showToast);
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindConfigSettings(body, showToast);
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindYoutubeLibraryPublish(body, showToast);
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindAgents(body, showToast);
-    if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindAssistantChat(body);
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindGrowth(body, showToast);
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindAnalytics(body, showToast);
     if (window.MoneyPrinterRuntime) window.MoneyPrinterRuntime.bindJobsWorkers(body, showToast);
@@ -798,5 +837,6 @@
       assistantPanelContent.innerHTML = V.assistantChat("sideAssistant");
       window.MoneyPrinterRuntime.bindAssistantChat(assistantPanelContent, "sideAssistant");
     }
+    if (legacyAssistant) { setAssistantPanelOpen(true); document.body.classList.add("assistant-panel-expanded"); }
   })();
 })();
