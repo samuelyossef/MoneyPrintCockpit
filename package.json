@@ -1,11 +1,13 @@
 {
   "name": "moneyprint-cockpit-layout",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Frontend Dashboard do Moneyprint / Lattice Cockpit",
   "main": "server.js",
   "scripts": {
     "start": "docker compose up -d --wait",
-    "static": "node server.js"
+    "static": "node server.js",
+    "version:check": "node scripts/version.js check",
+    "version:bump": "node scripts/version.js bump"
   },
   "keywords": [
     "moneyprint",
