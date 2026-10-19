@@ -100,12 +100,13 @@ class GrowthStore:
     def create_workflow(self, *, workflow_id: UUID, channel_id: UUID, workflow_type: str, input_data: dict[str, Any]) -> dict[str, Any]:
         temporal_id = f"growth-{workflow_id}"
         with self._connect() as connection:
-            row = connection.execute(
+            cursor = connection.execute(
                 "INSERT INTO workflows(id, channel_id, temporal_workflow_id, workflow_type, state, input) "
                 "VALUES (%s, %s, %s, %s, 'planned', %s::jsonb) RETURNING *",
                 (workflow_id, channel_id, temporal_id, workflow_type, json.dumps(input_data)),
-            ).fetchone()
-            columns = [column.name for column in connection.execute("SELECT * FROM workflows LIMIT 0").description]
+            )
+            row = cursor.fetchone()
+            columns = [column.name for column in cursor.description]
         return dict(zip(columns, row, strict=True))
 
     def update_workflow(

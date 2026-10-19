@@ -25,6 +25,7 @@ html[data-theme="dark"] {
 }
 html[data-theme="dark"] .brand-mark { background: var(--ink); color: #0b0c0e; }
 .sb-brand .brand-label { font-weight: 600; letter-spacing: -.01em; }
+.app-version { margin-top: 2px; color: var(--muted-2); font-size: 10px; letter-spacing: .02em; }
 body.sidebar-collapsed .sb-brand .sb-collapse { display: grid; }
 html[data-theme="dark"] .btn.primary { background: var(--accent); border-color: var(--accent); color: #08090b; }
 html[data-theme="dark"] .btn.primary:hover { background: #60a5fa; border-color: #60a5fa; }
@@ -478,3 +479,4 @@ body.assistant-panel-expanded .assistant-panel { width: min(960px, 100vw); }
   .assistant-chat-channel .set-select { width: 100%; }
   .assistant-panel { width: 100vw; max-width: 100vw; }
 }
+.create-entry-card { width: min(100%, 960px); margin-inline: auto; }

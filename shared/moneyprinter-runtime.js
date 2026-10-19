@@ -5,6 +5,7 @@
   let activeJob = null;
   let stream = null;
   let csrfToken = sessionStorage.getItem("cockpit-csrf") || "";
+  let loginDisabled = false;
   let assistantMessages = [];
 
   async function request(path, options = {}) {
@@ -14,7 +15,7 @@
     const response = await fetch(API + path, { credentials: "same-origin", ...options, headers });
     if (response.status === 204) return null;
     const body = await response.json().catch(() => ({}));
-    if (response.status === 401 && path !== "/auth/session") {
+    if (response.status === 401 && path !== "/auth/session" && !loginDisabled) {
       sessionStorage.removeItem("cockpit-csrf");
       window.location.replace("/Login.html");
     }
@@ -28,7 +29,7 @@
     const response = await fetch(API + "/scripts/long/stream", {
       method: "POST", credentials: "same-origin", headers, body: JSON.stringify(payload),
     });
-    if (response.status === 401) {
+    if (response.status === 401 && !loginDisabled) {
       sessionStorage.removeItem("cockpit-csrf");
       window.location.replace("/Login.html");
       throw new Error("Sua sessão expirou.");
@@ -68,6 +69,7 @@
 
   async function establishSession() {
     const session = await request("/auth/session");
+    loginDisabled = !!session.login_disabled;
     csrfToken = session.csrf_token || "";
     sessionStorage.setItem("cockpit-csrf", csrfToken);
     window.CK && (window.CK.__admin = session);
@@ -75,6 +77,7 @@
   }
 
   async function logout() {
+    if (loginDisabled) return;
     await request("/auth/logout", { method: "POST" });
     csrfToken = "";
     sessionStorage.removeItem("cockpit-csrf");
@@ -249,6 +252,15 @@
     act($("#genMetaAiBtn"), () => request(`/jobs/${job.id}/metadata/generate`, { method: "POST" }), true);
     act($("#genMetaSaveBtn"), save, true);
     act($("#genApproveBtn"), async () => { await save(); return request(`/jobs/${job.id}/approve`, { method: "POST" }); }, false);
+    const shortsBtn = $("#genDeriveShortsBtn");
+    if (shortsBtn) shortsBtn.onclick = async () => {
+      shortsBtn.disabled = true;
+      try {
+        const result = await request(`/jobs/${job.id}/shorts`, { method: "POST" });
+        if (lastNotify) lastNotify(`${result.created} Shorts entraram na fila de publicação do canal.`);
+      } catch (error) { if (lastNotify) lastNotify(error.message); }
+      finally { shortsBtn.disabled = false; }
+    };
     act(publishBtn, () => publish(job, chosen(), publishAt && publishAt.value), false);
     const picker = $("#genChannelSelect") || $("#genChannelList");
     if (picker) picker.onchange = () => setTimeout(states); // after the one-per-platform listener adjusts the boxes
@@ -424,7 +436,9 @@
       renderPendingJobs();
       resumeActiveJob();
       clearTimeout(syncTimer);
-      if (pending.some(job => job.state === "queued" || job.state === "running")) syncTimer = setTimeout(syncVideos, 15000);
+      if (pending.some(job => job.state === "queued" || job.state === "running") || document.querySelector("#productionsRoot")) {
+        syncTimer = setTimeout(syncVideos, 15000);
+      }
     } catch (_) { /* Gateway/Turbo offline: keep last known videos on screen. */ }
   }
   let syncTimer = null;
@@ -708,12 +722,14 @@
     "#genTextColorInput": "text_fore_color", "#genStrokeColorInput": "stroke_color", "#genBgmSelect": "bgm_type", "#genBgmVolume": "bgm_volume",
   };
 
-  function saveDraft(body, dirtyParams = [], dirtyText = []) {
+  function saveDraft(body, dirtyParams = [], dirtyText = [], metadataOverrides = {}) {
     const inputs = [...DRAFT_TEXT_SELECTORS, ...DRAFT_PARAMETER_SELECTORS];
-    const draft = Object.fromEntries(inputs.map(selector => {
+    let metadata = {};
+    try { metadata = JSON.parse(localStorage.getItem(draftKey(body)) || "{}"); } catch (_) { /* corrupt drafts are replaced safely */ }
+    const draft = { ...metadata, ...metadataOverrides, ...Object.fromEntries(inputs.map(selector => {
       const element = body.querySelector(selector);
       return [selector, element ? (element.type === "checkbox" ? element.checked : element.value) : undefined];
-    }));
+    })) };
     draft.channel_ids = selectedChannels(body);
     draft.dirty_params = dirtyParams;
     draft.dirty_text = dirtyText;
@@ -766,7 +782,7 @@
       restoreParameterOverrides(body, generationDraft);
     };
     const persistGeneratorDraft = () => {
-      saveDraft(body, generationDraft.dirty_params || [], generationDraft.dirty_text || []);
+      saveDraft(body, generationDraft.dirty_params || [], generationDraft.dirty_text || [], generationDraft);
       try { generationDraft = JSON.parse(localStorage.getItem(draftKey(body)) || "{}"); } catch (_) { generationDraft = {}; }
     };
     bindGenerationDefaults(body, notify).then(applyProfileAndOverrides);
@@ -855,6 +871,13 @@
       };
       input.addEventListener("input", record);
       input.addEventListener("change", record);
+      if (input.id === "genScriptInput") {
+        input.addEventListener("input", event => {
+          if (!event.isTrusted) return;
+          generationDraft.script_origin = "manual";
+          persistGeneratorDraft();
+        });
+      }
     });
     scriptInput.addEventListener("input", () => {
       updateStats();
@@ -868,7 +891,7 @@
     const readStored = key => { try { return JSON.parse(localStorage.getItem(key) || "null"); } catch (_) { return null; } };
     const batchBox = body.querySelector("#genBatchResults");
     const batchStatus = body.querySelector("#genBatchStatus");
-    const stageLabels = { queued: "Na fila", topic: "Roteirista: tema", topic_done: "Tema pronto", requirements: "Roteirista: requisitos", requirements_done: "Requisitos prontos", script: "Roteirista: roteiro", script_done: "Roteiro pronto", editorial_review: "Revisor editorial", editorial_repair: "Aprimorando o roteiro", editorial_review_done: "Revisão editorial concluída", terms: "Planejando cenas", terms_done: "Cenas planejadas", visual_curator: "Curador visual: avaliando materiais", visual_curator_done: "Materiais aprovados", submitting: "Enviando render", rendering: "Renderizando", failed: "Falhou", paused: "Pausado para revisão", reconciliation_required: "Verificação necessária" };
+    const stageLabels = { queued: "Na fila", repairing: "Corrigindo vídeo", topic: "Roteirista: tema", topic_done: "Tema pronto", requirements: "Roteirista: requisitos", requirements_done: "Requisitos prontos", script: "Roteirista: roteiro", script_done: "Roteiro pronto", orthographic_review: "Agente ortográfico", orthographic_review_done: "Ortografia revisada", editorial_review: "Revisor editorial", editorial_repair: "Aprimorando o roteiro", editorial_review_done: "Revisão editorial concluída", terms: "Planejando cenas", terms_done: "Cenas planejadas", visual_curator: "Curador visual: avaliando materiais", visual_curator_done: "Materiais aprovados", submitting: "Enviando render", rendering: "Renderizando", failed: "Falhou", paused: "Pausado para revisão", reconciliation_required: "Verificação necessária" };
     let displayedBatch = null;
     let pollTimer = null;
     const renderBatch = batch => {
@@ -878,7 +901,7 @@
       const running = batch.status === "processing";
       button.disabled = running;
       button.textContent = running ? "Gerando por canal…" : label;
-      const prepProgress = { queued: 0, topic: 5, topic_done: 12, requirements: 16, requirements_done: 25, script: 30, script_done: 40, editorial_review: 42, editorial_repair: 45, editorial_review_done: 48, terms: 50, terms_done: 55, visual_curator: 58, visual_curator_done: 68, submitting: 70, rendering: 72 };
+      const prepProgress = { queued: 0, repairing: 5, topic: 5, topic_done: 12, requirements: 16, requirements_done: 25, script: 30, script_done: 40, orthographic_review: 41, orthographic_review_done: 42, editorial_review: 43, editorial_repair: 46, editorial_review_done: 48, terms: 50, terms_done: 55, visual_curator: 58, visual_curator_done: 68, submitting: 70, rendering: 72 };
       const percentages = batch.items.map(item => item.quality?.state === "approved" ? 100 : ["completed", "approved"].includes(item.job_state) ? 90 : item.job_state ? 72 + 0.18 * (item.job_progress || 0) : prepProgress[item.stage] || 0);
       const progress = Math.round(percentages.reduce((sum, current) => sum + current, 0) / Math.max(percentages.length, 1));
       const pipelineNote = body.querySelector("#genPipelineNote");
@@ -895,34 +918,44 @@
       if (globalStop && batch.items.length > 1) globalStop.style.display = "none";
       batchBox.innerHTML = batch.items.map(item => {
         const generated = item.generated || {};
+        const activeBatchId = item.active_batch_id || batch.batch_id;
+        const repair = generated.repair_plan;
         const fields = [["Tema", generated.subject], ["Requisitos personalizados", generated.requirements], ["Roteiro", generated.script], ["Palavras-chave das filmagens", generated.terms]];
         const scenes = (generated.scenes || []).map(scene => `<div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-top:8px">
           <strong>Trecho ${esc(scene.index + 1)}</strong> · ${esc(scene.query || "")}<div class="card-note" style="white-space:pre-wrap;margin-top:4px">${esc(scene.narration || "")}</div>
           <div style="display:flex;gap:10px;overflow:auto;margin-top:8px">${(scene.candidates || []).map(candidate => `<div style="min-width:140px;max-width:180px">
-            ${candidate.filename ? `<img alt="Prévia do material ${esc(candidate.provider)}" loading="lazy" style="width:140px;height:90px;object-fit:cover;border-radius:6px" src="${API}/generation-batches/${encodeURIComponent(batch.batch_id)}/items/${encodeURIComponent(item.id)}/scenes/${scene.index}/preview?candidate_id=${encodeURIComponent(candidate.id)}" />` : ""}
+            ${candidate.filename ? `<img alt="Prévia do material ${esc(candidate.provider)}" loading="lazy" style="width:140px;height:90px;object-fit:cover;border-radius:6px" src="${API}/generation-batches/${encodeURIComponent(activeBatchId)}/items/${encodeURIComponent(item.id)}/scenes/${scene.index}/preview?candidate_id=${encodeURIComponent(candidate.id)}" />` : ""}
             <div class="card-note">${esc(candidate.provider)} · ${esc(candidate.status === "approved" ? "Aprovado" : "Rejeitado")}${candidate.id === scene.selected ? " · Selecionado" : ""}</div>
+            ${candidate.id === scene.selected && scene.selection_reason ? `<div class="card-note">${esc(scene.selection_reason)}</div>` : ""}
             <div class="card-note">${esc(candidate.reason || "")}</div>
             ${candidate.source_page ? `<a href="${esc(candidate.source_page)}" target="_blank" rel="noopener noreferrer">Fonte</a>` : ""}
             ${(item.state === "paused" || ["blocked", "error"].includes(item.quality?.state)) && candidate.filename ? `<button class="btn sm" type="button" data-select-scene="${scene.index}" data-select-candidate="${esc(candidate.id)}" data-select-item="${esc(item.id)}">Usar este material</button>` : ""}
           </div>`).join("")}</div></div>`).join("");
         const report = item.quality?.report || {};
         const qualityReason = report.reason || (report.videos || []).filter(video => !video.approved).map(video => video.reason).filter(Boolean).join(" · ");
-        const artifactUrl = item.artifact_id && item.job_id ? `${API}/jobs/${encodeURIComponent(item.job_id)}/artifacts/${encodeURIComponent(item.artifact_id)}` : "";
+        const artifactUrl = item.job_state !== "deleted" && item.artifact_id && item.job_id ? `${API}/jobs/${encodeURIComponent(item.job_id)}/artifacts/${encodeURIComponent(item.artifact_id)}` : "";
         const retry = ["failed", "paused"].includes(item.state) ? `<button class="btn sm" type="button" data-retry-item="${esc(item.id)}">${item.state === "paused" ? "Buscar novamente e retomar" : "Repetir este canal"}</button>` : ["failed", "interrupted"].includes(item.job_state) ? `<button class="btn sm" type="button" data-retry-job="${esc(item.job_id)}">Repetir render deste canal</button>` : "";
         const stop = ["queued", "running"].includes(item.job_state) ? `<button class="btn sm" type="button" data-stop-batch-job="${esc(item.job_id)}">Parar este canal</button>` : "";
         return `<section style="border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px;min-width:0">
           <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><strong>${esc(item.channel_name)}</strong><span class="card-note">${esc(stageLabels[item.stage] || item.stage)}${item.job_progress != null ? ` · ${esc(Math.round(item.job_progress))}%` : ""}${item.job_state ? ` · ${esc(item.job_state)}` : ""}</span></div>
+          ${item.repair_attempt ? `<div class="card-note" style="margin-top:8px">Correção automática ${esc(item.repair_attempt)} de ${esc(item.repair_max_attempts)}${repair?.reason ? ` · ${esc(repair.reason)}` : ""}</div>` : ""}
+          ${(item.repair_history || []).length > 1 ? `<details style="margin-top:8px"><summary>Histórico das montagens</summary>${item.repair_history.map(entry => `<div class="card-note" style="margin-top:6px">Tentativa ${esc(entry.attempt)} · ${esc(entry.quality_state || entry.state || "preparando")}${entry.reason ? ` · ${esc(entry.reason)}` : ""}${entry.job_id ? ` · trabalho ${esc(entry.job_id)}` : ""}</div>`).join("")}</details>` : ""}
+          ${item.job_id && item.job_state !== "deleted" ? `<button class="btn sm" type="button" data-open-active-job="${esc(item.job_id)}">Abrir trabalho atual</button>` : ""}
           ${item.error || item.job_error ? `<p style="color:var(--err);white-space:pre-wrap">${esc(item.error || item.job_error)}</p>` : ""}
           ${fields.map(([name, content]) => content ? `<details style="margin-top:10px"><summary style="cursor:pointer">${esc(name)}</summary><div style="white-space:pre-wrap;overflow-wrap:anywhere;margin-top:7px;max-height:280px;overflow:auto">${esc(content)}</div></details>` : "").join("")}
           ${generated.editorial_review ? `<div class="card-note" style="margin-top:10px">Revisor editorial: ${esc(generated.editorial_review.approved ? "aprovado" : "revisão necessária")} · ${esc(generated.editorial_review.reason || "")}</div>` : ""}
           ${generated.editorial_review?.narration ? `<div class="card-note" style="margin-top:6px">Narração: ${esc(generated.editorial_review.narration.words)} palavras · cerca de ${esc(generated.editorial_review.estimated_seconds)} s · ${esc(generated.editorial_review.narration.long_sentences)} frases longas${generated.editorial_repair_attempted ? " · roteiro passou por correção editorial automática" : ""}</div>` : ""}
+          ${item.state === "paused" && generated.editorial_review?.approved === false && generated.script ? `<button class="btn sm" type="button" data-regenerate-script="${esc(item.id)}">Substituir roteiro por uma versão alinhada ao tema</button>` : ""}
           ${scenes ? `<details style="margin-top:10px"><summary>Curadoria visual · ${(generated.scenes || []).length} trechos</summary>${scenes}</details>` : ""}
           ${generated.scenes?.length ? `<div class="card-note">${generated.scenes.filter(scene => scene.selected).length} de ${generated.scenes.length} cenas selecionadas por relevância e variedade.</div>` : ""}
-          ${item.quality ? `<div class="card-note" style="margin-top:10px;${["blocked", "error"].includes(item.quality.state) ? "color:var(--err)" : ""}">Revisor de montagem: ${esc(item.quality.state)}${qualityReason ? ` · ${esc(qualityReason)}` : ""}${(report.videos || []).map((video, index) => ` · Vídeo ${index + 1}: ${video.approved ? "aprovado" : "revisão necessária"}`).join("")}</div>` : ""}
+          ${item.quality ? `<div class="card-note" style="margin-top:10px;${["blocked", "error"].includes(item.quality.state) ? "color:var(--err)" : ""}">Revisor de montagem: ${esc(item.quality.state)}${qualityReason ? ` · ${esc(qualityReason)}` : ""}${report.repair_error ? ` · ${esc(report.repair_error)}` : ""}${(report.videos || []).map((video, index) => ` · Vídeo ${index + 1}: ${video.approved ? "aprovado" : "revisão necessária"}`).join("")}</div>` : ""}
           ${(report.videos || []).filter(video => video.audio_analysis).map(video => `<div class="card-note">Áudio: ${video.audio_analysis.audible ? "volume audível" : "volume muito baixo"} · ${video.audio_analysis.continuous ? "sem silêncio prolongado" : "silêncio prolongado detectado"}${video.audio_analysis.longest_silence_seconds != null ? ` · maior silêncio: ${esc(video.audio_analysis.longest_silence_seconds)} s` : ""}</div>`).join("")}
-          ${(item.state === "paused" || ["blocked", "error"].includes(item.quality?.state)) && generated.script ? `<textarea class="np-input" data-review-script="${esc(item.id)}" style="width:100%;min-height:120px;margin-top:10px">${esc(generated.script)}</textarea><button class="btn sm" data-submit-script="${esc(item.id)}">Salvar roteiro revisado e retomar</button>` : ""}
+          ${generated.orthographic_review ? `<div class="card-note" style="margin-top:8px;${generated.orthographic_review.approved ? "" : "color:var(--err)"}">Agente ortográfico: ${generated.orthographic_review.approved ? (generated.orthographic_review.corrected ? "texto corrigido antes da voz e das legendas" : "texto revisado") : esc(generated.orthographic_review.reason || "revisão necessária")}${(generated.orthographic_review.corrections || []).length ? ` · ${generated.orthographic_review.corrections.map(esc).join("; ")}` : ""}</div>` : ""}
+          ${(item.state === "paused" || ["blocked", "error"].includes(item.quality?.state)) && generated.script ? `<textarea class="np-input" data-review-script="${esc(item.id)}" style="width:100%;min-height:120px;margin-top:10px">${esc(generated.orthographic_review?.suggested_script || generated.script)}</textarea><button class="btn sm" data-submit-script="${esc(item.id)}">Salvar roteiro revisado e retomar</button>` : ""}
           ${(item.state === "paused" || ["blocked", "error"].includes(item.quality?.state)) && generated.terms ? `<div style="margin-top:10px"><label class="dr-sec">Revisar palavras-chave dos cortes</label><textarea class="np-input" data-review-terms="${esc(item.id)}" style="width:100%;min-height:60px">${esc(generated.terms)}</textarea><button class="btn sm" data-submit-terms="${esc(item.id)}">Buscar com estes termos</button></div>` : ""}
           ${artifactUrl ? `<video controls preload="metadata" style="display:block;max-width:100%;width:${format === "short" ? "260" : "500"}px;max-height:300px;margin-top:12px" src="${artifactUrl}/stream"></video><a class="btn sm" style="display:inline-block;margin-top:8px" href="${artifactUrl}/download">Baixar MP4</a>` : ""}
+          ${item.quality?.state === "blocked" && !report.repair_error && (item.repair_attempt || 0) < (item.repair_max_attempts || 0) ? `<button class="btn sm" type="button" data-resume-auto-repair="${esc(item.id)}">Retomar correção automática</button>` : ""}
+          ${item.quality?.state === "error" && item.job_state === "completed" ? `<button class="btn sm" type="button" data-retry-quality="${esc(item.id)}">Repetir análise do vídeo</button>` : ""}
           ${retry}${stop}</section>`;
       }).join("");
       if (batch.items.length === 1) {
@@ -952,17 +985,28 @@
       const retryItem = event.target.closest("[data-retry-item]");
       const retryRender = event.target.closest("[data-retry-job]");
       const stopRender = event.target.closest("[data-stop-batch-job]");
+      const resumeRepair = event.target.closest("[data-resume-auto-repair]");
+      const retryQuality = event.target.closest("[data-retry-quality]");
+      const openActive = event.target.closest("[data-open-active-job]");
+      const regenerateScript = event.target.closest("[data-regenerate-script]");
         const selectScene = event.target.closest("[data-select-scene]");
         const submitScript = event.target.closest("[data-submit-script]");
         const submitTerms = event.target.closest("[data-submit-terms]");
-        if (!displayedBatch || (!retryItem && !retryRender && !stopRender && !selectScene && !submitScript && !submitTerms)) return;
+        if (!displayedBatch || (!retryItem && !retryRender && !stopRender && !selectScene && !submitScript && !submitTerms && !resumeRepair && !retryQuality && !openActive && !regenerateScript)) return;
       event.target.disabled = true;
       try {
+        if (openActive) { await openJob(openActive.dataset.openActiveJob); return; }
         let reviewResult = null;
-        if (selectScene) reviewResult = await request(`/generation-batches/${encodeURIComponent(displayedBatch.batch_id)}/items/${encodeURIComponent(selectScene.dataset.selectItem)}/review`, { method: "POST", body: JSON.stringify({ scene_index: Number(selectScene.dataset.selectScene), candidate_id: selectScene.dataset.selectCandidate }) });
-        else if (submitScript) reviewResult = await request(`/generation-batches/${encodeURIComponent(displayedBatch.batch_id)}/items/${encodeURIComponent(submitScript.dataset.submitScript)}/review`, { method: "POST", body: JSON.stringify({ script: batchBox.querySelector(`[data-review-script="${CSS.escape(submitScript.dataset.submitScript)}"]`).value }) });
-        else if (submitTerms) reviewResult = await request(`/generation-batches/${encodeURIComponent(displayedBatch.batch_id)}/items/${encodeURIComponent(submitTerms.dataset.submitTerms)}/review`, { method: "POST", body: JSON.stringify({ terms: batchBox.querySelector(`[data-review-terms="${CSS.escape(submitTerms.dataset.submitTerms)}"]`).value }) });
-        else if (retryItem) await request(`/generation-batches/${encodeURIComponent(displayedBatch.batch_id)}/items/${encodeURIComponent(retryItem.dataset.retryItem)}/retry`, { method: "POST" });
+        const current = displayedBatch.items.find(item => item.id === (selectScene?.dataset.selectItem || submitScript?.dataset.submitScript || submitTerms?.dataset.submitTerms || retryItem?.dataset.retryItem || resumeRepair?.dataset.resumeAutoRepair || retryQuality?.dataset.retryQuality));
+        const regenCurrent = displayedBatch.items.find(item => item.id === regenerateScript?.dataset.regenerateScript);
+        const activeBatchId = current?.active_batch_id || displayedBatch.batch_id;
+        if (selectScene) reviewResult = await request(`/generation-batches/${encodeURIComponent(activeBatchId)}/items/${encodeURIComponent(selectScene.dataset.selectItem)}/review`, { method: "POST", body: JSON.stringify({ scene_index: Number(selectScene.dataset.selectScene), candidate_id: selectScene.dataset.selectCandidate }) });
+        else if (submitScript) reviewResult = await request(`/generation-batches/${encodeURIComponent(activeBatchId)}/items/${encodeURIComponent(submitScript.dataset.submitScript)}/review`, { method: "POST", body: JSON.stringify({ script: batchBox.querySelector(`[data-review-script="${CSS.escape(submitScript.dataset.submitScript)}"]`).value }) });
+        else if (submitTerms) reviewResult = await request(`/generation-batches/${encodeURIComponent(activeBatchId)}/items/${encodeURIComponent(submitTerms.dataset.submitTerms)}/review`, { method: "POST", body: JSON.stringify({ terms: batchBox.querySelector(`[data-review-terms="${CSS.escape(submitTerms.dataset.submitTerms)}"]`).value }) });
+        else if (resumeRepair) reviewResult = await request(`/generation-batches/${encodeURIComponent(activeBatchId)}/items/${encodeURIComponent(resumeRepair.dataset.resumeAutoRepair)}/auto-repair`, { method: "POST" });
+        else if (regenerateScript) reviewResult = await request(`/generation-batches/${encodeURIComponent(regenCurrent?.active_batch_id || displayedBatch.batch_id)}/items/${encodeURIComponent(regenerateScript.dataset.regenerateScript)}/regenerate-script`, { method: "POST" });
+        else if (retryQuality) await request(`/generation-batches/${encodeURIComponent(activeBatchId)}/items/${encodeURIComponent(retryQuality.dataset.retryQuality)}/retry-quality`, { method: "POST" });
+        else if (retryItem) await request(`/generation-batches/${encodeURIComponent(activeBatchId)}/items/${encodeURIComponent(retryItem.dataset.retryItem)}/retry`, { method: "POST" });
         else if (retryRender) await retryJob(retryRender.dataset.retryJob);
         else await stopJob(stopRender.dataset.stopBatchJob);
         if (pollTimer) clearTimeout(pollTimer);
@@ -992,6 +1036,8 @@
             format, channel_ids: channels, client_request_id: crypto.randomUUID(),
             subject: generationDraft.dirty_text?.includes("#genTopicInput") ? value(body, "#genTopicInput", "").trim() : "",
             script: generationDraft.dirty_text?.includes("#genScriptInput") ? value(body, "#genScriptInput", "").trim() : "",
+            script_is_manual: generationDraft.dirty_text?.includes("#genScriptInput")
+              ? generationDraft.script_origin !== "generated" : false,
             requirements: generationDraft.dirty_text?.includes("#genScriptRequirements") ? value(body, "#genScriptRequirements", "").trim() : "",
             terms: generationDraft.dirty_text?.includes("#genTermsInput") ? value(body, "#genTermsInput", "").trim() : "",
             screen_system_prompt: value(body, "#genSystemPrompt", "").trim(), settings,
@@ -1006,12 +1052,15 @@
         pollBatch(batch.batch_id);
       } catch (error) { notify(error.message); button.disabled = false; button.textContent = label; }
     });
-    bindAiHelpers(body, notify);
+    bindAiHelpers(body, notify, () => {
+      generationDraft.script_origin = "generated";
+      persistGeneratorDraft();
+    });
   }
 
   /* Mirrors the WebUI's "generate script" / "generate keywords" buttons via
      Turbo's /api/v1/scripts and /api/v1/terms (proxied by the Gateway). */
-  function bindAiHelpers(body, notify) {
+  function bindAiHelpers(body, notify, markGeneratedScript = () => {}) {
     const run = (selector, label, task) => {
       const btn = body.querySelector(selector);
       if (!btn || btn.dataset.bound) return;
@@ -1028,9 +1077,12 @@
       const result = await request("/scripts/short", { method: "POST", body: JSON.stringify({
         subject, language: value(body, "#genLanguageSelect", "pt-BR"), paragraph_number: integer(value(body, "#genParagraphInput", 5), 5),
         voice_rate: Number.parseFloat(value(body, "#genVoiceRate", "1")) || 1,
-        script_prompt: value(body, "#genScriptRequirements", "").trim(), system_prompt: [channelById(selectedChannels(body)[0])?.system_prompt, value(body, "#genSystemPrompt", "").trim()].filter(Boolean).join("\n\n"),
+        voice_name: value(body, "#genVoiceSelect", ""),
+        script_prompt: value(body, "#genScriptRequirements", "").trim(),         system_prompt: [channelById(selectedChannels(body)[0])?.system_prompt, value(body, "#genSystemPrompt", "").trim()].filter(Boolean).join("\n\n"),
+        proposal: value(body, "#genProposal", "").trim(), reference_brief: body.dataset.referenceBrief || "",
       }) });
       body.querySelector("#genScriptInput").value = result.script || "";
+      markGeneratedScript();
       body.querySelector("#genScriptInput").dispatchEvent(new Event("input")); // saves the draft and refreshes the word count
       if (result.trimmed) notify("Roteiro cortado para caber na duração alvo do Short.");
       else if (result.too_short) notify(`Roteiro com ${result.words} palavras (≈ ${Math.round(result.words / 2.5)} s) — curto para 60–90 s. Gere de novo ou complete o texto.`);
@@ -1082,16 +1134,48 @@
       const result = await streamLongScript({
         subject, language: value(body, "#genLanguageSelect", "pt-BR"), minutes: integer(value(body, "#genTargetMinutes", 8), 8), niche: (channel && channel.niche) || "",
         voice_rate: Number.parseFloat(value(body, "#genVoiceRate", "1")) || 1,
+        voice_name: value(body, "#genVoiceSelect", ""),
         requirements: value(body, "#genScriptRequirements", "").trim(), system_prompt: [channel && channel.system_prompt, value(body, "#genSystemPrompt", "").trim()].filter(Boolean).join("\n\n"),
+        proposal: value(body, "#genProposal", "").trim(), reference_brief: body.dataset.referenceBrief || "",
       }, (_event, progress) => {
         const btn = body.querySelector("#genLongScriptBtn");
         if (btn && progress.message) btn.textContent = progress.message;
       });
       body.querySelector("#genScriptInput").value = result.script || "";
+      markGeneratedScript();
       body.querySelector("#genScriptInput").dispatchEvent(new Event("input"));
       notify(`Roteiro com ${result.sections.length} seções · ≈ ${result.estimated_minutes} min de narração${result.trimmed ? " · cortado para caber na duração alvo" : ""}`);
       scheduleAlignedTerms(subject).catch(error => notify(`Palavras-chave não foram geradas: ${error.message}`));
     });
+    run("#genProposalBtn", "Pesquisar ângulo", async subject => {
+      const channel = channelById(selectedChannels(body)[0]);
+      const format = body.querySelector("[data-format]")?.dataset.format === "long" ? "long" : "short";
+      const result = await request("/scripts/proposal", { method: "POST", body: JSON.stringify({
+        subject, format, language: value(body, "#genLanguageSelect", "pt-BR"), channel_context: (channel && channel.niche) || "",
+      }) });
+      const box = body.querySelector("#genProposal");
+      if (box) { box.value = result.brief; box.dispatchEvent(new Event("input")); }
+      notify(result.angle);
+    });
+    const referenceFile = body.querySelector("#genReferenceFile");
+    if (referenceFile && !referenceFile.dataset.bound) {
+      referenceFile.dataset.bound = "true";
+      referenceFile.addEventListener("change", async () => {
+        const chosen = referenceFile.files && referenceFile.files[0];
+        if (!chosen) return;
+        const note = body.querySelector("#genReferenceNote");
+        if (note) note.textContent = "Lendo a estrutura do vídeo…";
+        try {
+          const result = await request("/scripts/reference", { method: "POST", headers: { "Content-Type": chosen.type || "video/mp4" }, body: chosen });
+          body.dataset.referenceBrief = result.brief;
+          if (note) note.textContent = result.brief;
+        } catch (error) {
+          delete body.dataset.referenceBrief;
+          if (note) note.textContent = "";
+          notify(error.message);
+        }
+      });
+    }
     run("#genTermsAiBtn", "Gerar palavras-chave", async subject => {
       const result = await scheduleAlignedTerms(subject, { announce: true });
       if (!result && !value(body, "#genScriptInput", "").trim()) notify("Escreva ou gere o roteiro primeiro.");
@@ -1297,9 +1381,14 @@
     $("#agAnalyticsBtn").onclick = () => busy($("#agAnalyticsBtn"), async () => renderAnalytics(await request("/agents/analytics/refresh", { method: "POST" })));
 
     const loadSchedule = async () => {
+      const body = $("#agScheduleBody");
+      body.innerHTML = '<div class="empty" role="status" aria-live="polite"><div class="empty-t">Carregando agendamentos…</div></div>';
       let items;
-      try { items = await request("/agents/schedule"); } catch (error) { notify(error.message); return; }
-      $("#agScheduleBody").innerHTML = items.length ? items.map(s => `
+      try { items = await request("/agents/schedule"); } catch (error) {
+        body.innerHTML = `<div class="empty" role="alert"><div class="empty-t">Não foi possível carregar os agendamentos</div><div class="empty-d">${esc(error.message)} <button class="btn sm" type="button" data-reload-schedule> Tentar novamente</button></div></div>`;
+        return;
+      }
+      body.innerHTML = items.length ? items.map(s => `
         <div style="${rowStyle}">
           <div style="min-width:0"><div style="font-weight:500;color:var(--ink)">${esc(s.title || s.subject)}</div>
             <div class="card-note" style="font-family:inherit">${esc(s.channel_name || s.platform)} · ${esc(when(s.scheduled_at))}</div></div>
@@ -1307,6 +1396,7 @@
         </div>`).join("") : emptyState("Nada agendado", "Aprove um vídeo e preencha “Agendar para” no Gerador ou no Shorts.");
     };
     $("#agScheduleBody").onclick = event => {
+      if (event.target.closest("[data-reload-schedule]")) { loadSchedule(); return; }
       const button = event.target.closest("[data-cancel-job]");
       if (!button) return;
       busy(button, async () => {
@@ -1399,11 +1489,27 @@
       const batches = await request("/generation-batches?limit=20");
       $("#agReviewsBody").innerHTML = batches.length ? batches.map(batch => `<div style="${rowStyle}">
         <div><strong>${esc(batch.source === "operator" ? "Operador automático" : "Gerador")} · ${esc(batch.format === "short" ? "Shorts" : "Vídeo longo")}</strong>
-          <div class="card-note">${esc(when(batch.created_at))} · ${batch.items.map(item => `${esc(item.channel_name)}: ${esc(item.quality_state || item.stage || item.state)}${item.error || item.quality_reason ? ` (${esc(item.error || item.quality_reason)})` : ""}`).join(" · ")}</div></div>
+          <div class="card-note">${esc(when(batch.created_at))} · ${batch.items.map(item => {
+            const state = item.quality_state || item.stage || item.state;
+            const status = item.repair_attempt && !["approved", "blocked", "error"].includes(state)
+              ? `corrigindo ${item.repair_attempt}/${item.repair_max_attempts} · ${state}` : state;
+            return `${esc(item.channel_name)}: ${esc(status)}${item.error || item.quality_reason ? ` (${esc(item.error || item.quality_reason)})` : ""}`;
+          }).join(" · ")}</div></div>
         <button class="btn sm" type="button" data-open-generation="${esc(batch.batch_id)}" data-generation-format="${esc(batch.format)}">Abrir geração e revisão</button>
       </div>`).join("") : emptyState("Nenhuma geração registrada", "As execuções do gerador e do operador aparecem aqui.");
     };
     $("#agReviewsRefresh").onclick = () => busy($("#agReviewsRefresh"), loadReviews);
+    $("#agReviewsClear").onclick = () => {
+      const button = $("#agReviewsClear");
+      if (!window.confirm("Limpar revisões concluídas? Somente revisões aprovadas sairão desta lista. Os vídeos e trabalhos serão mantidos; itens pendentes ou pausados continuarão aqui.")) return;
+      busy(button, async () => {
+        const result = await request("/generation-batches/reviews", { method: "DELETE" });
+        await loadReviews();
+        notify(result.cleared
+          ? `${result.cleared} revisão${result.cleared === 1 ? "" : "ões"} concluída${result.cleared === 1 ? "" : "s"} removida${result.cleared === 1 ? "" : "s"} da lista.`
+          : "Não há revisões concluídas para limpar.");
+      });
+    };
     $("#agReviewsBody").onclick = event => {
       const button = event.target.closest("[data-open-generation]");
       if (!button) return;

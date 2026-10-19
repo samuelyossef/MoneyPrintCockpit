@@ -208,6 +208,7 @@ class VisualSpecialistsTests(unittest.TestCase):
             report = asyncio.run(specialists.inspect_final_video(path, scenes, {"video_aspect": "9:16", "voice_rate": 1}, "script"))
         self.assertFalse(report["approved"])
         self.assertEqual(report["observations"][0]["reason"], "Tela preta")
+        self.assertEqual(report["failed_checks"], ["visual_scenes"])
 
     def test_final_review_enforces_actual_short_duration(self):
         path = Path(self.temp.name) / "final.mp4"
@@ -221,6 +222,9 @@ class VisualSpecialistsTests(unittest.TestCase):
                 {"video_aspect": "9:16", "voice_rate": 1}, "script", (60, 66)))
         self.assertFalse(report["approved"])
         self.assertFalse(report["checks"]["duration"])
+        self.assertEqual(report["failed_checks"], ["duration"])
+        self.assertEqual(report["measurements"]["duration_seconds"], 56.43)
+        self.assertEqual((report["measurements"]["minimum_seconds"], report["measurements"]["maximum_seconds"]), (60, 66))
         self.assertIn("56.4 s", report["reason"])
         judge.assert_not_called()
 

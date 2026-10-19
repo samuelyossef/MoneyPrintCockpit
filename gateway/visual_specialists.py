@@ -293,7 +293,10 @@ async def review_script(script: str, subject: str, requirements: str, context: d
               f"Canal/nicho: {context['channel']['name']} / {context['channel']['niche']}. Requisitos: {requirements}. "
               f"Instruções editoriais: {context['editorial']}. Guia visual: {context.get('visual_guide', '')}. "
               f"Duração estimada: {seconds:.0f}s; faixa permitida: {minimum:.0f}-{maximum:.0f}s. "
-              "Verifique idioma, instruções, abertura, progressão, conclusão e coerência. "
+              "Verifique primeiro se o conteúdo inteiro responde ao tema solicitado; reprove se o roteiro tratar de outro assunto, "
+              "mesmo que seja bem escrito. Depois verifique idioma, instruções, abertura, progressão, conclusão e coerência. "
+              "Revise cada frase quanto a ortografia, acentuação, gramática, concordância e pontuação no idioma indicado. "
+              "Não aprove erros linguísticos; indique no motivo o trecho e a correção necessária para que o roteiro seja refeito. "
               + writing_brief(context["format"]) + " "
               "Não reescreva texto manual. Responda JSON com approved boolean e reason string. Roteiro:\n" + script[:40000])
     result = await m.llm_json_object(prompt, task="json", max_tokens=450, label="revisão editorial")
@@ -301,6 +304,25 @@ async def review_script(script: str, subject: str, requirements: str, context: d
     reason = str(result.get("reason") or "Revisão editorial sem justificativa.")[:600]
     return {"approved": approved, "reason": reason, "estimated_seconds": round(seconds), "manual": manual,
             "narration": narration_diagnostics(script)}
+
+
+async def proofread_script(script: str, language: str) -> dict[str, Any]:
+    """Correct only language errors before this exact text feeds TTS and subtitles."""
+    result = await main_module().llm_json_object(
+        f"Atue como revisor ortográfico e gramatical. Revise este roteiro no idioma {language}. "
+        "Corrija ortografia, acentuação, gramática, concordância e pontuação. Preserve integralmente o sentido, "
+        "os fatos, a ordem, o tom, o tamanho aproximado e as quebras de parágrafo; não acrescente, resuma ou reescreva ideias. "
+        "Use formas naturais e inequívocas para a voz e para a legenda. Se já estiver correto, devolva o texto sem alterações. "
+        'Responda JSON: {"script": "roteiro integral revisado", "corrections": ["descrições curtas"]}.\nRoteiro:\n'
+        + script[:40000],
+        task="json", max_tokens=4096, label="revisão ortográfica",
+    )
+    corrected = str(result.get("script") or "").strip()
+    if not corrected:
+        raise HTTPException(status_code=502, detail="O agente ortográfico não devolveu o roteiro revisado.")
+    corrections = result.get("corrections")
+    return {"script": corrected, "changed": corrected != script.strip(),
+            "corrections": [str(value)[:200] for value in corrections[:10]] if isinstance(corrections, list) else []}
 
 
 def choose_scene_material(scene: dict[str, Any], used: set[str] | None = None) -> None:
@@ -312,14 +334,29 @@ def choose_scene_material(scene: dict[str, Any], used: set[str] | None = None) -
             - (12 if candidate["id"] in (used or set()) else 0)
         ))
         scene["selected"] = selected["id"]
-        scene["selection_reason"] = "Relevância visual, movimento e variedade entre os materiais aprovados."
+        discarded = [
+            {"id": candidate["id"], "reason": candidate.get("reason") or ("pontuação menor ou clipe repetido" if candidate.get("status") == "approved" else "rejeitado na curadoria")}
+            for candidate in scene["candidates"] if candidate["id"] != selected["id"]
+        ][:5]
+        motion = "movimento de vídeo" if selected.get("kind") == "video" else "imagem estática"
+        provider = selected.get("provider") or "banco de stock"
+        scene["selection"] = {
+            "chosen_id": selected["id"], "score": selected.get("score"), "kind": selected.get("kind"),
+            "provider": provider, "cost": "gratuito", "discarded": discarded,
+        }
+        scene["selection_reason"] = (
+            f"Relevância {float(selected.get('score') or 0):.0f}, {motion}, stock gratuito ({provider}). "
+            + ("Descartados: " + ", ".join(f"{item['id']} ({item['reason']})" for item in discarded[:3]) if discarded else "Nenhuma alternativa restante.")
+        )
+        scene["selection"]["reason"] = scene["selection_reason"]
 
 
-async def curate_scene(item_id: str, index: int, chunk: str, query: str, context: dict[str, Any]) -> dict[str, Any]:
+async def curate_scene(item_id: str, index: int, chunk: str, query: str, context: dict[str, Any],
+                       excluded_ids: set[str] | None = None) -> dict[str, Any]:
     settings = context["settings"]
     aspect, clip_seconds = settings["video_aspect"], float(settings["video_clip_duration"])
     scene = {"index": index, "narration": chunk, "query": query, "expected": chunk, "candidates": [], "selected": None}
-    seen = set()
+    seen = set(excluded_ids or set())
     for search_index in range(2):
         if search_index:
             try:
@@ -403,11 +440,18 @@ async def inspect_final_video(path: Path, scenes: list[dict[str, Any]], settings
     checks = {"duration": minimum <= info["duration"] <= maximum,
               "aspect": aspect_matches(info, settings["video_aspect"]), "audio": info["audio"],
               "black_frames": not black_segments, "audible": audio["audible"], "continuous_audio": audio["continuous"]}
+    measurements = {"duration_seconds": round(info["duration"], 2),
+                    "minimum_seconds": minimum, "maximum_seconds": maximum,
+                    "width": info["width"], "height": info["height"],
+                    "estimated_narration_seconds": round(expected, 2)}
+    failed_checks = [name for name, passed in checks.items() if not passed]
     observations = []
     if not all(checks.values()):
         reason = (f"O vídeo final tem {info['duration']:.1f} s; o formato exige entre {minimum:.0f} e {maximum:.0f} s."
                   if not checks["duration"] else "Proporção, áudio baixo, silêncio excessivo ou trechos pretos incompatíveis.")
-        return {"approved": False, "checks": checks, "audio_analysis": audio, "black_segments": black_segments, "observations": observations, "reason": reason}
+        return {"approved": False, "checks": checks, "failed_checks": failed_checks,
+                "measurements": measurements, "audio_analysis": audio,
+                "black_segments": black_segments, "observations": observations, "reason": reason}
     async def review_frame(index: int, scene: dict[str, Any]) -> dict[str, Any]:
         offset = min(info["duration"] - 0.2, (index + 0.5) * info["duration"] / len(scenes))
         frame = await asyncio.to_thread(sample_frame, path, offset)
@@ -416,5 +460,7 @@ async def inspect_final_video(path: Path, scenes: list[dict[str, Any]], settings
     for start in range(0, len(scenes), 3):
         observations.extend(await asyncio.gather(*(review_frame(index, scenes[index]) for index in range(start, min(start + 3, len(scenes))))))
     approved = all(checks.values()) and all(entry["approved"] for entry in observations)
-    return {"approved": approved, "checks": checks, "audio_analysis": audio, "black_segments": black_segments, "observations": observations,
+    return {"approved": approved, "checks": checks,
+            "failed_checks": failed_checks + (["visual_scenes"] if any(not entry["approved"] for entry in observations) else []),
+            "measurements": measurements, "audio_analysis": audio, "black_segments": black_segments, "observations": observations,
             "reason": "Montagem aprovada nas amostras verificadas." if approved else "Uma ou mais cenas não passaram na revisão visual."}

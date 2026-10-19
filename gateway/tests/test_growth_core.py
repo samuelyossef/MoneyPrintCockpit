@@ -2,14 +2,37 @@ from __future__ import annotations
 
 import unittest
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 from pydantic import ValidationError
 
 from gateway.growth.engines import OpportunityScoreInput, YPPGoalInput, calculate_opportunity_score, calculate_ypp_gap
 from gateway.growth.events import DomainEvent
+from gateway.growth.store import GrowthStore
 
 
 class GrowthCoreTests(unittest.TestCase):
+    def test_create_workflow_reads_columns_from_insert_result(self) -> None:
+        workflow_id, channel_id = uuid4(), uuid4()
+        cursor = MagicMock()
+        cursor.fetchone.return_value = (workflow_id, "planned")
+        cursor.description = [SimpleNamespace(name="id"), SimpleNamespace(name="state")]
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.execute.return_value = cursor
+        store = GrowthStore(dsn="postgresql://test")
+
+        with patch.object(store, "_connect", return_value=connection):
+            result = store.create_workflow(
+                workflow_id=workflow_id, channel_id=channel_id,
+                workflow_type="growth-planning-v1", input_data={"topic": "test"},
+            )
+
+        self.assertEqual(result, {"id": workflow_id, "state": "planned"})
+        connection.execute.assert_called_once()
+
     def test_ypp_gap_uses_only_qualified_organic_metrics(self) -> None:
         result = calculate_ypp_gap(
             YPPGoalInput(
