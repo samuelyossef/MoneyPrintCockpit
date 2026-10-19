@@ -23,6 +23,8 @@ def writing_brief(format: str) -> str:
         "Não invente estatísticas, estudos, citações, fontes ou acontecimentos recentes; qualifique "
         "incertezas e não apresente ficção ou metáfora como fato. Cada trecho deve acrescentar algo "
         "e sugerir uma situação que possa ser mostrada. Respeite o estilo e as instruções do canal."
+        " Revise ortografia, acentuação, gramática, concordância e pontuação no idioma solicitado; "
+        "faça uma revisão final em voz alta e prefira formas naturais e inequívocas para a narração."
     )
 
 

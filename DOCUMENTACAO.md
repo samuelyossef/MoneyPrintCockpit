@@ -1,314 +1,167 @@
-# 📚 Documentação Técnica e Funcional — Moneyprint / Lattice Cockpit
+# MoneyPrinter Cockpit
 
-Documentação completa da interface frontend do **Moneyprint / Lattice Cockpit**, abrangendo arquitetura, guia de execução, catálogo de telas, design system, gerenciamento de dados e instruções para integração com backend real.
+Documentação da aplicação local que gera, revisa e publica vídeos pelo MoneyPrinterTurbo. Versão 1.2.0.
 
----
+Esta é a documentação do produto em execução. O modo `npm run static` abre só o protótipo visual: não autentica, não chama a API e não gera vídeo.
 
-## 📑 Sumário
+## O que a aplicação faz
 
-1. [Visão Geral](#1-visão-geral)
-2. [Estrutura do Projeto](#2-estrutura-do-projeto)
-3. [Instalação e Execução Local](#3-instalação-e-execução-local)
-4. [Mapeamento Completo de Módulos e Telas](#4-mapeamento-completo-de-módulos-e-telas)
-   - [4.1 Moneyprint Cockpit (Aplicação Principal)](#41-moneyprint-cockpit-aplicação-principal)
-   - [4.2 Lattice Desktop App (React)](#42-lattice-desktop-app-react)
-   - [4.3 Lattice Admin Suite](#43-lattice-admin-suite)
-5. [Design System & Estilização](#5-design-system--estilização)
-   - [5.1 Tokens de Cores (Claro & Escuro)](#51-tokens-de-cores-claro--escuro)
-   - [5.2 Tipografia](#52-tipografia)
-   - [5.3 Componentes de UI](#53-componentes-de-ui)
-6. [Arquitetura de Dados e Estado Frontend](#6-arquitetura-de-dados-e-estado-frontend)
-7. [Guia de Integração com Backend Real](#7-guia-de-integração-com-backend-real)
-8. [Guia de Deploy para Produção](#8-guia-de-deploy-para-produção)
-9. [Solução de Problemas (FAQ)](#9-solução-de-problemas-faq)
+O cockpit é uma interface local para o trabalho diário de canais de YouTube e TikTok:
 
----
+- criar Short ou vídeo longo a partir do perfil de um canal;
+- acompanhar trabalhos, revisão, biblioteca e publicação;
+- conectar canais e autorizar, por canal do YouTube, uma grade de publicação automática;
+- consultar crescimento (metas YPP, oportunidade e planejamento) e resultados dos canais.
 
-## 1. Visão Geral
+Há um administrador local. Não há cadastro público, organizações, planos, faturas nem painel de assinantes.
 
-O **Moneyprint / Lattice Cockpit** é uma suíte administrativa e estúdio de criação para geração automatizada de vídeos curtos (Shorts, Reels, TikTok) e horizontais através de Inteligência Artificial.
+## Como subir
 
-A plataforma integra em uma interface moderna e minimalista:
-- **Pipeline de Vídeo com IA**: Geração de roteiro, narração com voz sintética, busca de filmagens stock, legendagem automática e renderização HD.
-- **Gestão de Canais & Automação**: Conexão e monitoramento de contas no YouTube Shorts e TikTok.
-- **Analytics & Custos**: Acompanhamento de visualizações, inscritos, receita e custos de tokens de IA.
-- **Lattice Admin**: Painel SaaS com métricas de usuários, assinantes, planos e faturamento.
+Pré-requisitos: Docker Desktop em execução e PowerShell.
 
----
-
-## 2. Estrutura do Projeto
-
-```text
-Moneyprint layout/
-│
-├── index.html                  # Ponto de entrada padrão do servidor (Cockpit)
-├── Cockpit.html                # Aplicação SPA principal do Moneyprint Cockpit
-├── server.js                   # Servidor HTTP nativo em Node.js (Zero dependências)
-├── package.json                # Manifesto com scripts npm start e dev
-├── iniciar.bat                 # Script de inicialização rápida para Windows (1 clique)
-├── README.md                   # Instruções rápidas de uso
-├── DOCUMENTACAO.md             # Esta documentação completa
-├── Documentação Cockpit.md    # Especificação funcional original
-│
-├── shared/                     # Recursos compartilhados do Cockpit e Admin
-│   ├── shell.css               # Design system base, grid, sidebar, topbar e reset
-│   ├── cockpit.css             # Estilos específicos dos componentes do Cockpit
-│   ├── shell.js                # Renderizador da sidebar/topbar das páginas Admin
-│   ├── cockpit-app.js          # Roteamento SPA, inicialização, drawer e eventos globais
-│   ├── cockpit-views.js        # Templates de renderização de todas as telas do Cockpit
-│   ├── cockpit-data.js         # Estado inicial, mocks de canais, vídeos e métricas
-│   ├── image-slot.js           # Gerenciamento de slots e placeholders de imagens
-│   └── users.js                # Dados de mock para a tabela de usuários
-│
-├── lattice-app/                # Aplicação desktop reativa (React + Babel UMD)
-│   ├── Lattice.html            # Ponto de entrada da aplicação Lattice Desktop
-│   ├── app.jsx                 # Componente raiz e orquestrador de estado
-│   ├── artifact-panel.jsx      # Painel de inspeção de artefatos e código
-│   ├── composer.jsx            # Barra de prompt e comandos de IA
-│   ├── connectors.jsx          # Conectores de APIs e serviços externos
-│   ├── extras.jsx              # Utilitários visuais e microinterações
-│   ├── i18n.jsx                # Sistema de internacionalização (PT/EN)
-│   ├── modals.jsx              # Caixas de diálogo modais
-│   ├── primitives.jsx          # Componentes atômicos (Button, Input, Badge, etc.)
-│   ├── skills.jsx              # Habilidades e agentes de automação
-│   ├── tweaks-panel.jsx        # Painel de ajustes finos de parâmetros de IA
-│   └── views.jsx               # Telas do editor de agentes e automações
-│
-├── screens/ & screenshots/     # Imagens e referências visuais
-└── scraps/                     # Rascunhos e protótipos visuais
+```powershell
+.\setup.ps1
+docker compose up -d --build --wait
 ```
 
----
+`setup.ps1` cria `runtime/secrets/admin.json`, `runtime/secrets/mpt_api_key.txt` e `runtime/moneyprinter/config.toml`. Chaves de Moonshot/Kimi, Pexels e Upload-Post podem ficar em branco e ser preenchidas depois. Os valores de exemplo estão em `.env.example`. Não coloque segredos no navegador nem no repositório.
 
-## 3. Instalação e Execução Local
+Abra [http://127.0.0.1:3000/Login.html](http://127.0.0.1:3000/Login.html).
 
-### Pré-requisitos
-- **Navegador Moderno**: Google Chrome, Microsoft Edge, Brave, Firefox ou Safari.
-- **Node.js** (opcional, recomendado): versão 18+ instalada.
+| Comando | Efeito |
+| --- | --- |
+| `npm start` | `docker compose up -d --wait` |
+| `npm run static` | `node server.js`, apenas o protótipo |
+| `docker compose ps` | estado dos serviços |
+| `docker compose logs cockpit-operator --tail 100` | log do agendador |
 
-### Método 1: Windows (Atalho com 1 Clique)
-1. Dê um duplo clique no arquivo `iniciar.bat`.
-2. O prompt de comando iniciará o servidor e seu navegador padrão abrirá automaticamente em `http://localhost:3000`.
+Readiness: `GET /api/health/ready`. Liveness: `GET /api/health/live`. A versão sai em `GET /api/version` e no campo `version` da readiness.
 
-### Método 2: Via Terminal (Node / NPM)
-```bash
-# Iniciar o servidor HTTP nativo
-npm start
+## Serviços
 
-# Ou diretamente:
-node server.js
-```
-Acesse no seu navegador: **`http://localhost:3000`**
+| Serviço | Função |
+| --- | --- |
+| `cockpit-api` | API e interface em `127.0.0.1:3000` |
+| `cockpit-operator` | Publicação automática na grade configurada |
+| `cockpit-generation-worker` | Processamento da fila de geração |
+| `moneyprinterturbo` | Roteiro, voz, materiais e render |
+| `redis` | Fila do Turbo e stream de eventos do Growth OS |
+| `postgresql` | Domínio do Growth OS em `127.0.0.1:5433` |
+| `temporal` | Workflows duráveis em `127.0.0.1:7233` |
+| `growth-worker` | Planejamento |
+| `growth-outbox` | Publicação at-least-once dos eventos no Redis |
 
-### Método 3: Abertura Direta (Sem Servidor)
-Como a aplicação utiliza arquivos HTML, CSS e JavaScript estáticos, você pode clicar duas vezes em qualquer arquivo `.html` (como `index.html` ou `Cockpit.html`) diretamente no Windows Explorer para abrir no navegador.
+O MinIO está descrito nas variáveis de object storage, mas o serviço está comentado no `compose.yaml` e não sobe com a composição atual.
 
----
+PostgreSQL e Temporal só escutam em `127.0.0.1`. As senhas padrão de desenvolvimento precisam ser trocadas antes de qualquer uso fora da máquina local.
 
-## 4. Mapeamento Completo de Módulos e Telas
+## Acesso
 
-### 4.1 Moneyprint Cockpit (Aplicação Principal)
-Acesso: `http://localhost:3000/` ou `http://localhost:3000/Cockpit.html`
+O administrador é o e-mail gravado em `runtime/secrets/admin.json`. A senha original não pode ser lida de volta: o arquivo guarda salt, iterações e hash PBKDF2-SHA256 (600.000 iterações). Para trocar a senha, rode `.\setup.ps1 -AdminOnly` ou substitua o hash e recrie o `cockpit-api`.
 
-O Cockpit funciona como uma SPA (*Single Page Application*) controlada por hash navigation:
+Com `COCKPIT_DISABLE_LOGIN=0`, o login em `POST /api/auth/login` cria o cookie `cockpit_session`. Rotas administrativas exigem essa sessão e o token CSRF. `POST /api/auth/logout` encerra a sessão. `GET /api/auth/session` devolve o administrador atual.
 
-| Rota / Hash | Nome da Tela | Descrição |
-| :--- | :--- | :--- |
-| `#/overview` | **Visão Geral** | Dashboard inicial com grade de vídeos gerados, filtros por canal, formato (vertical/horizontal), busca textual, seleção múltipla e ações de download/publicação. |
-| `#/gerador` | **Gerador de Vídeo** | Estúdio de criação HD: tópico do vídeo, seleção de canal, roteiro customizado, vozes sintéticas, proporção (9:16, 16:9, 1:1), monitor em tempo real do pipeline e preview player. |
-| `#/youtube` | **YouTube Shorts** | Interface especializada para Shorts automatizados: motor de renderização Turbo, agendamento de postagem no YouTube Studio e publicação rápida de vídeos da biblioteca. |
-| `#/clientes` | **Canais** | Gestão de contas conectadas (YouTube Shorts, YouTube Horizontal e TikTok), total de seguidores, views acumuladas, histórico de publicações e auditoria. |
-| `#/custos` | **Analytics** | Indicadores de performance, gráficos de evolução de views, comparativo YouTube vs. TikTok e ranking de receita dos canais. |
-| `#/notificacoes` | **Notificações** | Central de alertas sobre status de renderização, saldo de créditos em provedores de IA e avisos de sistema. |
-| `#/logs` | **Logs e Traces** | Console de observabilidade com busca e filtragem por severidade (INFO, WARN, ERROR) e inspeção via drawer lateral. |
-| `#/config` | **Configurações** | Abas para configuração de chaves de API, modelos de IA (OpenAI, Anthropic, Gemini), provedores de voz e padrões de vídeo. |
+Com `COCKPIT_DISABLE_LOGIN=1`, a API trata toda requisição como sessão local e o login responde 404.
 
----
+Tentativas repetidas de login são limitadas por 15 minutos.
 
-### 4.2 Lattice Desktop App (React)
-Acesso: `http://localhost:3000/lattice-app/Lattice.html`
+## Interface
 
-Aplicação desktop completa desenvolvida em React 18 (executado via Babel Standalone UMD, sem necessidade de build complexo):
-- **Composer**: Interface de comandos e prompt com sugestões inteligentes.
-- **Artifact Panel**: Visualizador interativo de artefatos gerados (código, previews e dados).
-- **Tweaks Panel**: Controle em tempo real de hiperparâmetros de geração (temperatura, estilo, resolução).
-- **Connectors**: Gerenciador de integrações e APIs externas.
+O menu principal segue o trabalho diário:
 
----
+| Tela | Uso |
+| --- | --- |
+| Início | Painel do dia |
+| Criar | Escolha o canal e depois Short ou vídeo longo. O perfil do canal preenche os parâmetros. Ajustes desta geração ficam em Opções avançadas |
+| Produções | Trabalhos, revisão, biblioteca e publicação |
+| Canais | Contas conectadas, perfil e automação |
+| Crescimento | Estratégia, agentes e Growth OS |
+| Resultados | Métricas dos canais e dos vídeos publicados |
 
-### 4.3 Lattice Admin Suite
-Conjunto de telas administrativas tradicionais para gestão de plataforma SaaS:
+Chat, notificações, configurações e logs ficam fora desse menu: o chat abre pelo botão Chat; notificações, configurações e logs ficam no topo.
 
-- **Activity** (`Activity.html`): Gráficos de atividade, tendências e registros em tempo real.
-- **Users** (`Users.html`): Tabela interativa com busca, filtros de status (Ativo, Pendente, Suspenso), edição e atribuição de funções (Admin, Editor, Viewer).
-- **Subscribers** (`Subscribers.html`): Gestão de assinantes de planos pagos e renovações.
-- **Plans & Invoices** (`Plans.html`, `Invoices.html`): Catálogo de precificação e faturas emitidas com comprovantes.
-- **Autenticação** (`Login.html`, `Signup.html`): Telas de login e cadastro prontas para integração com provedores OAuth ou JWT.
+Rascunhos de criação são guardados no navegador por canal e formato. Na primeira abertura de um canal, um rascunho antigo compatível é recuperado sem apagar a cópia original.
 
----
+O tema claro/escuro fica no `localStorage`.
 
-## 5. Design System & Estilização
+Arquivos HTML de atividade, usuários, planos, faturas e cadastro continuam no repositório como páginas estáticas antigas. Eles não fazem parte do cockpit em Docker e não têm API de billing.
 
-A interface adota uma estética *editorial premium* baseada em design minimalista contemporâneo (combinação de bordas sutis, tipografia precisa, contrastes limpos e suporte nativo a temas Claro e Escuro).
+## Geração
 
-### 5.1 Tokens de Cores (CSS Custom Properties)
+O Turbo baixa até três materiais em paralelo, reutiliza um cache local de 10 GB por 14 dias e consulta Pexels, Pixabay e Coverr nessa ordem quando um provedor não devolve um clipe válido. `MATERIAL_*` em `.env.example` ajusta esses limites. O encoder final é `libx264`.
 
-As variáveis estão centralizadas em `shared/shell.css` e `shared/cockpit.css`:
+Roteiros recebem orientação de abertura, progressão, exemplos, conclusão e texto próprio para narração. Uma reprovação editorial permite uma tentativa automática de correção. Roteiros enviados ou revisados manualmente continuam sob controle de quem opera. O painel mostra duração estimada, quantidade de palavras e frases longas. Essas estimativas não substituem a duração medida no áudio.
 
-```css
-:root {
-  /* Cores de Acento */
-  --accent: #2563eb;          /* Azul primário */
-  --accent-soft: rgba(37, 99, 235, 0.12);
-  --accent-ink: #1d4ed8;
+A curadoria compara até cinco candidatos por cena. Até três cenas são avaliadas ao mesmo tempo. Downloads preferem a versão Full HD disponível. A revisão final mede o áudio com FFmpeg e bloqueia pico de -40 dB ou menos e silêncios acima de quatro segundos. Essa medição não transcreve a voz nem comprova pronúncia.
 
-  /* Modo Claro */
-  --bg: #ffffff;
-  --surface: #ffffff;
-  --rail: #ffffff;
-  --rail-2: #f3f4f6;
-  --border: #e5e7eb;
-  --border-strong: #d1d5db;
-  --ink: #111827;            /* Texto principal */
-  --ink-2: #1f2937;          /* Texto secundário */
-  --muted: #6b7280;          /* Texto atenuado */
+Trabalhos antigos são considerados parados depois de 45 minutos (Short), 180 minutos (vídeo longo) ou 360 minutos na fila. Esses prazos vêm de `SHORT_STALE_MINUTES`, `LONG_STALE_MINUTES` e `QUEUE_STALE_MINUTES`.
 
-  /* Estados */
-  --ok: #16a34a;             /* Sucesso / Online */
-  --warn: #d97706;           /* Alerta */
-  --err: #ef4444;            /* Erro */
-}
+## Publicação
 
-/* Modo Escuro (Ativado via data-theme="dark") */
-html[data-theme="dark"] {
-  --bg: #09090b;
-  --surface: #18181b;
-  --rail: #09090b;
-  --rail-2: #1f1f23;
-  --border: #27272a;
-  --border-strong: #3f3f46;
-  --ink: #ffffff;
-  --ink-2: #f4f4f5;
-  --muted: #a1a1aa;
-}
+Publicar continua sendo uma ação explícita, exceto nos canais do YouTube com operador autorizado.
+
+Em Crescimento, no operador de cada canal do YouTube, a autorização começa desligada. Quando ligada, a grade define dias, horário e fuso IANA. O serviço `cockpit-operator` gera o vídeo, confere arquivo e metadados, envia ao YouTube como privado com `publishAt` e reconcilia a publicação pública. TikTok e canais sem autorização permanecem em revisão. Falha pausa o operador e aparece em Agentes e Notificações. Salvar o operador de novo, depois de corrigir a causa, limpa a pausa. Um envio de resultado incerto precisa ser conferido no YouTube antes de nova tentativa.
+
+## Growth OS
+
+A base local do Growth OS usa PostgreSQL 16, Temporal e Redis Streams. A tela calcula o gap YPP só com métricas orgânicas qualificadas, produz um Opportunity Score explicável e inicia um workflow de planejamento. A publicação desse fluxo permanece em revisão humana.
+
+Rotas novas usam o prefixo `/api/v1/growth`:
+
+- `GET /api/v1/growth/health`
+- `POST /api/v1/growth/goals/evaluate`
+- `POST /api/v1/growth/opportunities/score`
+- `POST /api/v1/growth/workflows`
+- `GET /api/v1/growth/workflows/{workflow_id}`
+
+As rotas anteriores, sob `/api`, continuam ativas.
+
+Diagnóstico:
+
+```powershell
+docker compose ps
+docker compose logs growth-worker growth-outbox --tail 100
+docker compose exec -T redis redis-cli XLEN growth:events
 ```
 
-### 5.2 Tipografia
+## Assistente
 
-Três famílias tipográficas selecionadas para diferentes funções:
-- **Inter** (`var(--font-sans)`): Utilizada em títulos, rótulos, botões e corpo do texto.
-- **JetBrains Mono** (`var(--font-mono)`): Utilizada em métricas numéricas, IDs, status de pipelines e logs.
-- **Instrument Serif** (`var(--font-serif)`): Utilizada em destaques e branding editorial.
+O chat responde em linguagem natural com o provedor de linguagem já configurado no cockpit. Ele consulta canais e trabalhos, calcula metas YPP, pontua oportunidades, inicia um plano durável ou gera um roteiro de Short. Pedido incompleto vira pergunta de esclarecimento. A conversa não publica nem aprova conteúdo.
 
----
+## API principal
 
-## 6. Arquitetura de Dados e Estado Frontend
+Tudo abaixo exige sessão, salvo health e login. Swagger só aparece com `ENABLE_API_DOCS=1`.
 
-Os dados da aplicação são gerenciados através de objetos reativos no arquivo `shared/cockpit-data.js`:
+| Área | Rotas |
+| --- | --- |
+| Sessão | `/api/auth/login`, `/api/auth/logout`, `/api/auth/session` |
+| Saúde | `/api/health/live`, `/api/health/ready`, `/api/health`, `/api/version`, `/api/status` |
+| Canais | `/api/channels`, conexão YouTube e TikTok, refresh |
+| Trabalhos | criação por projeto, consulta, retry, cancelamento, eventos, artefatos, metadados, aprovação e publicação |
+| Lotes | `/api/generation-batches` e revisão por item |
+| Roteiros | `/api/scripts/short`, `/api/scripts/long`, `/api/scripts/terms` |
+| Operador | `/api/agents/operators` e execução manual por canal |
+| Analytics | `/api/analytics/overview`, `/api/agents/analytics` |
+| Ajustes | `/api/settings/providers`, `/api/settings/generation-defaults` |
+| Assistente | `POST /api/assistant/chat` |
+| Avisos | `/api/notifications`, `/api/logs` |
 
-```javascript
-// Exemplo de canais configurados
-window.CK = {
-  canais: [
-    { id: "c1", nome: "Curiosidades Rápidas", rede: "yt_shorts", inscritos: 142000, ... },
-    { id: "c2", nome: "Fatos Históricos", rede: "yt_shorts", inscritos: 89000, ... },
-    ...
-  ],
-  videos: [ ... ],
-  notificacoes: [ ... ],
-  logs: [ ... ]
-};
-```
+O estado operacional do cockpit fica no SQLite em `runtime`. O domínio novo de crescimento fica no PostgreSQL.
 
-### Persistência Local
-- O tema (Claro / Escuro) é persistido no `localStorage` sob a chave `lattice-cockpit-theme`.
-- Vídeos recém-gerados através do simulador de pipeline são inseridos na lista de vídeos em memória e passam a aparecer imediatamente na **Visão Geral**.
+## O que não usar como guia
 
----
+`npm start` não sobe o `server.js`. O servidor Node é somente `npm run static`.
 
-## 7. Guia de Integração com Backend Real
+Não há deploy previsto para Vercel, Netlify ou um Nginx com os HTML soltos. A operação suportada é o Docker Compose nesta máquina.
 
-Para transformar o protótipo frontend em uma plataforma de produção conectada a um backend (por exemplo, Python FastAPI / Node.js Express / NestJS), siga estes passos:
+Não existe o fluxo de telas `#/gerador`, `#/youtube` e `#/custos` como menu atual. Essas views antigas, quando ainda existem no código, são alcançadas de dentro de Criar, Produções, Crescimento e Resultados.
 
-### 1. Endpoint de Geração de Vídeos
-No arquivo `shared/cockpit-views.js` (função `gerador`), substitua a chamada do timer simulado pela chamada à sua API:
+## Problemas comuns
 
-```javascript
-async function handleGenerateVideo(payload) {
-  // Exemplo de envio para o backend Python/MoneyPrinter
-  const response = await fetch('/api/v1/videos/generate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      topic: payload.topic,
-      channel_id: payload.channelId,
-      voice: payload.voice,
-      aspect_ratio: payload.aspectRatio,
-      subtitle_style: payload.subtitleStyle
-    })
-  });
-  const data = await response.json();
-  return data.job_id;
-}
-```
+**A página pede login e a senha não é aceita.** Confira o e-mail em `runtime/secrets/admin.json`. A senha não está nesse arquivo. Redefina com `.\setup.ps1 -AdminOnly` e recrie o `cockpit-api`.
 
-### 2. Acompanhamento de Pipeline via WebSocket / SSE
-Substitua os intervalos de simulação de etapas por um `EventSource` ou conexão WebSocket para refletir o status real do FFmpeg e Whisper:
+**A interface abre sem pedir senha.** O `cockpit-api` está com `COCKPIT_DISABLE_LOGIN=1`.
 
-```javascript
-const sse = new EventSource(`/api/v1/jobs/${jobId}/events`);
-sse.onmessage = (event) => {
-  const step = JSON.parse(event.data);
-  // Atualiza a barra de progresso e as etapas na interface
-  updatePipelineUI(step.stage, step.progress);
-};
-```
+**`/api/health/ready` não responde.** Veja `docker compose ps` e o log do `cockpit-api`. A API espera o Turbo e o PostgreSQL saudáveis.
 
----
-
-## 8. Guia de Deploy para Produção
-
-### Opção A: Vercel (Recomendado)
-1. Instale a CLI da Vercel ou importe o repositório pelo painel web da Vercel.
-2. Como o projeto é estático com `index.html` na raiz, nenhuma configuração de build é necessária. O deploy será concluído em segundos.
-
-### Opção B: Netlify
-1. Conecte o repositório no Netlify.
-2. Defina o **Publish directory** como `.` (raiz).
-3. Conclua o deploy.
-
-### Opção C: Docker / Nginx
-Crie um arquivo `Dockerfile` simples na raiz:
-```dockerfile
-FROM nginx:alpine
-COPY . /usr/share/nginx/html
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
-```
-Construa e execute:
-```bash
-docker build -t moneyprint-frontend .
-docker run -d -p 80:80 moneyprint-frontend
-```
-
----
-
-## 9. Solução de Problemas (FAQ)
-
-#### A página abre em branco ou sem estilos ao abrir o arquivo diretamente?
-Verifique se a pasta `shared/` está no mesmo diretório do arquivo `.html` que você abriu. Para evitar restrições de segurança de CORS em arquivos locais (`file://`), use sempre o servidor embutido executando `iniciar.bat` ou `npm start`.
-
-#### Como mudar a porta padrão do servidor?
-Defina a variável de ambiente `PORT` antes de iniciar:
-```bash
-# Windows PowerShell
-$env:PORT="8080"; npm start
-
-# Linux / Mac
-PORT=8080 npm start
-```
-Caso a porta 3000 já esteja sendo utilizada por outro programa, o `server.js` detectará automaticamente e subirá na próxima porta livre (3001, 3002, etc.).
-
----
-
-*Documentação mantida para o projeto Moneyprint Layout / Lattice Cockpit.*
+**Geração não anda.** Confira `moneyprinterturbo` e `cockpit-generation-worker`, e se as chaves do provedor de linguagem e do Pexels foram gravadas no setup.

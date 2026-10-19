@@ -7,9 +7,10 @@ from typing import Any
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
-from .engines import OpportunityScoreInput, YPPGoalInput, calculate_opportunity_score, calculate_ypp_gap
-from .events import DomainEvent
-from .store import GrowthStore
+with workflow.unsafe.imports_passed_through():
+    from .engines import OpportunityScoreInput, YPPGoalInput, calculate_opportunity_score, calculate_ypp_gap
+    from .events import DomainEvent
+    from .store import GrowthStore
 
 
 @activity.defn

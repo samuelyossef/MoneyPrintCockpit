@@ -33,6 +33,24 @@ class GatewayContractTests(unittest.TestCase):
         self.assertEqual(defaults["video_source"], "pexels")
         self.assertEqual(defaults["video_concat_mode"], "script")
 
+    def test_app_version_is_consistent_across_runtime_surfaces(self):
+        import httpx
+
+        canonical = (Path(__file__).resolve().parents[2] / "VERSION").read_text(encoding="utf-8").strip()
+        expected = canonical
+        self.assertEqual(self.main.APP_VERSION, expected)
+        self.assertEqual(self.main.app.version, expected)
+        self.assertEqual(asyncio.run(self.main.app_version()), {"name": "MoneyPrinter Cockpit", "version": expected})
+
+        async def request_version():
+            transport = httpx.ASGITransport(app=self.main.app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                return await client.get("/api/version")
+
+        response = asyncio.run(request_version())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["version"], expected)
+
     def test_format_presets_balance_speed_and_quality(self):
         short = self.main.FORMAT_PRESETS["short"]
         long = self.main.FORMAT_PRESETS["long"]
@@ -594,7 +612,7 @@ class GatewayContractTests(unittest.TestCase):
             job = asyncio.run(self.main.publish_job("job-1", self.main.PublishInput(confirm_not_uploaded=True)))
         self.assertEqual(credentials.call_args.args[0], "ch-1")
         self.assertEqual(upload.call_args.args[2]["title"], "Título")
-        self.assertEqual(len(upload.call_args.args), 3)
+        self.assertEqual(len(upload.call_args.args), 5)
         self.assertEqual(job["publications"][0]["external_id"], "yt123")
         self.assertEqual(self._publication()["state"], "published")
         self.assertEqual(self._publication()["attempts"], 2)
@@ -662,13 +680,13 @@ class GatewayContractTests(unittest.TestCase):
         sent = []
 
         async def fake_turbo(method, path, **kwargs):
-            if path == "/api/v1/scripts":  # "script" concat mode asks Turbo to write a Short's script first; empty here keeps this test focused on format-locking
-                return type("Response", (), {"json": lambda self: {"data": {"video_script": ""}}})()
+            if path == "/api/v1/scripts":
+                return type("Response", (), {"json": lambda self: {"data": {"video_script": " ".join(["narracao"] * 225)}}})()
             sent.append(kwargs["json"])
             return type("Response", (), {"json": lambda self: {"data": {"task_id": f"t{len(sent)}"}}})()
 
         with patch.object(self.main, "turbo_request", new=fake_turbo):
-            short = asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="s", format="short", channel_ids=["yt", "tt"], settings={"video_aspect": "16:9"})))
+            short = asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="s", format="short", channel_ids=["yt", "tt"], settings={"video_aspect": "16:9", "video_terms": "term"})))
             long = asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="l", format="long", settings={"video_count": 3})))
             for format, channel_ids in (("long", ["tt"]), ("short", ["yt", "yt2"])):
                 with self.assertRaises(HTTPException) as rejected:
@@ -686,11 +704,13 @@ class GatewayContractTests(unittest.TestCase):
         self._connected(("yt", "youtube"))
         self.main.patch_channel("yt", self.main.ChannelPatch(voice_name="pt-BR-AntonioNeural", subtitle_enabled=False, font_size=62))
         async def fake_turbo(_method, _path, **kwargs):
+            if _path == "/api/v1/scripts":
+                return type("Response", (), {"json": lambda self: {"data": {"video_script": " " .join(["narracao"] * 225)}}})()
             return type("Response", (), {"json": lambda self: {"data": {"task_id": "profile-job"}}})()
         with patch.object(self.main, "turbo_request", new=fake_turbo):
             job = asyncio.run(self.main.create_job("p1", self.main.JobCreate(
                 subject="tema", format="short", channel_ids=["yt"],
-                settings={"voice_name": "pt-BR-FranciscaNeural", "font_size": 70},
+                settings={"voice_name": "pt-BR-FranciscaNeural", "font_size": 70, "video_terms": "term"},
             )))
         with self.main.database() as db:
             payload = json.loads(db.execute("SELECT request_json FROM video_jobs WHERE id=?", (job["id"],)).fetchone()["request_json"])
@@ -717,10 +737,11 @@ class GatewayContractTests(unittest.TestCase):
         async def fake_turbo(_method, path, **kwargs):
             if path == "/api/v1/videos":
                 sent.append(kwargs["json"])
-            return type("Response", (), {"json": lambda self: {"data": {"task_id": f"profile-{len(sent)}"}}})()
+                return type("Response", (), {"json": lambda self: {"data": {"task_id": f"profile-{len(sent)}"}}})()
+            return type("Response", (), {"json": lambda self: {"data": {"video_script": " " .join(["narracao"] * 225)}}})()
 
         with patch.object(self.main, "turbo_request", new=fake_turbo):
-            asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="short", format="short", channel_ids=["yt"])))
+            asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="short", format="short", channel_ids=["yt"], settings={"video_terms": "term"})))
             asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="long", format="long", channel_ids=["yt"])))
         self.assertEqual([(item["voice_name"], item["voice_rate"], item["subtitle_enabled"], item["subtitle_position"], item["font_size"]) for item in sent], [
             ("pt-BR-AntonioNeural", 1.2, False, "center", 64),
@@ -806,7 +827,7 @@ class GatewayContractTests(unittest.TestCase):
             self.assertEqual(kwargs["task"], "script")
             self.assertTrue(kwargs["fast_script"])
             self.assertLessEqual(kwargs["max_tokens"], 4096)
-            return json.dumps({"title": "T", "script": "## Título\n- parte com **texto**"})
+            return json.dumps({"title": "T", "script": "## Título\n- parte com **texto** " + "narração " * 688})
 
         with patch.object(self.main, "llm_chat", new=fake_chat):
             result = asyncio.run(self.main.long_script(self.main.LongScriptInput(subject="oceano", minutes=5)))
@@ -822,13 +843,15 @@ class GatewayContractTests(unittest.TestCase):
         prompts, calls = [], []
 
         async def fake_chat(prompt, json_mode=False, **kwargs):
-            prompts.append(prompt); calls.append(kwargs)
-            return outline if json_mode else f"parte {len(prompts) - 1}"
+            prompts.append(prompt)
+            calls.append(kwargs)
+            return outline if json_mode else f"parte {len(prompts) - 1} " + "narração " * 210
 
         with patch.object(self.main, "llm_chat", new=fake_chat):
             result = asyncio.run(self.main.long_script(self.main.LongScriptInput(subject="oceano", minutes=9)))
         self.assertEqual(len(prompts), 7)  # planning plus six sequential sections
-        self.assertIn("parte 1", prompts[2])
+        self.assertIn("Final da seção anterior", prompts[2])
+        self.assertIn("narração", prompts[2])
         self.assertEqual(calls[0]["task"], "outline")
         self.assertTrue(all(call["fast_script"] for call in calls))
         self.assertTrue(all(call["max_tokens"] <= 1536 for call in calls))
@@ -842,7 +865,7 @@ class GatewayContractTests(unittest.TestCase):
                 return False
 
         async def fake_chat(prompt, json_mode=False, **kwargs):
-            return json.dumps({"title": "T", "script": "narração completa"})
+            return json.dumps({"title": "T", "script": "narração " * 1110})
 
         async def collect():
             response = await self.main.long_script_stream(self.main.LongScriptInput(subject="oceano", minutes=8), ConnectedRequest())
@@ -853,7 +876,7 @@ class GatewayContractTests(unittest.TestCase):
         stream = "".join(chunk.decode() if isinstance(chunk, bytes) else chunk for chunk in chunks)
         self.assertIn("event: progress", stream)
         self.assertIn("event: completed", stream)
-        self.assertIn("narração completa", stream)
+        self.assertIn('"script": "narração', stream)
 
     def test_long_script_stream_sanitizes_provider_error(self):
         from unittest.mock import patch
@@ -877,12 +900,11 @@ class GatewayContractTests(unittest.TestCase):
 
     def test_long_script_honors_custom_requirements_throughout(self):
         from unittest.mock import patch
-        outline = json.dumps({"title": "T", "sections": [{"heading": "S0", "points": ["p"]}] * 4})
         prompts = []
 
         async def fake_chat(prompt, json_mode=False, **kwargs):
             prompts.append(prompt)
-            return json.dumps({"title": "T", "script": "narração"})
+            return json.dumps({"title": "T", "script": "narração " * 690})
 
         with patch.object(self.main, "llm_chat", new=fake_chat):
             asyncio.run(self.main.long_script(self.main.LongScriptInput(subject="oceano", minutes=5, requirements="tom leve, estilo TikTok")))
@@ -890,12 +912,11 @@ class GatewayContractTests(unittest.TestCase):
 
     def test_long_script_folds_system_prompt_into_every_call(self):
         from unittest.mock import patch
-        outline = json.dumps({"title": "T", "sections": [{"heading": "S0", "points": ["p"]}] * 4})
         prompts = []
 
         async def fake_chat(prompt, json_mode=False, **kwargs):
             prompts.append(prompt)
-            return json.dumps({"title": "T", "script": "narração"})
+            return json.dumps({"title": "T", "script": "narração " * 690})
 
         with patch.object(self.main, "llm_chat", new=fake_chat):
             asyncio.run(self.main.long_script(self.main.LongScriptInput(subject="oceano", minutes=5, system_prompt="nunca use a palavra incrível")))
@@ -957,7 +978,8 @@ class GatewayContractTests(unittest.TestCase):
         from unittest.mock import AsyncMock, patch
         from fastapi import HTTPException
         self._approved_job(self._channel())
-        schedule = lambda delta: self.main.PublishInput(publish_at=datetime.now(UTC) + delta)
+        def schedule(delta):
+            return self.main.PublishInput(publish_at=datetime.now(UTC) + delta)
         download = AsyncMock()
         with patch.object(self.main, "download_turbo_file", new=download):
             with self.assertRaises(HTTPException):
@@ -979,7 +1001,6 @@ class GatewayContractTests(unittest.TestCase):
 
     def test_operator_starts_one_video_then_skips_while_it_renders(self):
         from datetime import UTC, datetime
-        from unittest.mock import patch
         channel_id = self._channel()
         self.main.patch_channel(channel_id, self.main.ChannelPatch(
             voice_name="pt-BR-AntonioNeural", voice_rate=1.2, voice_volume=1.5,
@@ -1100,7 +1121,7 @@ class GatewayContractTests(unittest.TestCase):
             if path == "/api/v1/videos":
                 sent["video"] = kwargs["json"]
                 return type("Response", (), {"json": lambda self: {"data": {"task_id": "t1"}}})()
-            return type("Response", (), {"json": lambda self: {"data": {"video_script": "uma frase de teste bem curta"}}})()
+            return type("Response", (), {"json": lambda self: {"data": {"video_script": " ".join(["narracao"] * 225)}}})()
 
         async def fake_visual_terms(subject, script, clip_seconds, voice_rate=1.0):
             sent["visual_terms_args"] = (subject, script, clip_seconds)
@@ -1112,8 +1133,8 @@ class GatewayContractTests(unittest.TestCase):
         self.assertEqual(sent["video"]["video_concat_mode"], "sequential")
         self.assertEqual(sent["video"]["video_terms"], "term one, term two")
         self.assertEqual(sent["video"]["video_clip_duration"], 4)
-        self.assertEqual(sent["visual_terms_args"][1], "uma frase de teste bem curta")  # the script Turbo just wrote, not blank
-        self.assertEqual(job["script"], "uma frase de teste bem curta")
+        self.assertEqual(sent["visual_terms_args"][1], job["script"])
+        self.assertLessEqual(len(job["script"].split()), self.main.script_duration_budget("short", 5)["maximum_words"])
 
     def test_create_job_random_mode_skips_alignment(self):
         from unittest.mock import patch
@@ -1138,11 +1159,25 @@ class GatewayContractTests(unittest.TestCase):
         self.assertEqual(self.main.trim_to_words("sem pontuacao nenhuma aqui de jeito nenhum", 3), "sem pontuacao nenhuma")
 
     def test_short_script_max_words_maps_paragraph_number_to_seconds(self):
-        self.assertEqual(self.main.short_script_max_words(4), round(60 * 150 / 60))
+        self.assertEqual(self.main.short_script_max_words(4), round(66 * 150 / 60))
         self.assertEqual(self.main.short_script_max_words(6), round(90 * 150 / 60))
         self.assertEqual(self.main.short_script_max_words(99), self.main.short_script_max_words(6))  # unmapped value falls back to the longest Short
+        for paragraph_number, low, high in ((4, 60, 66), (5, 67.5, 82.5), (6, 81, 90)):
+            budget = self.main.script_duration_budget("short", paragraph_number)
+            self.assertEqual((budget["minimum_seconds"], budget["maximum_seconds"]), (low, high))
+        jenny = self.main.script_duration_budget("short", 4, 1, "en-US-JennyNeural")
+        self.assertEqual((jenny["minimum_words"], jenny["maximum_words"]), (170, 187))
+        for minutes in (5, 8, 10, 15):
+            for rate in (0.8, 1.2):
+                budget = self.main.script_duration_budget("long", minutes, rate, "pt-BR-FranciscaNeural")
+                self.assertEqual(budget["minimum_seconds"], minutes * 60 * 0.85)
+                self.assertEqual(budget["maximum_seconds"], minutes * 60)
+                estimated = self.main.narration_seconds("word " * budget["target_words"], rate, "pt-BR-FranciscaNeural")
+                self.assertLessEqual(budget["minimum_seconds"], estimated)
+                self.assertLessEqual(estimated, budget["maximum_seconds"])
 
     def test_short_script_endpoint_trims_an_oversized_turbo_response(self):
+        from fastapi import HTTPException
         from unittest.mock import patch
         long_script_text = " ".join(f"palavra{i}." for i in range(500))
 
@@ -1158,32 +1193,75 @@ class GatewayContractTests(unittest.TestCase):
             return type("Response", (), {"json": lambda self: {"data": {"video_script": "uma frase curta."}}})()
 
         with patch.object(self.main, "turbo_request", new=fake_turbo_short):
-            short_result = asyncio.run(self.main.short_script(self.main.ShortScriptInput(subject="tema", paragraph_number=5)))
-        self.assertFalse(short_result["trimmed"])
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(self.main.short_script(self.main.ShortScriptInput(subject="tema", paragraph_number=5)))
+        self.assertIn("faixa selecionada", str(raised.exception.detail))
 
     def test_short_script_sends_word_range_and_flags_a_short_result(self):
         from unittest.mock import patch
         in_range = " ".join(f"palavra{i}." for i in range(170))  # 75 s target: 150–188 words
         too_short = " ".join(f"palavra{i}." for i in range(139))  # the reported case: ≈ 56 s
         sent = {}
+        calls = 0
 
         async def fake_turbo(method, path, **kwargs):
+            nonlocal calls
+            calls += 1
             sent.update(kwargs["json"])
-            script = too_short if sent.get("video_script_prompt", "").startswith("tom leve") else in_range
+            script = too_short if calls == 2 else in_range
             return type("Response", (), {"json": lambda self: {"data": {"video_script": script}}})()
 
         with patch.object(self.main, "turbo_request", new=fake_turbo):
             ok = asyncio.run(self.main.short_script(self.main.ShortScriptInput(subject="tema", paragraph_number=5)))
-        self.assertIn(str(self.main.short_script_min_words()), sent["video_script_prompt"])
+        self.assertIn(str(self.main.short_script_min_words(5)), sent["video_script_prompt"])
         self.assertIn(str(self.main.short_script_max_words(5)), sent["video_script_prompt"])
         self.assertFalse(ok["too_short"])
 
         with patch.object(self.main, "turbo_request", new=fake_turbo):
             short = asyncio.run(self.main.short_script(self.main.ShortScriptInput(subject="tema", paragraph_number=5, script_prompt="tom leve")))
-        self.assertTrue(short["too_short"])
-        self.assertEqual(short["min_words"], self.main.short_script_min_words())
+        self.assertFalse(short["too_short"])
+        self.assertEqual(short["min_words"], self.main.short_script_min_words(5))
+        self.assertEqual(short["words"], len(in_range.split()))
         self.assertIn("tom leve", sent["video_script_prompt"])  # custom requirements are kept
-        self.assertIn(str(self.main.short_script_min_words()), sent["video_script_prompt"])
+        self.assertIn(str(self.main.short_script_min_words(5)), sent["video_script_prompt"])
+
+    def test_short_script_repairs_57_seconds_for_selected_jenny_voice(self):
+        from unittest.mock import patch
+        sent = []
+
+        async def fake_turbo(_method, _path, **kwargs):
+            sent.append(kwargs["json"])
+            count = 161 if len(sent) == 1 else 178
+            text = " ".join(["word"] * count)
+            return type("Response", (), {"json": lambda self: {"data": {"video_script": text}}})()
+
+        with patch.object(self.main, "turbo_request", new=fake_turbo):
+            result = asyncio.run(self.main.short_script(self.main.ShortScriptInput(
+                subject="topic", paragraph_number=4, voice_rate=1, voice_name="en-US-JennyNeural",
+            )))
+        self.assertEqual(len(sent), 2)
+        self.assertIn("56.8 segundos", sent[1]["video_script_prompt"])
+        self.assertEqual(result["words"], 178)
+        self.assertEqual(result["estimated_seconds"], 63)
+
+    def test_long_script_repairs_to_duration_and_voice_rate(self):
+        from unittest.mock import patch
+        prompts = []
+
+        async def fake_chat(prompt, json_mode=False, **_kwargs):
+            prompts.append(prompt)
+            count = 700 if len(prompts) == 1 else 840
+            return json.dumps({"title": "História", "script": " ".join(["narracao"] * count)})
+
+        with patch.object(self.main, "llm_chat", new=fake_chat):
+            result = asyncio.run(self.main.long_script(self.main.LongScriptInput(
+                subject="oceano", minutes=5, voice_rate=1.2, voice_name="pt-BR-FranciscaNeural",
+            )))
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("cerca de 832 palavras", prompts[0])
+        self.assertIn("233.3 s", prompts[1])
+        self.assertEqual(result["words"], 840)
+        self.assertEqual(result["estimated_minutes"], 4.7)
 
     def test_create_job_trims_an_oversized_auto_generated_short_script(self):
         from unittest.mock import patch
@@ -1202,6 +1280,7 @@ class GatewayContractTests(unittest.TestCase):
             job = asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="tema", format="short", channel_ids=["yt"])))
         self.assertLess(len(job["script"].split()), 500)
         self.assertLessEqual(len(job["script"].split()), self.main.short_script_max_words(5))
+        self.assertEqual(sent["video"]["video_script"], job["script"])
 
     def test_create_job_trims_a_pasted_script_to_the_chosen_duration(self):
         from unittest.mock import patch
@@ -1236,3 +1315,77 @@ class GatewayContractTests(unittest.TestCase):
             result = asyncio.run(self.main.long_script(self.main.LongScriptInput(subject="oceano", minutes=9)))
         self.assertTrue(result["trimmed"])
         self.assertLessEqual(len(result["script"].split()), 9 * self.main.WORDS_PER_MINUTE)
+
+    def test_review_copy_uses_the_local_final_when_turbo_lost_the_task(self):
+        item = "433365dc-c13c-4629-a369-21b2e57cfd98"
+        folder = self.main.DATA_DIR / "curated_materials" / item
+        folder.mkdir(parents=True)
+        video = folder / "final-review-0.mp4"
+        video.write_bytes(b"mp4")
+        with self.main.database() as db:
+            db.execute("INSERT INTO projects(id, name, created_at, updated_at) VALUES ('p', 'P', 't', 't')")
+            db.execute(
+                "INSERT INTO video_jobs(id, project_id, subject, request_json, state, created_at, updated_at, generation_item_id) VALUES ('j', 'p', 's', '{}', 'completed', 't', 't', ?)",
+                (item,),
+            )
+            db.execute("INSERT INTO artifacts(id, job_id, kind, remote_path, filename, created_at) VALUES ('a', 'j', 'video', 'task/final-1.mp4', 'final-1.mp4', 't')")
+            artifact = db.execute("SELECT * FROM artifacts WHERE id='a'").fetchone()
+        self.assertEqual(self.main.review_copy_for_artifact("j", artifact), video.resolve())
+        outside = self.main.DATA_DIR / "outside"
+        outside.mkdir()
+        (outside / "final-review-0.mp4").write_bytes(b"no")
+        with self.main.database() as db:
+            db.execute("UPDATE video_jobs SET generation_item_id=? WHERE id='j'", ("../outside",))
+            escaped = db.execute("SELECT * FROM artifacts WHERE id='a'").fetchone()
+        self.assertIsNone(self.main.review_copy_for_artifact("j", escaped))
+
+    def test_proposal_requires_angle_questions_and_brief(self):
+        with self.assertRaises(self.main.HTTPException):
+            self.main.normalize_proposal({"angle": "", "audience_questions": ["uma"], "brief": "curto"})
+        proposal = self.main.normalize_proposal({
+            "angle": "Gancho concreto", "audience_questions": ["Por que agora?", "O que muda?"],
+            "references": ["rotina matinal"], "brief": "Abra com uma cena e feche com um passo.",
+        })
+        self.assertEqual(proposal["angle"], "Gancho concreto")
+
+    def test_reference_structure_uses_pace_not_source_content(self):
+        from unittest.mock import patch
+        path = self.main.DATA_DIR / "clip.mp4"
+        path.write_bytes(b"mp4")
+        with patch("gateway.visual_specialists.probe", return_value={"duration": 30, "width": 1080, "height": 1920, "audio": True}), \
+             patch("subprocess.run", return_value=type("Result", (), {"stderr": "\n".join(f"pts_time:{index}" for index in range(12)), "returncode": 0})()):
+            result = self.main.reference_structure(path)
+        self.assertEqual(result["pace"], "rápido")
+        self.assertIn("Não copie", result["brief"])
+
+    def test_long_video_can_queue_derived_shorts(self):
+        from unittest.mock import patch
+        timestamp = self.main.now()
+        with self.main.database() as db:
+            db.execute("INSERT INTO projects(id, name, created_at, updated_at) VALUES ('p', 'P', ?, ?)", (timestamp, timestamp))
+            db.execute("INSERT INTO channels(id, platform, name, status, created_at, updated_at) VALUES ('yt', 'youtube', 'Canal', 'connected', ?, ?)", (timestamp, timestamp))
+            db.execute(
+                "INSERT INTO video_jobs(id, project_id, subject, request_json, state, format, channel_id, created_at, updated_at, completed_at) "
+                "VALUES ('long', 'p', 'Documentário', '{}', 'approved', 'long', 'yt', ?, ?, ?)",
+                (timestamp, timestamp, timestamp),
+            )
+            db.execute("INSERT INTO artifacts(id, job_id, kind, remote_path, filename, created_at) VALUES ('art', 'long', 'video', 'tasks/final.mp4', 'final.mp4', ?)", (timestamp,))
+
+        async def download(_remote, target):
+            target.write_bytes(b"source")
+
+        def ffmpeg(args, **_kwargs):
+            Path(args[-1]).write_bytes(b"short")
+            return type("Result", (), {"returncode": 0, "stderr": ""})()
+
+        with patch.object(self.main, "download_turbo_file", new=download), \
+             patch("gateway.visual_specialists.probe", return_value={"duration": 120, "width": 1920, "height": 1080, "audio": True}), \
+             patch("subprocess.run", side_effect=ffmpeg):
+            result = asyncio.run(self.main.derive_shorts("long"))
+        self.assertEqual(result["created"], 3)
+        with self.main.database() as db:
+            shorts = db.execute("SELECT id, format, state FROM video_jobs WHERE created_by='derived'").fetchall()
+            queued = db.execute("SELECT count(*) FROM publications WHERE state='pending' AND job_id!=?", ("long",)).fetchone()[0]
+        self.assertEqual(len(shorts), 3)
+        self.assertTrue(all(row["format"] == "short" and row["state"] == "completed" for row in shorts))
+        self.assertEqual(queued, 3)

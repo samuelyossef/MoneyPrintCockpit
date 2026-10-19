@@ -28,7 +28,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
-from gateway.auth_crypto import admin_session_version, password_hash, session_token_hash, verify_password
+from gateway.auth_crypto import admin_session_version, password_hash as password_hash, session_token_hash, verify_password
+from gateway.auto_generation import router as auto_generation_router
 from gateway.growth.api import router as growth_router
 from gateway.growth.api import store as growth_store
 from gateway.growth.api import OpportunityScoreRequest, PlanningWorkflowRequest, YPPGoalRequest
@@ -37,10 +38,17 @@ from gateway.growth.store import GrowthStoreUnavailable
 from gateway.growth.storage import ObjectStorageUnavailable, ensure_media_bucket
 
 DATA_DIR = Path(os.getenv("APP_DATA_DIR", "runtime"))
+APP_VERSION_FILE = Path(__file__).resolve().parent.parent / "VERSION"
+try:
+    APP_VERSION = APP_VERSION_FILE.read_text(encoding="utf-8").strip()
+except OSError:
+    APP_VERSION = "0.0.0+unknown"
 DATABASE = DATA_DIR / "cockpit.sqlite3"
 TURBO_BASE_URL = os.getenv("TURBO_BASE_URL", "http://127.0.0.1:8080").rstrip("/")
 KEY_FILE = os.getenv("MPT_API_KEY_FILE", "")
 ADMIN_FILE = Path(os.getenv("COCKPIT_ADMIN_FILE", str(DATA_DIR / "secrets" / "admin.json")))
+LOGIN_DISABLED = os.getenv("COCKPIT_DISABLE_LOGIN", "0") == "1"
+_OPEN_SESSION_CSRF = "login-disabled"
 SESSION_HOURS = 12
 LOGIN_ATTEMPTS = 5
 LOGIN_WINDOW_MINUTES = 15
@@ -202,7 +210,7 @@ def _initialize_database_locked() -> None:
             CREATE TABLE IF NOT EXISTS generation_batches (
               id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
               client_request_id TEXT NOT NULL, request_hash TEXT NOT NULL,
-              input_json TEXT NOT NULL, created_at TEXT NOT NULL,
+              input_json TEXT NOT NULL, created_at TEXT NOT NULL, archived_at TEXT,
               UNIQUE(project_id, client_request_id)
             );
             CREATE TABLE IF NOT EXISTS generation_batch_items (
@@ -210,6 +218,9 @@ def _initialize_database_locked() -> None:
               channel_id TEXT NOT NULL REFERENCES channels(id), channel_name TEXT NOT NULL,
               state TEXT NOT NULL, stage TEXT NOT NULL, context_json TEXT NOT NULL,
               generated_json TEXT NOT NULL DEFAULT '{}', job_id TEXT REFERENCES video_jobs(id),
+              repair_parent_item_id TEXT REFERENCES generation_batch_items(id),
+              repair_root_item_id TEXT REFERENCES generation_batch_items(id),
+              repair_attempt INTEGER NOT NULL DEFAULT 0,
               error TEXT, lease_owner TEXT, lease_until TEXT, submission_started_at TEXT,
               created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
               UNIQUE(batch_id, channel_id)
@@ -255,6 +266,19 @@ def _initialize_database_locked() -> None:
             CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
             """
         )
+        batch_columns = {column["name"] for column in db.execute("PRAGMA table_info(generation_batches)")}
+        if "archived_at" not in batch_columns:
+            db.execute("ALTER TABLE generation_batches ADD COLUMN archived_at TEXT")
+        item_columns = {column["name"] for column in db.execute("PRAGMA table_info(generation_batch_items)")}
+        for column, definition in (
+            ("repair_parent_item_id", "TEXT REFERENCES generation_batch_items(id)"),
+            ("repair_root_item_id", "TEXT REFERENCES generation_batch_items(id)"),
+            ("repair_attempt", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if column not in item_columns:
+                db.execute(f"ALTER TABLE generation_batch_items ADD COLUMN {column} {definition}")
+        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_generation_repair_parent ON generation_batch_items(repair_parent_item_id) WHERE repair_parent_item_id IS NOT NULL")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_generation_repair_root ON generation_batch_items(repair_root_item_id, repair_attempt)")
         job_columns = {column["name"] for column in db.execute("PRAGMA table_info(video_jobs)")}
         if "channel_id" not in job_columns:
             db.execute("ALTER TABLE video_jobs ADD COLUMN channel_id TEXT REFERENCES channels(id)")
@@ -461,7 +485,17 @@ class LoginInput(BaseModel):
     password: str = Field(min_length=1, max_length=1024)
 
 
-def session_from_request(request: Request) -> sqlite3.Row | None:
+def open_session() -> dict[str, str]:
+    return {
+        "token_hash": session_token_hash("cockpit-login-disabled"),
+        "csrf_token": _OPEN_SESSION_CSRF,
+        "expires_at": (datetime.now(UTC) + timedelta(days=3650)).isoformat(),
+    }
+
+
+def session_from_request(request: Request) -> sqlite3.Row | dict[str, str] | None:
+    if LOGIN_DISABLED:
+        return open_session()
     token = request.cookies.get("cockpit_session")
     if not token:
         return None
@@ -727,7 +761,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="Moneyprint Cockpit Gateway", version="1.1.0", lifespan=lifespan,
+    title="Moneyprint Cockpit Gateway", version=APP_VERSION, lifespan=lifespan,
     docs_url="/docs" if os.getenv("ENABLE_API_DOCS") == "1" else None,
     redoc_url=None,
 )
@@ -742,7 +776,12 @@ async def health_status() -> dict[str, Any]:
         turbo_ok = response.status_code == 200
     except HTTPException:
         pass
-    return {"status": "ok" if database_ok and turbo_ok else "degraded", "database": database_ok, "turbo": turbo_ok}
+    return {"status": "ok" if database_ok and turbo_ok else "degraded", "database": database_ok, "turbo": turbo_ok, "version": APP_VERSION}
+
+
+@app.get("/api/version")
+async def app_version() -> dict[str, str]:
+    return {"name": "MoneyPrinter Cockpit", "version": APP_VERSION}
 
 
 @app.get("/api/health/live")
@@ -764,6 +803,8 @@ async def health() -> Response:
 
 @app.post("/api/auth/login")
 def login(input: LoginInput, response: Response) -> dict[str, Any]:
+    if LOGIN_DISABLED:
+        raise HTTPException(status_code=404, detail="Login desabilitado.")
     if login_is_limited():
         raise HTTPException(status_code=429, detail="Muitas tentativas. Aguarde 15 minutos.")
     admin = configured_admin()
@@ -795,6 +836,16 @@ def logout(request: Request, response: Response) -> Response:
 
 @app.get("/api/auth/session")
 def auth_session(request: Request) -> dict[str, Any]:
+    if LOGIN_DISABLED:
+        session = open_session()
+        admin = configured_admin() or {}
+        return {
+            "name": admin.get("name") or "Local",
+            "email": admin.get("email") or "sem login",
+            "csrf_token": session["csrf_token"],
+            "expires_at": session["expires_at"],
+            "login_disabled": True,
+        }
     session = session_from_request(request)
     admin = configured_admin()
     if not session or not admin:
@@ -1391,13 +1442,12 @@ def normalize_retry_payload(job: sqlite3.Row) -> tuple[dict[str, Any], list[str]
 def job_max_words(format: str, settings: dict[str, Any]) -> int | None:
     """The narration budget the screen asked for: the Short's "Duração alvo" select, or the long
     video's target in minutes. None means no target was sent, so nothing is trimmed."""
-    if format == "short":
-        return short_script_max_words(int(settings.get("paragraph_number", 5) or 5), float(settings.get("voice_rate") or 1.0))
     try:
-        minutes = float(settings.get("target_minutes") or 0)
+        target = int(settings.get("paragraph_number", 5) or 5) if format == "short" else float(settings.get("target_minutes") or 0)
+        rate = float(settings.get("voice_rate") or 1.0)
     except (TypeError, ValueError):
         return None
-    return int(minutes * WORDS_PER_MINUTE * float(settings.get("voice_rate") or 1.0)) or None
+    return script_duration_budget(format, target, rate, str(settings.get("voice_name") or ""))["maximum_words"] or None
 
 
 @app.post("/api/projects/{project_id}/jobs", status_code=202)
@@ -1443,13 +1493,14 @@ async def create_job(project_id: str, input: JobCreate, *, generation_item_id: s
         # (see visual_terms()) - that's what made footage look unrelated to the narration.
         merged["match_materials_to_script"], merged["video_concat_mode"] = True, "sequential"
         if not script_text and input.format == "short":
-            script_response = await turbo_request("POST", "/api/v1/scripts", json={
-                "video_subject": input.subject, "video_language": merged.get("video_language", "pt-BR"),
-                "paragraph_number": merged.get("paragraph_number", 5),
-                "video_script_prompt": short_script_prompt(str(merged.get("video_script_prompt", "")), int(merged.get("paragraph_number", 5) or 5), float(merged.get("voice_rate") or 1.0)),
-                "custom_system_prompt": merged.get("custom_system_prompt", ""),
-            })
-            script_text = str((unwrap(script_response.json()) or {}).get("video_script", "")).strip()
+            script_response = await short_script(ShortScriptInput(
+                subject=input.subject, language=merged.get("video_language", "pt-BR"),
+                paragraph_number=int(merged.get("paragraph_number", 5) or 5),
+                voice_rate=float(merged.get("voice_rate") or 1.0), voice_name=str(merged.get("voice_name") or ""),
+                script_prompt=str(merged.get("video_script_prompt", "")),
+                system_prompt=str(merged.get("custom_system_prompt", "")),
+            ))
+            script_text = script_response["script"]
     # The chosen duration wins over whatever was written, pasted or generated, in every mode: a
     # longer script would stretch the narration past it, and the visuals are cut to fit the script.
     max_words = job_max_words(input.format, merged)
@@ -1609,21 +1660,69 @@ def artifact_or_404(job_id: str, artifact_id: str) -> sqlite3.Row:
     return row
 
 
-@app.get("/api/jobs/{job_id}/artifacts/{artifact_id}/{mode}")
-async def artifact_proxy(job_id: str, artifact_id: str, mode: Literal["stream", "download"], request: Request) -> StreamingResponse:
+def derived_video(artifact: sqlite3.Row) -> Path | None:
+    remote = str(artifact["remote_path"])
+    if not remote.startswith("derived/"):
+        return None
+    root = (DATA_DIR / "derived_shorts").resolve()
+    path = (root / remote.removeprefix("derived/")).resolve()
+    if root not in path.parents or not path.is_file():
+        return None
+    return path
+
+
+def review_copy_for_artifact(job_id: str, artifact: sqlite3.Row) -> Path | None:
+    """Quality review keeps a local copy of each final render. The Turbo task
+    volume can lose that file; playback and download use the copy instead."""
+    if artifact["kind"] != "video":
+        return None
+    with database() as db:
+        job = db.execute("SELECT generation_item_id FROM video_jobs WHERE id=?", (job_id,)).fetchone()
+        if not job or not job["generation_item_id"]:
+            return None
+        ordered = db.execute(
+            "SELECT id FROM artifacts WHERE job_id=? AND kind='video' ORDER BY created_at, id",
+            (job_id,),
+        ).fetchall()
+    index = next((position for position, row in enumerate(ordered) if row["id"] == artifact["id"]), None)
+    if index is None:
+        return None
+    root = (DATA_DIR / "curated_materials").resolve()
+    path = (root / str(job["generation_item_id"]) / f"final-review-{index}.mp4").resolve()
+    if root not in path.parents or not path.is_file():
+        return None
+    return path
+
+
+def local_video_response(path: Path, artifact: sqlite3.Row, mode: Literal["stream", "download"]) -> FileResponse:
+    filename = str(artifact["filename"]).replace('"', "")
+    if mode == "download":
+        return FileResponse(path, media_type="video/mp4", filename=filename)
+    return FileResponse(path, media_type="video/mp4")
+
+
+@app.get("/api/jobs/{job_id}/artifacts/{artifact_id}/{mode}", response_model=None)
+async def artifact_proxy(job_id: str, artifact_id: str, mode: Literal["stream", "download"], request: Request) -> StreamingResponse | FileResponse:
     artifact = artifact_or_404(job_id, artifact_id)
+    local_copy = derived_video(artifact) or review_copy_for_artifact(job_id, artifact)
     headers = turbo_headers()
     if request.headers.get("range"):
         headers["Range"] = request.headers["range"]
     # Turbo mounts these as router.get("/stream/...") under the /api/v1 prefix - no /tasks/ segment.
     path = f"/api/v1/{mode}/{artifact['remote_path']}"
+    client = httpx.AsyncClient(timeout=httpx.Timeout(30, read=None))
     try:
-        client = httpx.AsyncClient(timeout=httpx.Timeout(30, read=None))
         response = await client.send(client.build_request("GET", f"{TURBO_BASE_URL}{path}", headers=headers), stream=True)
     except httpx.HTTPError as exc:
+        await client.aclose()
+        if local_copy:
+            return local_video_response(local_copy, artifact, mode)
         raise HTTPException(status_code=503, detail=f"Falha ao obter artefato: {exc}") from exc
     if response.status_code >= 400:
+        await response.aclose()
         await client.aclose()
+        if local_copy:
+            return local_video_response(local_copy, artifact, mode)
         raise HTTPException(status_code=502, detail="O Turbo não encontrou o artefato")
     pass_headers = {key: value for key, value in response.headers.items() if key.lower() in {"content-length", "content-range", "accept-ranges", "content-type"}}
     if mode == "download":
@@ -1886,8 +1985,10 @@ async def assistant_chat(input: AssistantChatInput) -> dict[str, Any]:
         "ou quando ela for necessária para responder. Nunca invente métricas do canal. "
         "Ações disponíveis: reply (conversa e explicações), clarify (perguntar os dados que faltam), "
         "growth_goal (calcular metas YPP), growth_score (pontuar uma oportunidade de tema), "
-        "growth_plan (criar um plano durável; só quando pedido explicitamente), short_script "
-        "(gerar um roteiro de Short; só quando pedido explicitamente), channels (listar canais), "
+        "growth_plan (criar um plano durável; só quando pedido explicitamente), script_proposal "
+        "(propor ângulo antes de escrever; use quando pedirem um roteiro e ainda não houver proposta confirmada), "
+        "short_script (gerar um roteiro de Short somente depois que o usuário confirmar a proposta em args.proposal), "
+        "channels (listar canais), "
         "jobs (listar trabalhos recentes), workflow_status (consultar um workflow) e system_status "
         "(verificar a saúde do sistema). Não publique nem aprove conteúdo. Planos ficam em revisão humana. "
         "Para growth_goal, forneça args.metrics com subscribers, subscriber_target, qualified_watch_hours, "
@@ -1897,10 +1998,11 @@ async def assistant_chat(input: AssistantChatInput) -> dict[str, Any]:
         "historical_retention, subscriber_conversion, expected_avd, evergreen, trend_velocity, monetization, "
         "stock_availability, competition, production_cost e saturation. Se estimar notas com a IA, marque "
         "args.estimated=true. Para growth_plan, forneça topic, ypp_goal (mesmas métricas) e opportunity "
-        "(as 12 notas); nunca defina publicação automática. Para short_script, forneça subject. "
+        "(as 12 notas); nunca defina publicação automática. Para script_proposal, forneça subject. "
+        "Para short_script, forneça subject e proposal com o texto confirmado pelo usuário. "
         "Para workflow_status, forneça workflow_id. Para ações que dependem de canal, use o canal selecionado "
         "ou um nome que corresponda exatamente à lista. Responda somente com um objeto JSON neste formato: "
-        '{"action":"reply|clarify|growth_goal|growth_score|growth_plan|short_script|channels|jobs|workflow_status|system_status","message":"texto curto","args":{}}'
+        '{"action":"reply|clarify|growth_goal|growth_score|growth_plan|script_proposal|short_script|channels|jobs|workflow_status|system_status","message":"texto curto","args":{}}'
         + "\nCanal selecionado: " + json.dumps(input.channel_id, ensure_ascii=False)
         + "\nCanais disponíveis: " + json.dumps(channel_context, ensure_ascii=False)
         + "\nHistórico: " + json.dumps(transcript, ensure_ascii=False)
@@ -1959,7 +2061,7 @@ async def assistant_chat(input: AssistantChatInput) -> dict[str, Any]:
     if action == "growth_goal":
         try:
             goal_input = YPPGoalRequest(channel_id=channel_id, metrics=args.get("metrics") or {})
-        except ValidationError as exc:
+        except ValidationError:
             return {"action": "clarify", "message": "Para calcular seu gap, me passe os valores atuais e as metas de inscritos, horas qualificadas e visualizações de Shorts, além de quantos dias faltam. Pode escrever tudo em uma única frase."}
         result = evaluate_goal(goal_input)
         values = result["result"].model_dump(mode="json")
@@ -1976,7 +2078,7 @@ async def assistant_chat(input: AssistantChatInput) -> dict[str, Any]:
             score_input = OpportunityScoreRequest(
                 channel_id=channel_id, topic=str(args.get("topic") or ""), dimensions=args.get("dimensions") or {},
             )
-        except ValidationError as exc:
+        except ValidationError:
             return {"action": "clarify", "message": "Me diga o tema da oportunidade. Posso estimar as dimensões para iniciar a avaliação e identificar claramente o resultado como estimativa."}
         result = score_opportunity(score_input)
         values = result["result"].model_dump(mode="json")
@@ -1993,21 +2095,40 @@ async def assistant_chat(input: AssistantChatInput) -> dict[str, Any]:
                 production_target=args.get("production_target") or {"long": 1, "shorts": 3},
                 publish_mode="review",
             )
-        except ValidationError as exc:
+        except ValidationError:
             return {"action": "clarify", "message": "Para montar o plano, preciso do tema, dos números atuais e das metas YPP e do prazo. Posso coletar esses dados com você, um passo de cada vez."}
         started = await start_planning_workflow(plan_input)
         return {"action": action, "data": started, "message": (
             f"Iniciei o plano para “{plan_input.topic}” no canal {channel.get('name')}. "
             f"Ele ficará em revisão humana. ID do workflow: {started['id']}."
         )}
-    if action == "short_script":
+    if action == "script_proposal":
         subject = str(args.get("subject") or "").strip()
         if not subject:
+            return {"action": "clarify", "message": "Qual é o tema do vídeo?"}
+        proposal = await script_proposal(ScriptProposalInput(
+            subject=subject, format="short", language=str(channel.get("language") or "pt-BR"),
+            channel_context=str(channel.get("niche") or ""),
+        ))
+        questions = "\n".join(f"- {item}" for item in proposal["audience_questions"])
+        return {"action": action, "data": proposal, "message": (
+            f"Proposta para “{subject}”:\n{proposal['brief']}\n\nPerguntas da audiência:\n{questions}\n\n"
+            "Confirme este ângulo, ou diga o que mudar, para eu escrever o roteiro."
+        )}
+    if action == "short_script":
+        subject = str(args.get("subject") or "").strip()
+        proposal = str(args.get("proposal") or "").strip()
+        if not subject:
             return {"action": "clarify", "message": "Qual é o tema do roteiro?"}
+        if not proposal:
+            return {"action": "clarify", "message": "Antes do roteiro, confirme o ângulo da proposta. Posso montar essa proposta agora."}
         result = await short_script(ShortScriptInput(
             subject=subject, language=str(channel.get("language") or "pt-BR"),
+            voice_rate=float(channel.get("voice_rate") or 1.0), voice_name=str(channel.get("voice_name") or ""),
             script_prompt=str(args.get("style") or "")[:2000],
             system_prompt=str(channel.get("system_prompt") or "")[:4000],
+            proposal=proposal,
+            reference_brief=str(args.get("reference_brief") or "")[:1000],
         ))
         script = result["script"]
         return {"action": action, "data": result, "message": (
@@ -2041,21 +2162,46 @@ SHORT_TARGET_SECONDS = {4: 60, 5: 75, 6: 90}  # mirrors the Shorts "Duração al
 SHORT_MIN_SECONDS = 60  # below this a Short is "curto demais" (see the word-count hint in moneyprinter-runtime.js)
 
 
-def short_script_max_words(paragraph_number: int, voice_rate: float = 1.0) -> int:
-    seconds = SHORT_TARGET_SECONDS.get(paragraph_number, max(SHORT_TARGET_SECONDS.values()))
-    return round(seconds * WORDS_PER_MINUTE * voice_rate / 60)
+def short_script_max_words(paragraph_number: int, voice_rate: float = 1.0, voice_name: str = "") -> int:
+    return int(script_duration_budget("short", paragraph_number, voice_rate, voice_name)["maximum_words"])
 
 
-def short_script_min_words() -> int:
-    return round(SHORT_MIN_SECONDS * WORDS_PER_MINUTE / 60)
+def short_script_min_words(paragraph_number: int = 4, voice_rate: float = 1.0, voice_name: str = "") -> int:
+    return int(script_duration_budget("short", paragraph_number, voice_rate, voice_name)["minimum_words"])
 
 
-def short_script_prompt(script_prompt: str, paragraph_number: int, voice_rate: float = 1.0) -> str:
-    """Word-range rule Turbo's writer must hit (60–90 s of narration). Rides along with any
-    custom requirements instead of replacing them."""
-    max_words = short_script_max_words(paragraph_number, voice_rate)
-    min_words = round(SHORT_MIN_SECONDS * WORDS_PER_MINUTE * voice_rate / 60)
-    length_rule = f"O roteiro deve ter entre {min_words} e {max_words} palavras (narração de 60 a 90 segundos)."
+def script_duration_budget(format: str, target: int | float, voice_rate: float = 1.0, voice_name: str = "") -> dict[str, float | int]:
+    """Returns one narration-time and word budget for every script-generation path."""
+    if format == "short":
+        target_seconds = SHORT_TARGET_SECONDS.get(int(target), max(SHORT_TARGET_SECONDS.values()))
+        minimum_seconds = max(SHORT_MIN_SECONDS, target_seconds * 0.9)
+        maximum_seconds = min(90, target_seconds * 1.1)
+    elif format == "long":
+        target_seconds = float(target) * 60
+        minimum_seconds, maximum_seconds = target_seconds * 0.85, target_seconds
+    else:
+        raise ValueError(f"Formato de roteiro inválido: {format}")
+    words_per_minute = voice_words_per_minute(voice_name)
+    minimum_words = math.ceil(minimum_seconds * words_per_minute * voice_rate / 60)
+    maximum_words = math.floor(maximum_seconds * words_per_minute * voice_rate / 60)
+    if minimum_words > maximum_words:
+        raise HTTPException(status_code=422, detail="A duração e a velocidade de voz não permitem uma faixa de roteiro válida.")
+    target_words = round((minimum_words + maximum_words) / 2)
+    return {
+        "target_seconds": float(target_seconds), "minimum_seconds": float(minimum_seconds),
+        "maximum_seconds": float(maximum_seconds), "minimum_words": minimum_words,
+        "maximum_words": maximum_words, "target_words": target_words,
+    }
+
+
+def short_script_prompt(script_prompt: str, paragraph_number: int, voice_rate: float = 1.0, voice_name: str = "") -> str:
+    """Carries the selected Short duration and voice-calibrated word range into Turbo's prompt."""
+    budget = script_duration_budget("short", paragraph_number, voice_rate, voice_name)
+    length_rule = (
+        f"A narração deve durar entre {budget['minimum_seconds']:g} e {budget['maximum_seconds']:g} segundos "
+        f"(alvo {(budget['minimum_seconds'] + budget['maximum_seconds']) / 2:g} s), com {budget['minimum_words']} a "
+        f"{budget['maximum_words']} palavras na voz selecionada."
+    )
     custom = (script_prompt or "").strip()
     from gateway.editorial_quality import writing_brief
     return "\n".join(part for part in (custom, length_rule, writing_brief("short")) if part)
@@ -2073,32 +2219,136 @@ def trim_to_words(script: str, max_words: int) -> str:
     return (match.group(1) if match else truncated).strip()
 
 
+class ScriptProposalInput(BaseModel):
+    subject: str = Field(min_length=1, max_length=500)
+    format: Literal["short", "long"] = "short"
+    language: str = Field(default="pt-BR", max_length=20)
+    channel_context: str = Field(default="", max_length=2000)
+
+
+def normalize_proposal(raw: dict[str, Any]) -> dict[str, Any]:
+    angle = str(raw.get("angle") or "").strip()[:300]
+    questions = [str(item).strip()[:180] for item in raw.get("audience_questions") or [] if str(item).strip()][:5]
+    references = [str(item).strip()[:180] for item in raw.get("references") or [] if str(item).strip()][:5]
+    brief = str(raw.get("brief") or "").strip()[:1200]
+    if not angle or not brief or len(questions) < 2:
+        raise HTTPException(status_code=502, detail="A proposta de pesquisa veio incompleta. Tente de novo.")
+    return {"angle": angle, "audience_questions": questions, "references": references, "brief": brief}
+
+
+@app.post("/api/scripts/proposal")
+async def script_proposal(input: ScriptProposalInput) -> dict[str, Any]:
+    generated = await llm_json_object(
+        f"Pesquise um ângulo editorial para um vídeo {input.format} no idioma {input.language}. "
+        f"Tema: {input.subject}. Contexto do canal: {input.channel_context[:1500] or 'não informado'}. "
+        "Não invente URLs, números de audiência nem citações verificáveis. Referências são temas ou perguntas, não links. "
+        'Responda JSON: {"angle": "ângulo em uma frase", "audience_questions": ["pergunta", "pergunta"], '
+        '"references": ["tema de referência"], "brief": "instrução de 4 a 8 linhas para o roteiro, com abertura, progressão e fechamento"}',
+        task="json", max_tokens=700, label="a proposta de pesquisa",
+    )
+    return normalize_proposal(generated)
+
+
+@app.post("/api/scripts/reference")
+async def script_reference(request: Request) -> dict[str, Any]:
+    payload = await request.body()
+    if not 1024 <= len(payload) <= 80 * 1024 * 1024:
+        raise HTTPException(status_code=422, detail="Envie um vídeo local entre 1 KB e 80 MB.")
+    folder = DATA_DIR / "references"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{uuid4()}.mp4"
+    path.write_bytes(payload)
+    try:
+        return reference_structure(path)
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def reference_structure(path: Path) -> dict[str, Any]:
+    """Describe pacing only. The source pictures and words are not copied into the script."""
+    import subprocess
+    from gateway.visual_specialists import probe
+
+    try:
+        info = probe(path)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="Não foi possível ler o vídeo de referência.") from exc
+    duration = float(info.get("duration") or 0)
+    if duration <= 0:
+        raise HTTPException(status_code=422, detail="O vídeo de referência não tem duração.")
+    scene = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-i", str(path), "-vf", "select='gt(scene,0.3)',showinfo", "-f", "null", "-"],
+        capture_output=True, text=True, timeout=120, check=False,
+    )
+    cuts = len(re.findall(r"pts_time:", scene.stderr))
+    rate = cuts / duration
+    pace = "rápido" if rate >= 0.35 else "moderado" if rate >= 0.12 else "calmo"
+    hook = max(1.0, min(3.0, duration * 0.12))
+    brief = (
+        f"Abra nos primeiros {hook:.0f}s, mantenha ritmo {pace} "
+        f"({cuts} trocas de cena em {duration:.0f}s) e reserve o último décimo para o fechamento. "
+        "Não copie falas, imagens nem a marca do vídeo de referência."
+    )
+    return {"duration_seconds": round(duration, 1), "hook_seconds": round(hook, 1), "cuts": cuts, "pace": pace, "brief": brief}
+
+
 class ShortScriptInput(BaseModel):
     subject: str = Field(min_length=1, max_length=500)
     language: str = Field(default="pt-BR", max_length=20)
     paragraph_number: int = Field(default=5, ge=1, le=10)
     voice_rate: float = Field(default=1.0, ge=0.5, le=2.0)
+    voice_name: str = Field(default="", max_length=120)
     script_prompt: str = Field(default="", max_length=4200)
     system_prompt: str = Field(default="", max_length=12000)
+    proposal: str = Field(default="", max_length=2000)
+    reference_brief: str = Field(default="", max_length=1000)
 
 
 @app.post("/api/scripts/short")
 async def short_script(input: ShortScriptInput) -> dict[str, Any]:
-    max_words = short_script_max_words(input.paragraph_number, input.voice_rate)
-    min_words = round(SHORT_MIN_SECONDS * WORDS_PER_MINUTE * input.voice_rate / 60)
-    # Turbo's writer only gets paragraph_number, so it often undershoots (e.g. 139 words ≈ 56 s
-    # for a 60–90 s Short). State the word range explicitly in the prompt it already reads.
-    response = await turbo_request("POST", "/api/v1/scripts", json={
-        "video_subject": input.subject, "video_language": clean_language(input.language),
-        "paragraph_number": input.paragraph_number,
-        "video_script_prompt": short_script_prompt(input.script_prompt, input.paragraph_number, input.voice_rate),
-        "custom_system_prompt": input.system_prompt,
-    })
-    script = clean_narration(str((unwrap(response.json()) or {}).get("video_script", "")))
-    trimmed = trim_to_words(script, max_words)
-    words = len(trimmed.split())
-    return {"script": trimmed, "words": words, "trimmed": trimmed != script,
-            "too_short": words < min_words, "min_words": min_words}
+    budget = script_duration_budget("short", input.paragraph_number, input.voice_rate, input.voice_name)
+    minimum, maximum = budget["minimum_seconds"], budget["maximum_seconds"]
+    previous = ""
+    for attempt in range(3):
+        trimmed_this_attempt = False
+        prompt = short_script_prompt(input.script_prompt, input.paragraph_number, input.voice_rate, input.voice_name)
+        if input.proposal.strip():
+            prompt += "\nProposta editorial confirmada. Siga este ângulo sem copiar fontes:\n" + input.proposal.strip()
+        if input.reference_brief.strip():
+            prompt += "\nEstrutura observada em um vídeo de referência. Use só o ritmo, não o conteúdo:\n" + input.reference_brief.strip()
+        if previous:
+            seconds = narration_seconds(previous, input.voice_rate, input.voice_name)
+            prompt += (
+                f"\nA versão anterior tinha {len(previous.split())} palavras e foi estimada em {seconds:.1f} segundos. "
+                f"Reescreva o roteiro completo para ficar na faixa de {budget['minimum_words']} a {budget['maximum_words']} palavras "
+                f"e de {minimum:.0f} a {maximum:.0f} segundos. Preserve o tema, os fatos e as instruções; não acrescente texto de enchimento. "
+                f"Roteiro anterior:\n{previous}"
+            )
+        response = await turbo_request("POST", "/api/v1/scripts", json={
+            "video_subject": input.subject, "video_language": clean_language(input.language),
+            "paragraph_number": input.paragraph_number,
+            "video_script_prompt": prompt,
+            "custom_system_prompt": input.system_prompt,
+        })
+        generated = clean_narration(str((unwrap(response.json()) or {}).get("video_script", ""))).strip()
+        if not generated:
+            raise HTTPException(status_code=502, detail="O provedor não devolveu um roteiro válido.")
+        candidate = generated
+        if len(candidate.split()) > budget["maximum_words"]:
+            candidate = trim_to_words(candidate, int(budget["maximum_words"]))
+            trimmed_this_attempt = True
+        words = len(candidate.split())
+        seconds = narration_seconds(candidate, input.voice_rate, input.voice_name)
+        if words >= budget["minimum_words"] and minimum <= seconds <= maximum:
+            return {"script": candidate, "words": words, "trimmed": trimmed_this_attempt,
+                    "too_short": False, "min_words": budget["minimum_words"],
+                    "estimated_seconds": round(seconds)}
+        previous = candidate
+    seconds = narration_seconds(previous, input.voice_rate, input.voice_name)
+    raise HTTPException(
+        status_code=502,
+        detail=f"O provedor não ajustou o roteiro à duração: {round(seconds)} s estimados; a faixa selecionada é {round(minimum)}–{round(maximum)} s. Gere novamente ou ajuste a duração/voz.",
+    )
 
 
 class LongScriptInput(BaseModel):
@@ -2106,9 +2356,12 @@ class LongScriptInput(BaseModel):
     language: str = Field(default="pt-BR", max_length=20)
     minutes: int = Field(default=8, ge=5, le=15)
     voice_rate: float = Field(default=1.0, ge=0.5, le=2.0)
+    voice_name: str = Field(default="", max_length=120)
     niche: str = Field(default="", max_length=200)
     requirements: str = Field(default="", max_length=4200)
     system_prompt: str = Field(default="", max_length=12000)
+    proposal: str = Field(default="", max_length=2000)
+    reference_brief: str = Field(default="", max_length=1000)
 
 
 def clean_narration(text: str) -> str:
@@ -2129,6 +2382,50 @@ def long_script_tokens(words: int, ceiling: int) -> int:
     return min(ceiling, max(768, round(words * 1.8)))
 
 
+async def _fit_long_script_duration(input: LongScriptInput, result: dict[str, Any]) -> dict[str, Any]:
+    budget = script_duration_budget("long", input.minutes, input.voice_rate, input.voice_name)
+    minimum, maximum = budget["minimum_seconds"], budget["maximum_seconds"]
+    words_per_minute = voice_words_per_minute(input.voice_name)
+    script = clean_narration(str(result.get("script") or "")).strip()
+    trimmed = bool(result.get("trimmed"))
+    for attempt in range(3):
+        if not script:
+            raise HTTPException(status_code=502, detail="A IA não devolveu um roteiro válido.")
+        if len(script.split()) > budget["maximum_words"]:
+            shorter = trim_to_words(script, int(budget["maximum_words"]))
+            if len(shorter.split()) >= budget["minimum_words"]:
+                script = shorter
+                trimmed = True
+        seconds = narration_seconds(script, input.voice_rate, input.voice_name)
+        if budget["minimum_words"] <= len(script.split()) and minimum <= seconds <= maximum:
+            return {
+                **result, "script": script, "words": len(script.split()), "trimmed": trimmed,
+                "estimated_minutes": round(len(script.split()) / (words_per_minute * input.voice_rate), 1),
+            }
+        if attempt == 2:
+            break
+        response = parse_json_object(await llm_chat(
+            f"Ajuste este roteiro para um vídeo de YouTube com duração selecionada de {input.minutes} minutos, "
+            f"voz {input.voice_name or 'padrão'} a {input.voice_rate}x. A narração anterior foi estimada em {seconds:.1f} s. "
+            f"Escreva o roteiro completo com cerca de {budget['target_words']} palavras, obrigatoriamente entre "
+            f"{budget['minimum_words']} e {budget['maximum_words']} palavras ({minimum:.0f}–{maximum:.0f} s estimados). "
+            "Preserve o tema, os fatos, a estrutura, a conclusão e as instruções editoriais. "
+            f"Requisitos personalizados: {input.requirements}. Instruções do canal: {input.system_prompt}. "
+            "Se estiver curto, desenvolva os pontos pedidos; condense repetições se estiver longo. Não use texto de enchimento. "
+            "Use somente narração em parágrafos corridos, sem títulos, marcadores, Markdown, emojis ou indicações de cena. "
+            f'Responda apenas JSON: {{"script": "narração completa"}}. Roteiro atual:\n{script}',
+            json_mode=True, task="script", max_tokens=long_script_tokens(int(budget["maximum_words"]), FAST_LONG_SCRIPT_MAX_TOKENS),
+            fast_script=True,
+        ))
+        script = clean_narration(str(response.get("script") or "")).strip()
+        trimmed = False
+    final_seconds = narration_seconds(script, input.voice_rate, input.voice_name) if script else 0
+    raise HTTPException(
+        status_code=502,
+        detail=f"O provedor não ajustou o roteiro à duração: {round(final_seconds)} s estimados; a faixa selecionada é {round(minimum)}–{round(maximum)} s. Gere novamente ou ajuste a duração/voz.",
+    )
+
+
 async def long_script_events(input: LongScriptInput) -> AsyncIterator[tuple[str, dict[str, Any]]]:
     """Writes an editable long script and reports only safe UI progress events."""
     from gateway.editorial_quality import writing_brief
@@ -2141,7 +2438,12 @@ async def long_script_events(input: LongScriptInput) -> AsyncIterator[tuple[str,
     # instruction on every call instead, same mechanism as `requirements` but framed as a standing rule.
     style = (f" Instruções de estilo do sistema, siga em tudo o que escrever: {system_prompt}." if system_prompt else "")
     style += " " + writing_brief("long")
-    target_words = round(input.minutes * WORDS_PER_MINUTE * input.voice_rate)
+    if input.proposal.strip():
+        style += " Proposta editorial confirmada, siga este ângulo sem copiar fontes: " + input.proposal.strip()
+    if input.reference_brief.strip():
+        style += " Estrutura de referência, use só o ritmo: " + input.reference_brief.strip()
+    budget = script_duration_budget("long", input.minutes, input.voice_rate, input.voice_name)
+    target_words = int(budget["target_words"])
 
     # The common 5-8 minute case used to incur an outline plus 4-5 serial
     # writes.  One bounded completion is both faster and coherent because the
@@ -2152,7 +2454,7 @@ async def long_script_events(input: LongScriptInput) -> AsyncIterator[tuple[str,
             f"Escreva um roteiro completo de vídeo de YouTube de cerca de {input.minutes} minutos no idioma {language} sobre: {input.subject}."
             + (f" Nicho do canal: {input.niche}." if input.niche else "")
             + (f" Requisitos personalizados: {requirements}." if requirements else "") + style
-            + f' Responda apenas JSON: {{"title": título conciso, "script": narração com cerca de {target_words} palavras}}. '
+            + f' Responda apenas JSON: {{"title": título conciso, "script": narração com cerca de {target_words} palavras, entre {budget["minimum_words"]} e {budget["maximum_words"]}}}. '
             "A narração deve ter abertura forte, desenvolvimento coerente e conclusão com chamada para se inscrever. "
             "Use apenas texto falado em parágrafos corridos: sem títulos no roteiro, marcadores, markdown, emojis nem indicações de cena.",
             json_mode=True,
@@ -2163,13 +2465,18 @@ async def long_script_events(input: LongScriptInput) -> AsyncIterator[tuple[str,
         script = clean_narration(str(generated.get("script") or ""))
         if not script:
             raise HTTPException(status_code=502, detail="A IA não devolveu um roteiro válido")
-        trimmed_script = trim_to_words(script, target_words)
+        trimmed_script = script
+        if len(script.split()) > budget["maximum_words"]:
+            candidate = trim_to_words(script, int(budget["maximum_words"]))
+            if len(candidate.split()) >= budget["minimum_words"]:
+                trimmed_script = candidate
         words = len(trimmed_script.split())
         result = {
             "title": str(generated.get("title") or input.subject), "script": trimmed_script,
             "trimmed": trimmed_script != script, "sections": ["Roteiro completo"],
-            "words": words, "estimated_minutes": round(words / (WORDS_PER_MINUTE * input.voice_rate), 1),
+            "words": words, "estimated_minutes": round(words / (voice_words_per_minute(input.voice_name) * input.voice_rate), 1),
         }
+        result = await _fit_long_script_duration(input, result)
         yield "progress", {"stage": "finalizing", "section": 1, "total": 1, "message": "Finalizando roteiro…"}
         yield "completed", result
         return
@@ -2206,12 +2513,17 @@ async def long_script_events(input: LongScriptInput) -> AsyncIterator[tuple[str,
             fast_script=True,
         )))
     script = "\n\n".join(part for part in parts if part)
-    trimmed_script = trim_to_words(script, target_words)
+    trimmed_script = script
+    if len(script.split()) > budget["maximum_words"]:
+        candidate = trim_to_words(script, int(budget["maximum_words"]))
+        if len(candidate.split()) >= budget["minimum_words"]:
+            trimmed_script = candidate
     words = len(trimmed_script.split())
     result = {
         "title": str(outline.get("title") or input.subject), "script": trimmed_script, "trimmed": trimmed_script != script,
-        "sections": [str(section["heading"]) for section in sections], "words": words, "estimated_minutes": round(words / (WORDS_PER_MINUTE * input.voice_rate), 1),
+        "sections": [str(section["heading"]) for section in sections], "words": words, "estimated_minutes": round(words / (voice_words_per_minute(input.voice_name) * input.voice_rate), 1),
     }
+    result = await _fit_long_script_duration(input, result)
     yield "progress", {"stage": "finalizing", "section": len(sections), "total": len(sections), "message": "Finalizando roteiro…"}
     yield "completed", result
 
@@ -2351,8 +2663,94 @@ def approve_job(job_id: str) -> dict[str, Any]:
         return row_as_job(job_row_or_404(db, job_id), db)
 
 
+@app.post("/api/jobs/{job_id}/shorts", status_code=202)
+async def derive_shorts(job_id: str) -> dict[str, Any]:
+    """Cut an approved landscape video into vertical Shorts and queue them for the same channel."""
+    import subprocess
+
+    with database() as db:
+        job = job_row_or_404(db, job_id)
+        if job["format"] != "long":
+            raise HTTPException(status_code=409, detail="Só um vídeo longo aprovado pode virar Shorts.")
+        if job["state"] not in {"completed", "approved"}:
+            raise HTTPException(status_code=409, detail="O vídeo longo ainda não está pronto.")
+        if job["generation_item_id"]:
+            require_quality_approval(db, job)
+        elif job["state"] != "approved":
+            raise HTTPException(status_code=409, detail="Aprove o vídeo longo antes de cortar Shorts.")
+        artifact = db.execute("SELECT * FROM artifacts WHERE job_id=? AND kind='video' ORDER BY created_at, id LIMIT 1", (job_id,)).fetchone()
+        publication = db.execute("SELECT channel_id FROM publications WHERE job_id=? LIMIT 1", (job_id,)).fetchone()
+    if not artifact:
+        raise HTTPException(status_code=409, detail="O vídeo longo não tem arquivo final.")
+    source = derived_video(artifact) or review_copy_for_artifact(job_id, artifact)
+    temporary = None
+    if source is None:
+        temporary = tempfile.TemporaryDirectory()
+        source = Path(temporary.name) / "source.mp4"
+        await download_turbo_file(artifact["remote_path"], source)
+    try:
+        from gateway.visual_specialists import probe
+        duration = float(probe(source).get("duration") or 0)
+    except Exception as exc:
+        if temporary:
+            temporary.cleanup()
+        raise HTTPException(status_code=422, detail="Não foi possível medir o vídeo longo.") from exc
+    if duration < 20:
+        if temporary:
+            temporary.cleanup()
+        raise HTTPException(status_code=409, detail="O vídeo longo é curto demais para gerar Shorts.")
+    length = min(45.0, max(20.0, duration / 3))
+    starts = [0.0]
+    if duration > length + 15:
+        starts.append(max(0.0, duration * 0.35))
+    if duration > length * 2 + 15:
+        starts.append(max(0.0, duration * 0.7))
+    channel_id = job["channel_id"] or (publication["channel_id"] if publication else None)
+    created: list[str] = []
+    root = DATA_DIR / "derived_shorts"
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        for index, start in enumerate(starts[:3], start=1):
+            short_id = str(uuid4())
+            target = root / short_id / "clip.mp4"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            render = subprocess.run(
+                ["ffmpeg", "-y", "-ss", f"{start:.2f}", "-i", str(source), "-t", f"{length:.2f}",
+                 "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+                 "-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac", str(target)],
+                capture_output=True, timeout=600, check=False,
+            )
+            if render.returncode or not target.is_file() or target.stat().st_size == 0:
+                raise HTTPException(status_code=502, detail=f"Não foi possível cortar o Short {index}.")
+            timestamp = now()
+            with database() as db:
+                db.execute(
+                    "INSERT INTO video_jobs(id, project_id, subject, script, request_json, state, format, channel_id, created_by, created_at, updated_at, completed_at) "
+                    "VALUES (?, ?, ?, ?, ?, 'completed', 'short', ?, 'derived', ?, ?, ?)",
+                    (short_id, job["project_id"], f"{job['subject']} · Short {index}", job["script"] or "",
+                     json.dumps({"source_job_id": job_id, "start_seconds": round(start, 2), "duration_seconds": round(length, 2)}),
+                     channel_id, timestamp, timestamp, timestamp),
+                )
+                db.execute(
+                    "INSERT INTO artifacts(id, job_id, kind, remote_path, filename, created_at) VALUES (?, ?, 'video', ?, 'short.mp4', ?)",
+                    (str(uuid4()), short_id, f"derived/{short_id}/clip.mp4", timestamp),
+                )
+                if channel_id:
+                    db.execute(
+                        "INSERT INTO publications(id, job_id, platform, channel_id, state, created_at, updated_at) VALUES (?, ?, 'youtube', ?, 'pending', ?, ?)",
+                        (str(uuid4()), short_id, channel_id, timestamp, timestamp),
+                    )
+            created.append(short_id)
+    finally:
+        if temporary:
+            temporary.cleanup()
+    return {"created": len(created), "job_ids": created}
+
+
 def require_quality_approval(db: sqlite3.Connection, job: sqlite3.Row) -> None:
     if not job["generation_item_id"]:
+        if job["auto_publish_authorized"]:
+            raise HTTPException(status_code=409, detail="A revisão final ainda não aprovou este trabalho. Confira o relatório da geração.")
         return
     quality = db.execute("SELECT state FROM generation_quality WHERE item_id=? AND job_id=?", (job["generation_item_id"], job["id"])).fetchone()
     if not quality or quality["state"] != "approved":
@@ -3497,8 +3895,8 @@ def list_operators() -> dict[str, Any]:
         )
         awaiting = [dict(row) for row in db.execute(
             "SELECT jobs.id, jobs.subject, jobs.format, jobs.completed_at, channels.name AS channel_name "
-            f"{operator_jobs} AND jobs.state='completed' AND (jobs.generation_item_id IS NULL OR EXISTS ("
-            "SELECT 1 FROM generation_quality q WHERE q.item_id=jobs.generation_item_id AND q.state='approved')) "
+            f"{operator_jobs} AND jobs.state='completed' AND EXISTS ("
+            "SELECT 1 FROM generation_quality q WHERE q.item_id=jobs.generation_item_id AND q.job_id=jobs.id AND q.state='approved') "
             "ORDER BY jobs.completed_at DESC LIMIT 50"
         )]
         in_progress = [dict(row) for row in db.execute(
@@ -3692,6 +4090,7 @@ async def prepare_auto_publications() -> None:
             "JOIN operators o ON o.channel_id=p.channel_id "
             "WHERE jobs.created_by='operator' AND jobs.auto_publish_authorized=1 AND jobs.deleted_at IS NULL AND jobs.state IN ('completed','approved') "
             "AND p.state IN ('pending','auto_reserved') AND o.enabled=1 AND o.auto_publish=1 AND o.paused_reason IS NULL "
+            "AND EXISTS (SELECT 1 FROM generation_quality q WHERE q.item_id=jobs.generation_item_id AND q.job_id=jobs.id AND q.state='approved') "
             "AND EXISTS(SELECT 1 FROM job_metadata m WHERE m.job_id=jobs.id)"
         )]
     for row in jobs:
@@ -3787,11 +4186,26 @@ async def prepare_operator_jobs() -> None:
                 pause_operator(channel["channel_id"], str(getattr(exc, "detail", exc)), job_id)
 
 
+def pause_unapproved_operator_reviews() -> None:
+    """A blocked final review must stop the channel instead of waiting silently for upload."""
+    with database() as db:
+        blocked = [dict(row) for row in db.execute(
+            "SELECT j.id, p.channel_id, q.state FROM video_jobs j "
+            "JOIN publications p ON p.job_id=j.id JOIN operators o ON o.channel_id=p.channel_id "
+            "JOIN generation_quality q ON q.job_id=j.id "
+            "WHERE j.created_by='operator' AND j.auto_publish_authorized=1 AND j.deleted_at IS NULL "
+            "AND q.state IN ('blocked','error') AND o.enabled=1 AND o.auto_publish=1 AND o.paused_reason IS NULL"
+        )]
+    for row in blocked:
+        pause_operator(row["channel_id"], "A revisão final não aprovou o vídeo. Corrija o relatório antes de reativar.", row["id"])
+
+
 def pause_failed_operator_jobs() -> None:
     with database() as db:
         failed = [dict(row) for row in db.execute(
             "SELECT j.id, j.error, p.channel_id FROM video_jobs j JOIN publications p ON p.job_id=j.id "
             "JOIN operators o ON o.channel_id=p.channel_id WHERE j.created_by='operator' AND j.state IN ('failed','interrupted') "
+            "AND NOT EXISTS (SELECT 1 FROM generation_quality q WHERE q.item_id=j.generation_item_id AND q.state IN ('pending','reviewing','repairing')) "
             "AND o.enabled=1 AND o.auto_publish=1 AND o.paused_reason IS NULL AND j.updated_at > o.updated_at"
         )]
     for row in failed:
@@ -3814,7 +4228,7 @@ def recover_operator_leases() -> None:
 
 
 async def agent_tick() -> None:
-    for check in (recover_operator_leases, pause_failed_operator_jobs):
+    for check in (recover_operator_leases, pause_failed_operator_jobs, pause_unapproved_operator_reviews):
         try:
             check()
         except Exception:
@@ -3846,7 +4260,7 @@ async def no_cache_for_static_app(request: Request, call_next):
     started = time.perf_counter()
     try:
         path = request.url.path
-        exempt = {"/api/health", "/api/health/live", "/api/health/ready", "/api/auth/login", "/favicon.ico"}
+        exempt = {"/api/health", "/api/health/live", "/api/health/ready", "/api/version", "/api/auth/login", "/favicon.ico"}
         protected = path.startswith("/api/") or path == "/docs" or path == "/openapi.json"
         session = None
         if protected and path not in exempt:
@@ -3897,6 +4311,13 @@ def root() -> FileResponse:
     return FileResponse(STATIC_ROOT / "Cockpit.html")
 
 
+@app.get("/Login.html", include_in_schema=False)
+def login_page() -> Response:
+    if LOGIN_DISABLED:
+        return RedirectResponse("/", status_code=302)
+    return FileResponse(STATIC_ROOT / "Login.html")
+
+
 @app.get("/.image-slots.state.json")
 def image_slots_state() -> JSONResponse:
     """The <image-slot> scaffold fetches this sidecar on every page load. Outside the
@@ -3911,8 +4332,6 @@ def favicon() -> Response:
     the data-URI icon). Answer empty instead of 404ing."""
     return Response(status_code=204)
 
-
-from gateway.auto_generation import router as auto_generation_router
 
 app.include_router(auto_generation_router)
 app.mount("/", StaticFiles(directory=STATIC_ROOT, html=True), name="static")

@@ -7,7 +7,7 @@ window.CockpitFlow = (function () {
   function criar(scope) {
     const channels = D.CHANNELS.filter(channel => channel.status === "connected");
     const options = channels.map(channel => `<option value="${esc(channel.id)}">${esc(channel.name)} · ${esc(channel.platform)}</option>`).join("");
-    return `<div class="card" id="createRoot">
+    return `<div class="card create-entry-card" id="createRoot">
       <div class="card-hd"><span class="card-title">Comece pelo canal</span></div>
       <div class="card-bd" style="display:flex;flex-direction:column;gap:16px">
         <div class="grid2" style="margin:0">

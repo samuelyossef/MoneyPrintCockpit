@@ -109,8 +109,8 @@
         </div>
       </div>
       <div class="sb-foot"><span class="avatar">${safe(who[2])}</span>
-        <div class="sb-label"><div class="who">${safe(who[0])}</div><div class="plan">${safe(who[1])}</div></div>
-        <button class="sb-logout" id="logoutBtn" type="button" title="Sair da sessão" aria-label="Sair da sessão">${ic("logout")}<span class="sb-label">Sair</span></button></div>`;
+        <div class="sb-label"><div class="who">${safe(who[0])}</div><div class="plan">${safe(who[1])}</div><div class="app-version">MoneyPrinter ${safe(D.__appVersion || "")}</div></div>
+        ${admin.login_disabled ? "" : `<button class="sb-logout" id="logoutBtn" type="button" title="Sair da sessão" aria-label="Sair da sessão">${ic("logout")}<span class="sb-label">Sair</span></button>`}</div>`;
   }
 
   /* ── topbar ─────────────────────────────────── */
@@ -828,10 +828,16 @@
       await window.MoneyPrinterRuntime.establishSession();
       D.__status = await window.MoneyPrinterRuntime.request("/status");
     } catch (_) {
-      window.location.replace("/Login.html");
+      if (!D.__admin || !D.__admin.login_disabled) window.location.replace("/Login.html");
       return;
     }
     renderSidebar(); renderTopbar(); bindTopbar(); renderView();
+    fetch("/api/version", { credentials: "same-origin" }).then(async response => {
+      if (!response.ok) return;
+      D.__appVersion = (await response.json()).version;
+      const label = document.querySelector(".app-version");
+      if (label) label.textContent = `MoneyPrinter ${D.__appVersion}`;
+    }).catch(() => { /* a versão não deve bloquear o cockpit */ });
     const assistantPanelContent = document.getElementById("assistantPanelContent");
     if (assistantPanelContent) {
       assistantPanelContent.innerHTML = V.assistantChat("sideAssistant");

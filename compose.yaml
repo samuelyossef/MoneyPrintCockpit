@@ -10,7 +10,7 @@ services:
       GROWTH_DATABASE_URL: postgresql://${GROWTH_POSTGRES_USER:-moneyprinter}:${GROWTH_POSTGRES_PASSWORD:-moneyprinter-local}@postgresql:5432/${GROWTH_POSTGRES_DB:-moneyprinter}
       TEMPORAL_ADDRESS: temporal:7233
       GROWTH_TASK_QUEUE: ${GROWTH_TASK_QUEUE:-growth-intelligence}
-      OBJECT_STORAGE_ENDPOINT: minio:9000
+      OBJECT_STORAGE_ENDPOINT: localhost:9000
       OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-moneyprinter-media}
       OBJECT_STORAGE_SECURE: "0"
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-moneyprinter}
@@ -19,6 +19,7 @@ services:
       COCKPIT_ADMIN_FILE: /runtime/secrets/admin.json
       APP_ENV: ${APP_ENV:-local}
       ENABLE_API_DOCS: ${ENABLE_API_DOCS:-0}
+      COCKPIT_DISABLE_LOGIN: "0"
       SHORT_STALE_MINUTES: ${SHORT_STALE_MINUTES:-45}
       LONG_STALE_MINUTES: ${LONG_STALE_MINUTES:-180}
       QUEUE_STALE_MINUTES: ${QUEUE_STALE_MINUTES:-360}
@@ -33,8 +34,6 @@ services:
         condition: service_healthy
       postgresql:
         condition: service_healthy
-      minio:
-        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/api/health/ready')"]
       interval: 15s
@@ -192,17 +191,17 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  minio:
-    image: quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
-    command: ["server", "/data", "--console-address", ":9001"]
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-moneyprinter}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-moneyprinter-local-storage}
-    ports:
-      - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
-    volumes:
-      - growth-object-storage:/data
+  # minio:
+#     image: quay.io/minio/minio:latest
+#     command: ["server", "/data", "--console-address", ":9001"]
+#     environment:
+#       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-moneyprinter}
+#       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-moneyprinter-local-storage}
+#     ports:
+#       - "127.0.0.1:9000:9000"
+#       - "127.0.0.1:9001:9001"
+#     volumes:
+#       - growth-object-storage:/data
 
 secrets:
   mpt_api_key:
@@ -212,4 +211,3 @@ volumes:
   moneyprinter-storage:
   redis-data:
   growth-postgres-data:
-  growth-object-storage:

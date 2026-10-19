@@ -31,6 +31,8 @@ class QualityTests(unittest.TestCase):
         ]}
         specialists.choose_scene_material(scene)
         self.assertEqual(scene["selected"], "best")
+        self.assertIn("gratuito", scene["selection_reason"])
+        self.assertEqual(scene["selection"]["cost"], "gratuito")
         specialists.choose_scene_material(scene, {"best"})
         self.assertEqual(scene["selected"], "alternative")
 
@@ -93,7 +95,7 @@ class PipelineQualityTests(unittest.TestCase):
             asyncio.run(auto_generation.process_next_item("worker"))
         writer.assert_not_called()
 
-    def test_generated_script_gets_one_editorial_repair(self):
+    def test_generated_script_gets_editorial_repair_without_off_topic_source(self):
         batch = auto_generation.create_auto_batch("project", self.payload(channel_ids=["yt"], subject="Tema", requirements="Clareza", terms="forest"))
         with main.database() as db:
             db.execute("UPDATE generation_batch_items SET generated_json=? WHERE batch_id=?", (json.dumps({"subject": "Tema", "requirements": "Clareza", "script": "primeira versão"}), batch["batch_id"]))
@@ -107,7 +109,8 @@ class PipelineQualityTests(unittest.TestCase):
         with patch.object(specialists, "review_script", new=review), patch.object(auto_generation, "_generate_script", return_value="versão corrigida") as writer, patch.object(main, "turbo_request", new=turbo):
             asyncio.run(auto_generation.process_next_item("worker"))
         self.assertEqual(writer.call_count, 1)
-        self.assertIn("exemplo concreto", writer.call_args.args[3])
+        self.assertEqual(writer.call_args.args[3], "")
+        self.assertIn("exemplo concreto", writer.call_args.kwargs["editorial_feedback"])
         with main.database() as db:
             row = db.execute("SELECT state,generated_json FROM generation_batch_items WHERE batch_id=?", (batch["batch_id"],)).fetchone()
         self.assertEqual(row["state"], "submitted")

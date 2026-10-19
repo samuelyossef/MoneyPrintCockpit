@@ -46,6 +46,17 @@ class OperatorAutomationTests(unittest.TestCase):
             db.execute("INSERT INTO publications(id,job_id,platform,channel_id,state,created_at,updated_at) VALUES ('pub','j','youtube','yt','pending',?,?)", (m.now(), m.now()))
             db.execute("INSERT INTO job_metadata(job_id,value_json,updated_at) VALUES ('j',?,?)",
                        (json.dumps({"title": "Título", "description": "Descrição", "tags": ["um", "dois", "três"]}), m.now()))
+            db.execute(
+                "INSERT INTO generation_batches(id, project_id, client_request_id, request_hash, input_json, created_at) VALUES ('b','p','request','hash','{}',?)",
+                (m.now(),),
+            )
+            db.execute(
+                "INSERT INTO generation_batch_items(id, batch_id, channel_id, channel_name, state, stage, context_json, created_at, updated_at) "
+                "VALUES ('item','b','yt','Canal','submitted','done','{}',?,?)",
+                (m.now(), m.now()),
+            )
+            db.execute("UPDATE video_jobs SET generation_item_id='item' WHERE id='j'")
+            db.execute("INSERT INTO generation_quality(item_id, job_id, state, updated_at) VALUES ('item','j','approved',?)", (m.now(),))
 
     def token(self) -> None:
         path = self.main.youtube_token_file("yt")
@@ -168,6 +179,20 @@ class OperatorAutomationTests(unittest.TestCase):
         with self.main.database() as db:
             self.assertEqual(db.execute("SELECT state FROM video_jobs WHERE id='j'").fetchone()[0], "completed")
             self.assertTrue(db.execute("SELECT paused_reason FROM operators WHERE channel_id='yt'").fetchone()[0])
+
+    def test_blocked_final_review_pauses_and_does_not_upload(self) -> None:
+        self.configure()
+        self.completed_job()
+        self.token()
+        with self.main.database() as db:
+            db.execute("UPDATE generation_quality SET state='blocked' WHERE item_id='item'")
+        with patch.object(self.main, "youtube_upload") as upload:
+            self.main.pause_unapproved_operator_reviews()
+            asyncio.run(self.main.prepare_auto_publications())
+        upload.assert_not_called()
+        with self.main.database() as db:
+            self.assertEqual(db.execute("SELECT state FROM video_jobs WHERE id='j'").fetchone()[0], "completed")
+            self.assertIn("revisão final", db.execute("SELECT paused_reason FROM operators WHERE channel_id='yt'").fetchone()[0])
 
     def test_old_pending_job_is_not_published_after_opt_in(self) -> None:
         self.configure()

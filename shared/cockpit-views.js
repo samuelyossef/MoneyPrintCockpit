@@ -1298,6 +1298,13 @@ window.CKV = (function () {
               <div class="card-note" style="margin-top:8px">${isLong ? "O tema e o roteiro respeitam o canal e os parâmetros de duração e voz." : "Cada canal selecionado recebe seu próprio Short, inclusive quando os canais são da mesma plataforma."}</div>
             </div>
             <div>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin:0 0 7px"><label class="dr-sec" style="margin:0">Proposta antes do roteiro (opcional)</label><button class="btn sm" type="button" id="genProposalBtn">Pesquisar ângulo</button></div>
+              <textarea class="np-input" id="genProposal" rows="3" style="width:100%;resize:vertical" placeholder="Pesquise um ângulo ou cole a proposta confirmada. O roteiro só usa este texto se ele estiver preenchido."></textarea>
+              <label class="card-note" for="genReferenceFile" style="display:block;margin-top:8px;font-family:inherit">Vídeo de referência local</label>
+              <input id="genReferenceFile" type="file" accept="video/mp4,video/webm,video/quicktime" />
+              <div class="card-note" id="genReferenceNote" style="margin-top:6px;font-family:inherit"></div>
+            </div>
+            <div>
               <div style="display:flex;justify-content:space-between;align-items:center;margin:0 0 7px"><label class="dr-sec" style="margin:0">Roteiro (opcional)</label>${isLong
                 ? `<button class="btn sm" type="button" id="genLongScriptBtn">Escrever roteiro longo com IA</button>`
                 : `<button class="btn sm" type="button" id="genScriptAiBtn">Gerar roteiro com IA</button>`}</div>
@@ -1374,6 +1381,7 @@ window.CKV = (function () {
                     <button class="btn sm" id="genMetaAiBtn" type="button">Gerar com IA</button>
                     <button class="btn sm" id="genMetaSaveBtn" type="button">Salvar</button>
                     <button class="btn sm primary" id="genApproveBtn" type="button">Aprovar</button>
+                    ${isLong ? `<button class="btn sm" id="genDeriveShortsBtn" type="button">Cortar Shorts</button>` : ""}
                     <label class="card-note" style="font-family:inherit;display:flex;align-items:center;gap:6px">Agendar para <input class="np-input" type="datetime-local" id="genPublishAt" style="padding:4px 6px" /></label>
                     <span class="card-note" id="genPublishStatus" role="status" style="font-family:inherit"></span>
                   </div>
@@ -1501,7 +1509,7 @@ window.CKV = (function () {
             <div class="dr-sec" style="margin-top:20px">Aguardando sua aprovação</div>
             <div id="agAwaitingBody"></div>
           </div>
-          <div data-agpane="revisoes" ${initial === "revisoes" ? "" : "hidden"}><div class="card-note" style="margin-bottom:12px">Execuções por canal, curadoria visual e relatórios de qualidade. Abra uma geração para escolher outra imagem ou clipe e retomar um trecho pausado.</div><button class="btn sm" id="agReviewsRefresh" type="button">Atualizar revisões</button><div id="agReviewsBody" style="margin-top:12px"></div></div>
+          <div data-agpane="revisoes" ${initial === "revisoes" ? "" : "hidden"}><div class="card-note" style="margin-bottom:12px">Revisão e correção automáticas por canal. Abra a geração para acompanhar as tentativas ou ajustar manualmente o que não puder ser corrigido.</div><div style="display:flex;flex-wrap:wrap;gap:8px"><button class="btn sm" id="agReviewsRefresh" type="button">Atualizar revisões</button><button class="btn sm" id="agReviewsClear" type="button">Limpar concluídas</button></div><div id="agReviewsBody" style="margin-top:12px"></div></div>
         </div>
       </div>`;
   }
