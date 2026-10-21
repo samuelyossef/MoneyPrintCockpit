@@ -29,6 +29,8 @@ docker compose logs cockpit-api --tail 100
 
 Readiness: `GET /api/health/ready`. Liveness: `GET /api/health/live`. Rotas administrativas exigem sessão e CSRF. O Swagger fica desligado; use `ENABLE_API_DOCS=1` só para diagnóstico local autenticado.
 
+Testes do gateway: instale `gateway/requirements.txt` e `gateway/requirements-dev.txt` e rode `python -m pytest gateway/tests`. O CI roda esses testes e o `npm run version:check` a cada push.
+
 O login está ativo quando `COCKPIT_DISABLE_LOGIN` é `0` no serviço `cockpit-api`. Com `1`, a interface abre sem senha.
 
 ## Versão

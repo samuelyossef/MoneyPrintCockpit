@@ -65,6 +65,17 @@ Com `COCKPIT_DISABLE_LOGIN=1`, a API trata toda requisição como sessão local 
 
 Tentativas repetidas de login são limitadas por 15 minutos.
 
+## Estrutura do código
+
+- `gateway/main.py` — serviços compartilhados (banco, sessões, cliente do Turbo, helpers de job, agentes) e montagem da aplicação FastAPI. Os workers (`cockpit-operator`, `cockpit-generation-worker`) e os testes usam esse módulo diretamente.
+- `gateway/routers/` — rotas HTTP por área: `system` (saúde, versão, status, logs, notificações), `auth`, `projects`, `settings`, `jobs`, `assistant`, `scripts`, `channels` e `agents`. Cada módulo expõe um `APIRouter` e acessa os serviços por `gateway.main`, no mesmo padrão de `gateway/auto_generation.py`.
+- `gateway/growth/` — domínio do Growth OS (PostgreSQL, Temporal, outbox).
+- `gateway/auto_generation.py` — preparação durável e revisão editorial antes do render.
+- `lattice-app/` — protótipo visual congelado; sem build e fora do produto (veja o README do diretório).
+- `scraps/`, `screenshots/`, `uploads/`, `screens/`, `graphify-out/`, `.playwright-cli/` — artefatos locais de desenvolvimento, ignorados pelo git.
+
+Testes do gateway: `pip install -r gateway/requirements.txt -r gateway/requirements-dev.txt` e `python -m pytest gateway/tests`. O CI (`.github/workflows/ci.yml`) roda esses testes e o `npm run version:check` a cada push e pull request.
+
 ## Interface
 
 O menu principal segue o trabalho diário:
