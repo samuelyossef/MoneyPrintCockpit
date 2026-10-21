@@ -13,7 +13,7 @@ No PowerShell, com o Docker Desktop aberto:
 docker compose up -d --build --wait
 ```
 
-O setup pede nome, e-mail e senha do administrador. A senha não é gravada: `runtime/secrets/admin.json` guarda apenas um hash PBKDF2-SHA256. A senha precisa ter pelo menos 12 caracteres.
+O setup pede nome, e-mail e senha do administrador. A senha não é gravada: `runtime/secrets/admin.json` guarda apenas um hash PBKDF2-SHA256. A senha precisa ter pelo menos 12 caracteres. O setup também grava senhas locais aleatórias (PostgreSQL/MinIO do Growth OS) em `.env`, fora do versionamento.
 
 Abra [http://127.0.0.1:3000/Login.html](http://127.0.0.1:3000/Login.html). A porta fica limitada ao loopback.
 

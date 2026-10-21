@@ -10,6 +10,26 @@ $secretsPath = Join-Path $runtimePath 'secrets'
 $mptPath = Join-Path $runtimePath 'moneyprinter'
 New-Item -ItemType Directory -Force -Path $secretsPath, $mptPath | Out-Null
 
+# Senhas locais do Growth OS (PostgreSQL/MinIO): geradas uma única vez em `.env`,
+# que fica fora do versionamento e é lida automaticamente pelo Docker Compose.
+# Valores já presentes em `.env` são preservados (o volume do PostgreSQL guarda a
+# senha da primeira inicialização; trocar a senha exige recriar o volume).
+$envPath = Join-Path $PSScriptRoot '.env'
+$envContent = if (Test-Path $envPath) { [IO.File]::ReadAllText($envPath) } else { '' }
+function New-LocalPasswordHex([int]$bytes = 24) {
+  $buffer = New-Object byte[] $bytes
+  $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $rng.GetBytes($buffer) } finally { $rng.Dispose() }
+  ([BitConverter]::ToString($buffer)).Replace('-', '').ToLowerInvariant()
+}
+foreach ($name in @('GROWTH_POSTGRES_PASSWORD', 'MINIO_ROOT_PASSWORD')) {
+  if ($envContent -notmatch ("(?m)^" + $name + "=\S")) {
+    if ($envContent -and -not $envContent.EndsWith([Environment]::NewLine)) { $envContent += [Environment]::NewLine }
+    $envContent += "$name=$(New-LocalPasswordHex)" + [Environment]::NewLine
+  }
+}
+[IO.File]::WriteAllText($envPath, $envContent, [Text.UTF8Encoding]::new($false))
+
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Docker Desktop não foi encontrado no PATH.' }
 docker info *> $null
 if ($LASTEXITCODE -ne 0) { throw 'Docker Desktop não está em execução.' }
@@ -29,9 +49,10 @@ function Read-PlainValue([string]$label, [string]$environmentName) {
 
 function Get-PasswordHash([string]$password) {
   $salt = New-Object byte[] 16
-  [Security.Cryptography.RandomNumberGenerator]::Fill($salt)
+  $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $rng.GetBytes($salt) } finally { $rng.Dispose() }
   $derive = [Security.Cryptography.Rfc2898DeriveBytes]::new($password, $salt, 600000, [Security.Cryptography.HashAlgorithmName]::SHA256)
-  try { return @{ algorithm='pbkdf2_sha256'; iterations='600000'; salt=([Convert]::ToHexString($salt).ToLowerInvariant()); hash=([Convert]::ToHexString($derive.GetBytes(32)).ToLowerInvariant()) } }
+  try { return @{ algorithm='pbkdf2_sha256'; iterations='600000'; salt=(([BitConverter]::ToString($salt)).Replace('-', '').ToLowerInvariant()); hash=(([BitConverter]::ToString($derive.GetBytes(32))).Replace('-', '').ToLowerInvariant()) } }
   finally { $derive.Dispose() }
 }
 

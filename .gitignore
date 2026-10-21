@@ -25,4 +25,5 @@ pytest-*.err
 /.thumbnail
 /Canvas.dc.html
 /Canvas-2.dc.html
+/support.js
 *.bak

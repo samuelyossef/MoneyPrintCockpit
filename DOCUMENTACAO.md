@@ -26,6 +26,8 @@ docker compose up -d --build --wait
 
 `setup.ps1` cria `runtime/secrets/admin.json`, `runtime/secrets/mpt_api_key.txt` e `runtime/moneyprinter/config.toml`. Chaves de Moonshot/Kimi, Pexels e Upload-Post podem ficar em branco e ser preenchidas depois. Os valores de exemplo estão em `.env.example`. Não coloque segredos no navegador nem no repositório.
 
+O setup também grava em `.env` senhas locais aleatórias para o PostgreSQL e o MinIO do Growth OS (o arquivo fica fora do versionamento e é lido automaticamente pelo Docker Compose; valores já presentes são preservados). Se o volume do PostgreSQL já existir de uma instalação anterior com senha padrão, recrie-o com `docker compose down -v` para a nova senha valer.
+
 Abra [http://127.0.0.1:3000/Login.html](http://127.0.0.1:3000/Login.html).
 
 | Comando | Efeito |
@@ -53,7 +55,7 @@ Readiness: `GET /api/health/ready`. Liveness: `GET /api/health/live`. A versão 
 
 O MinIO está descrito nas variáveis de object storage, mas o serviço está comentado no `compose.yaml` e não sobe com a composição atual.
 
-PostgreSQL e Temporal só escutam em `127.0.0.1`. As senhas padrão de desenvolvimento precisam ser trocadas antes de qualquer uso fora da máquina local.
+PostgreSQL e Temporal só escutam em `127.0.0.1`. As senhas do PostgreSQL/MinIO são geradas aleatoriamente pelo `setup.ps1` em `.env`; os defaults de desenvolvimento (ex.: `moneyprinter-local`) permanecem no `compose.yaml` apenas como fallback para rodar sem setup e não devem ser usados fora da máquina local.
 
 ## Acesso
 

@@ -77,6 +77,12 @@ const server = http.createServer((req, res) => {
     // 4. Leitura e envio do arquivo para o cliente
     fs.readFile(filePath, (readErr, content) => {
       if (readErr) {
+        // Diretórios sem index.html (e arquivos removidos entre stat e read) são 404, não 500.
+        if (readErr.code === 'ENOENT') {
+          res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(`<h1>404 Não Encontrado</h1><p>Arquivo não encontrado: ${reqPath}</p>`);
+          return;
+        }
         res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end(`Erro interno ao ler arquivo: ${readErr.message}`);
         return;

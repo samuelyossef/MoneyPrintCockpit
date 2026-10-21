@@ -35,10 +35,12 @@ services:
       postgresql:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/api/health/ready')"]
-      interval: 15s
-      timeout: 20s
-      start_period: 90s
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/api/health/ready', timeout=5)"]
+      interval: 10s
+      timeout: 10s
+      # Só sobe depois de moneyprinterturbo e postgresql saudáveis; a API em si
+      # levanta em segundos, então 90s de start_period só atrasavam o --wait.
+      start_period: 30s
       retries: 5
 
   cockpit-operator:
@@ -111,9 +113,9 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ping')"]
-      interval: 20s
-      timeout: 20s
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ping', timeout=5)"]
+      interval: 10s
+      timeout: 10s
       start_period: 90s
       retries: 10
 
