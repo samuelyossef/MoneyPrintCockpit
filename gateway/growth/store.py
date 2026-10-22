@@ -23,15 +23,15 @@ class GrowthStore:
 
     def _connect(self):
         if not self.dsn:
-            raise GrowthStoreUnavailable("GROWTH_DATABASE_URL is not configured.")
+            raise GrowthStoreUnavailable("GROWTH_DATABASE_URL não está configurada.")
         try:
             import psycopg
         except ImportError as exc:
-            raise GrowthStoreUnavailable("The PostgreSQL driver is not installed.") from exc
+            raise GrowthStoreUnavailable("O driver PostgreSQL não está instalado.") from exc
         try:
             return psycopg.connect(self.dsn)
         except Exception as exc:
-            raise GrowthStoreUnavailable(f"Growth OS PostgreSQL is unavailable: {exc}") from exc
+            raise GrowthStoreUnavailable(f"PostgreSQL do Growth OS indisponível: {exc}") from exc
 
     def ensure_schema(self) -> None:
         schema = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")

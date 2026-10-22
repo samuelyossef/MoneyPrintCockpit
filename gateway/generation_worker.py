@@ -23,12 +23,12 @@ async def run() -> None:
                 try:
                     await main.reconcile_job(job_id)
                 except Exception:
-                    logging.exception("Failed to check render %s", job_id)
+                    logging.exception("Falha ao consultar render %s", job_id)
             worked = await review_next_completed_job() or worked
             if not worked:
                 await asyncio.sleep(4)
         except Exception:
-            logging.exception("Automatic generation worker failed")
+            logging.exception("Falha no worker de geração automática")
             await asyncio.sleep(3)
 
 

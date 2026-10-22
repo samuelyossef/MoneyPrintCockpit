@@ -44,14 +44,14 @@ def main() -> None:
                 return json.dumps({"topic": "Wildlife facts" if "Test TikTok" in prompt else "Fatos sobre a natureza"})
             if '"requirements"' in prompt:
                 return json.dumps({"requirements": "Clear opening and concrete examples" if "Test TikTok" in prompt else "Abertura clara e exemplos concretos"})
-            if '"script": "narration"' in prompt:
+            if '"script": "narração"' in prompt:
                 words = 210 if "en-US" in prompt else 180
                 return json.dumps({"script": " ".join(["wildlife" if "en-US" in prompt else "natureza"] * words)})
-            if "Write a complete YouTube video script" in prompt:
+            if "Escreva um roteiro completo de vídeo de YouTube" in prompt:
                 return json.dumps({"title": "Fatos sobre a natureza", "script": " ".join(["natureza"] * 1200)})
             if '"terms"' in prompt:
                 return json.dumps({"terms": [f"nature footage {index}" for index in range(30)]})
-            raise RuntimeError("Unexpected prompt in the isolated test")
+            raise RuntimeError("Prompt inesperado no teste isolado")
 
         class FakeResponse:
             status_code = 200
@@ -71,7 +71,7 @@ def main() -> None:
             if method == "GET" and path.startswith("/api/v1/tasks/"):
                 task_id = path.rsplit("/", 1)[-1]
                 return FakeResponse({"data": {"state": "done", "progress": 100, "videos": [f"{task_id}/final-1.mp4"]}})
-            raise RuntimeError(f"Unexpected Turbo call in the isolated test: {method} {path}")
+            raise RuntimeError(f"Turbo inesperado no teste isolado: {method} {path}")
 
         gateway.llm_chat = fake_chat
         gateway.turbo_request = fake_turbo
@@ -79,17 +79,17 @@ def main() -> None:
 
         async def fake_editorial(script, subject, requirements, context, *, manual):
             from gateway.editorial_quality import narration_diagnostics
-            return {"approved": True, "reason": "Coherent script in the simulated test", "estimated_seconds": round(gateway.narration_seconds(script, context["settings"]["voice_rate"])), "manual": manual, "narration": narration_diagnostics(script)}
+            return {"approved": True, "reason": "Roteiro coerente no teste simulado", "estimated_seconds": round(gateway.narration_seconds(script, context["settings"]["voice_rate"])), "manual": manual, "narration": narration_diagnostics(script)}
 
         async def fake_curator(item_id, index, chunk, query, context):
             folder = specialists.material_root(item_id)
             folder.mkdir(parents=True, exist_ok=True)
             filename = f"scene{index:03d}option0.jpg"
             (folder / filename).write_bytes(__import__("base64").b64decode("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAT/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCdABmX/9k="))
-            return {"index": index, "narration": chunk, "query": query, "expected": chunk, "selected": f"mock-{index}", "candidates": [{"id": f"mock-{index}", "provider": "pexels", "kind": "image", "filename": filename, "source_page": "https://pexels.com", "status": "approved", "reason": "Simulated scene approved", "duration": 5}]}
+            return {"index": index, "narration": chunk, "query": query, "expected": chunk, "selected": f"mock-{index}", "candidates": [{"id": f"mock-{index}", "provider": "pexels", "kind": "image", "filename": filename, "source_page": "https://pexels.com", "status": "approved", "reason": "Cena simulada aprovada", "duration": 5}]}
 
         async def fake_final_review(path, scenes, settings, script):
-            return {"approved": True, "checks": {"duration": True, "aspect": True, "audio": True, "black_frames": True}, "observations": [{"scene": scene["index"] + 1, "approved": True, "reason": "Simulated frame"} for scene in scenes], "reason": "Simulated edit approved"}
+            return {"approved": True, "checks": {"duration": True, "aspect": True, "audio": True, "black_frames": True}, "observations": [{"scene": scene["index"] + 1, "approved": True, "reason": "Quadro simulado"} for scene in scenes], "reason": "Montagem simulada aprovada"}
 
         async def fake_download(_remote, target):
             target.write_bytes(b"fake-video")

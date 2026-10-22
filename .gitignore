@@ -7,3 +7,23 @@ __pycache__/
 .env
 
 yta/
+
+# Local artifacts and drop zones: kept on disk, but never versioned.
+scraps/
+screenshots/
+uploads/
+screens/
+graphify-out/
+.playwright-cli/
+pip-*.log
+pip-*.err
+pytest-*.log
+pytest-*.err
+
+# Root-level throwaway artifacts.
+/.qa-moneyprint-desktop.png
+/.thumbnail
+/Canvas.dc.html
+/Canvas-2.dc.html
+/support.js
+*.bak

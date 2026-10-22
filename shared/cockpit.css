@@ -131,9 +131,6 @@ a.sb-item, a.plain { color: inherit; }
 /* ── Grids ────────────────────────────────────── */
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 20px; }
 .grid-2-1 { display: grid; grid-template-columns: 1.55fr 1fr; gap: 14px; margin-bottom: 20px; }
-.studio-layout:has(#studioProgress[hidden]) { grid-template-columns: 1fr; }
-#studioProgress { display: flex; flex-direction: column; gap: 20px; }
-#studioProgress[hidden] { display: none !important; }
 .card { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); }
 .card-hd { display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
 .card-title { font-size: 13.5px; font-weight: 600; }

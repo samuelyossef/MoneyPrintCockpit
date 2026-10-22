@@ -135,7 +135,7 @@ async def start_planning_workflow(input: PlanningWorkflowRequest) -> dict[str, A
             )
         except Exception:
             pass
-        raise HTTPException(status_code=503, detail=f"Durable workflow is unavailable: {exc}") from exc
+        raise HTTPException(status_code=503, detail=f"Workflow durável indisponível: {exc}") from exc
     return {"id": workflow_id, "temporal_workflow_id": temporal_id, "state": "planned"}
 
 
@@ -146,5 +146,5 @@ def get_workflow(workflow_id: UUID) -> dict[str, Any]:
     except GrowthStoreUnavailable as exc:
         raise _unavailable(exc) from exc
     if not value:
-        raise HTTPException(status_code=404, detail="Workflow not found.")
+        raise HTTPException(status_code=404, detail="Workflow não encontrado.")
     return value

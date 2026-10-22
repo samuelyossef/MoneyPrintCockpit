@@ -27,7 +27,7 @@ class GatewayContractTests(unittest.TestCase):
         self.assertEqual(defaults["bgm_type"], "")
         self.assertTrue(defaults["subtitle_enabled"])
         self.assertEqual(defaults["subtitle_provider"], "edge")
-        # Stock-only speed/quality balance: no transition, neutral voice and clip.
+        # Equilíbrio velocidade/qualidade stock-only: sem transição, voz e clipe neutros.
         self.assertEqual(defaults["video_transition_mode"], "")
         self.assertEqual(defaults["voice_rate"], 1.0)
         self.assertEqual(defaults["video_source"], "pexels")
@@ -407,7 +407,7 @@ class GatewayContractTests(unittest.TestCase):
         with patch("httpx.AsyncClient.post", new=AsyncMock(side_effect=asyncio.TimeoutError)):
             result = asyncio.run(self.main.test_nvidia_model(self.main.NvidiaModelTest(model="moonshotai/kimi-k3")))
         self.assertFalse(result["ok"])
-        self.assertIn("30 seconds", result["detail"])
+        self.assertIn("30 segundos", result["detail"])
 
     def test_update_providers_requires_nvidia_key_before_switching(self):
         from fastapi import HTTPException
@@ -491,7 +491,7 @@ class GatewayContractTests(unittest.TestCase):
         with patch("httpx.AsyncClient.send", new=AsyncMock(return_value=fake_response)):
             result = asyncio.run(self.main.cancel_job("job-1"))
         self.assertEqual(result["state"], "interrupted")
-        self.assertEqual(result["error"], "Canceled by the user")
+        self.assertEqual(result["error"], "Cancelado pelo usuário")
         # already interrupted (or any non-active state) can't be cancelled again
         with self.assertRaises(HTTPException) as ctx:
             asyncio.run(self.main.cancel_job("job-1"))
@@ -622,7 +622,7 @@ class GatewayContractTests(unittest.TestCase):
         self._approved_job()
         with self.assertRaises(HTTPException) as missing:
             asyncio.run(self.main.publish_job("job-1"))
-        self.assertIn("Choose the channel", missing.exception.detail)
+        self.assertIn("canal", missing.exception.detail)
         self._channel(status="expired")
         with self.assertRaises(HTTPException) as expired:
             asyncio.run(self.main.publish_job("job-1", self.main.PublishInput(channel_ids=["ch-1"])))
@@ -779,7 +779,7 @@ class GatewayContractTests(unittest.TestCase):
         with patch.object(self.main, "turbo_request") as turbo, self.assertRaises(HTTPException) as rejected:
             asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="tema", format="short", channel_ids=["yt", "tt"])))
         self.assertEqual(rejected.exception.status_code, 409)
-        self.assertIn("clip duration", rejected.exception.detail)
+        self.assertIn("duração do clipe", rejected.exception.detail)
         turbo.assert_not_called()
 
     def test_multiple_channels_with_different_profiles_are_rejected_before_turbo(self):
@@ -791,7 +791,7 @@ class GatewayContractTests(unittest.TestCase):
         with patch.object(self.main, "turbo_request") as turbo, self.assertRaises(HTTPException) as rejected:
             asyncio.run(self.main.create_job("p1", self.main.JobCreate(subject="tema", format="short", channel_ids=["yt", "tt"])))
         self.assertEqual(rejected.exception.status_code, 409)
-        self.assertIn("different voice", rejected.exception.detail)
+        self.assertIn("perfis de voz", rejected.exception.detail)
         turbo.assert_not_called()
 
     def test_migration_backfills_format_and_pending_targets(self):
@@ -835,7 +835,7 @@ class GatewayContractTests(unittest.TestCase):
         self.assertNotIn("#", result["script"])
         self.assertNotIn("*", result["script"])
         self.assertNotIn("terms", result)
-        self.assertEqual(result["sections"], ["Complete script"])
+        self.assertEqual(result["sections"], ["Roteiro completo"])
 
     def test_long_script_keeps_sections_and_continuity_after_eight_minutes(self):
         from unittest.mock import patch
@@ -850,8 +850,8 @@ class GatewayContractTests(unittest.TestCase):
         with patch.object(self.main, "llm_chat", new=fake_chat):
             result = asyncio.run(self.main.long_script(self.main.LongScriptInput(subject="oceano", minutes=9)))
         self.assertEqual(len(prompts), 7)  # planning plus six sequential sections
-        self.assertIn("End of the previous section", prompts[2])
-        self.assertIn("narration", prompts[2])
+        self.assertIn("Final da seção anterior", prompts[2])
+        self.assertIn("narração", prompts[2])
         self.assertEqual(calls[0]["task"], "outline")
         self.assertTrue(all(call["fast_script"] for call in calls))
         self.assertTrue(all(call["max_tokens"] <= 1536 for call in calls))
@@ -886,7 +886,7 @@ class GatewayContractTests(unittest.TestCase):
                 return False
 
         async def failed_chat(prompt, json_mode=False, **kwargs):
-            raise self.main.HTTPException(status_code=504, detail="timed out")
+            raise self.main.HTTPException(status_code=504, detail="tempo esgotado")
 
         async def collect():
             response = await self.main.long_script_stream(self.main.LongScriptInput(subject="oceano", minutes=8), ConnectedRequest())
@@ -896,7 +896,7 @@ class GatewayContractTests(unittest.TestCase):
             chunks = asyncio.run(collect())
         stream = "".join(chunk.decode() if isinstance(chunk, bytes) else chunk for chunk in chunks)
         self.assertIn("event: error", stream)
-        self.assertIn("timed out", stream)
+        self.assertIn("tempo esgotado", stream)
 
     def test_long_script_honors_custom_requirements_throughout(self):
         from unittest.mock import patch
@@ -1013,7 +1013,7 @@ class GatewayContractTests(unittest.TestCase):
         second = asyncio.run(self.main.run_operator(channel_id))
         self.assertIsNone(first["error"])
         self.assertTrue(first["batch_id"])
-        self.assertIn("Skipped", second["error"])
+        self.assertIn("Pulado", second["error"])
         with self.main.database() as db:
             item = db.execute("SELECT context_json, state FROM generation_batch_items WHERE batch_id=?", (first["batch_id"],)).fetchone()
             operator = db.execute("SELECT next_run_at FROM operators").fetchone()
@@ -1072,7 +1072,7 @@ class GatewayContractTests(unittest.TestCase):
         script = " ".join(f"palavra{i}" for i in range(60))  # ~24s of narration at 150 wpm
 
         async def fake_chat(prompt, json_mode=False, **kwargs):
-            self.assertIn("Numbered excerpts", prompt)
+            self.assertIn("Trechos numerados", prompt)
             return json.dumps({"terms": ["ocean waves", "ocean waves", "coral reef"]})  # a duplicate the model repeated
 
         with patch.object(self.main, "llm_chat", new=fake_chat):
@@ -1094,7 +1094,7 @@ class GatewayContractTests(unittest.TestCase):
             terms, _ = asyncio.run(self.main.visual_terms("sol da manhã", "sunrise", clip_seconds=5))
         self.assertEqual(terms, ["sunrise"])
         self.assertEqual(len(calls), 2)
-        self.assertIn("invalid JSON", calls[1][0])
+        self.assertIn("JSON inválido", calls[1][0])
         self.assertTrue(all(call[1]["json_mode"] for call in calls))
         self.assertEqual(self.main.parse_json_object('prefixo {inválido} e {"terms": ["sunrise"]}'), {"terms": ["sunrise"]})
 
@@ -1109,7 +1109,7 @@ class GatewayContractTests(unittest.TestCase):
         with patch.object(self.main, "llm_chat", new=fake_chat), self.assertRaises(HTTPException) as raised:
             asyncio.run(self.main.visual_terms("oceano", script, clip_seconds=1))
         self.assertEqual(raised.exception.status_code, 422)
-        self.assertIn("Increase the duration of each clip", raised.exception.detail)
+        self.assertIn("Aumente a duração de cada clipe", raised.exception.detail)
 
     def test_create_job_script_mode_aligns_terms_and_locks_sequential(self):
         from unittest.mock import patch
@@ -1195,7 +1195,7 @@ class GatewayContractTests(unittest.TestCase):
         with patch.object(self.main, "turbo_request", new=fake_turbo_short):
             with self.assertRaises(HTTPException) as raised:
                 asyncio.run(self.main.short_script(self.main.ShortScriptInput(subject="tema", paragraph_number=5)))
-        self.assertIn("selected range", str(raised.exception.detail))
+        self.assertIn("faixa selecionada", str(raised.exception.detail))
 
     def test_short_script_sends_word_range_and_flags_a_short_result(self):
         from unittest.mock import patch
@@ -1240,7 +1240,7 @@ class GatewayContractTests(unittest.TestCase):
                 subject="topic", paragraph_number=4, voice_rate=1, voice_name="en-US-JennyNeural",
             )))
         self.assertEqual(len(sent), 2)
-        self.assertIn("56.8 seconds", sent[1]["video_script_prompt"])
+        self.assertIn("56.8 segundos", sent[1]["video_script_prompt"])
         self.assertEqual(result["words"], 178)
         self.assertEqual(result["estimated_seconds"], 63)
 
@@ -1258,7 +1258,7 @@ class GatewayContractTests(unittest.TestCase):
                 subject="oceano", minutes=5, voice_rate=1.2, voice_name="pt-BR-FranciscaNeural",
             )))
         self.assertEqual(len(prompts), 2)
-        self.assertIn("about 832 words", prompts[0])
+        self.assertIn("cerca de 832 palavras", prompts[0])
         self.assertIn("233.3 s", prompts[1])
         self.assertEqual(result["words"], 840)
         self.assertEqual(result["estimated_minutes"], 4.7)
@@ -1355,8 +1355,8 @@ class GatewayContractTests(unittest.TestCase):
         with patch("gateway.visual_specialists.probe", return_value={"duration": 30, "width": 1080, "height": 1920, "audio": True}), \
              patch("subprocess.run", return_value=type("Result", (), {"stderr": "\n".join(f"pts_time:{index}" for index in range(12)), "returncode": 0})()):
             result = self.main.reference_structure(path)
-        self.assertEqual(result["pace"], "fast")
-        self.assertIn("Do not copy", result["brief"])
+        self.assertEqual(result["pace"], "rápido")
+        self.assertIn("Não copie", result["brief"])
 
     def test_long_video_can_queue_derived_shorts(self):
         from unittest.mock import patch

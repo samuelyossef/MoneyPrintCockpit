@@ -34,7 +34,7 @@ def publish_batch(connection: psycopg.Connection[Any], client: redis.Redis, limi
                     "UPDATE outbox SET attempts=attempts+1, available_at=now() + (%s * interval '1 second'), last_error=%s WHERE id=%s",
                     (delay, str(exc)[:500], outbox_id),
                 )
-                LOGGER.exception("Failed to publish event %s", event_id)
+                LOGGER.exception("Falha ao publicar evento %s", event_id)
         return len(rows)
 
 
@@ -48,7 +48,7 @@ def run() -> None:
                 processed = publish_batch(connection, client)
             time.sleep(0.25 if processed else 1.0)
         except Exception:
-            LOGGER.exception("Outbox is temporarily unavailable")
+            LOGGER.exception("Outbox temporariamente indisponível")
             time.sleep(5)
 
 

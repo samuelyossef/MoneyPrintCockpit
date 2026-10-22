@@ -113,13 +113,7 @@
     return primary && ids.includes(primary) ? [primary, ...ids.filter(id => id !== primary)] : ids;
   }
 
-  function revealStudioProgress(body) {
-    const panel = body && body.querySelector("#studioProgress");
-    if (panel) panel.hidden = false;
-  }
-
   function setPipeline(body, job) {
-    revealStudioProgress(body);
     const fill = body.querySelector("#genProgFill");
     const label = body.querySelector("#genProgLabel");
     const percent = body.querySelector("#genProgPct");
@@ -465,11 +459,13 @@
     } catch (_) { /* The dedicated view will show the Gateway error if it becomes unavailable. */ }
   }
 
+  const CHANNEL_PROFILE_KEYS = ["language", "publish_privacy", "voice_name", "voice_rate", "voice_volume", "subtitle_enabled", "subtitle_position", "font_size", "text_fore_color", "stroke_color", "stroke_width"];
   const CHANNEL_FORMAT_PROFILE_KEYS = ["voice_name", "voice_rate", "voice_volume", "subtitle_enabled", "subtitle_position", "font_size", "text_fore_color", "stroke_color", "stroke_width"];
   const CHANNEL_VIDEO_PROFILE_KEYS = {
     short: [...CHANNEL_FORMAT_PROFILE_KEYS, "paragraph_number", "video_clip_duration", "video_count", "video_concat_mode", "video_transition_mode", "video_clip_speed", "bgm_type", "bgm_volume"],
     long: [...CHANNEL_FORMAT_PROFILE_KEYS, "target_minutes", "video_clip_duration", "video_concat_mode", "video_transition_mode", "video_clip_speed", "bgm_type", "bgm_volume"],
   };
+  const channelProfilePayload = channel => ({ ...Object.fromEntries(CHANNEL_PROFILE_KEYS.map(key => [key, channel[key]])), video_defaults: channel.video_defaults || {}, visual_guides: channel.visual_guides || { short: "", long: "" } });
 
   function applyChannelProfile(body) {
     const channels = selectedChannels(body).map(channelById).filter(Boolean);
@@ -864,8 +860,6 @@
       stats.style.color = outOfRange ? "var(--warn)" : "";
     };
     generationDraft = restoreDraft(body);
-    const review = body.querySelector("#genReview");
-    if (review && ["#genScriptInput", "#genTermsInput", "#genScriptRequirements", "#genProposal"].some(selector => value(body, selector, "").trim())) review.open = true;
     applyProfileAndOverrides();
     updateStats();
     body.querySelectorAll([...DRAFT_TEXT_SELECTORS, ...DRAFT_PARAMETER_SELECTORS].join(",")).forEach(input => {
@@ -902,7 +896,6 @@
     let pollTimer = null;
     const renderBatch = batch => {
       if (!body.isConnected || !batchBox) return;
-      revealStudioProgress(body);
       displayedBatch = batch;
       if (batchStatus) batchStatus.textContent = batch.items.some(item => item.state === "paused" || ["blocked", "error"].includes(item.quality?.state)) ? "Pausado para revisão" : ({ processing: "Em andamento", completed: "Concluído", failed: "Falhou", partial_failure: "Falha parcial" }[batch.status] || batch.status);
       const running = batch.status === "processing";
@@ -1026,7 +1019,6 @@
       const channels = selectedChannels(body);
       if (!channels.length) { notify("Selecione ao menos um canal antes de gerar."); return; }
       if (format === "short" && channels.length > 2) { notify("Selecione até dois canais para esta geração."); return; }
-      revealStudioProgress(body);
       button.disabled = true;
       button.textContent = "Preparando geração…";
       try {
@@ -1237,9 +1229,87 @@
     });
   }
 
-  const { fillChannelSelects, connectChannel, channelAction, saveChannel } = window.CKRuntimeChannels({
-    request, esc, screenFormat, selectedCreateKey, API,
-  });
+  /* Connected channels from the Gateway replace the old mock list in place, in the shape the
+     Canais / Gerador / YouTube Shorts templates already read. */
+  function mapChannel(c) {
+    const stats = c.stats || {};
+    return { id: c.id, name: c.name, platform: c.platform === "tiktok" ? "TikTok" : "YouTube", handle: c.handle, status: c.status,
+      niche: c.niche, language: c.language, publish_privacy: c.publish_privacy || "private", system_prompt: c.system_prompt || "", visual_guides: c.visual_guides || { short: "", long: "" }, voice_name: c.voice_name, voice_rate: c.voice_rate, voice_volume: c.voice_volume,
+      subtitle_enabled: c.subtitle_enabled, subtitle_position: c.subtitle_position, font_size: c.font_size, text_fore_color: c.text_fore_color,
+      stroke_color: c.stroke_color, stroke_width: c.stroke_width, video_defaults: c.video_defaults, followers: stats.followers || 0, videos: stats.videos || 0, views: stats.views || 0, last: "—" };
+  }
+
+  /* Refills the channel selects in place: re-rendering Gerador would wipe what the user typed. */
+  function fillChannelSelects() {
+    const connected = window.CK.CHANNELS.filter(c => c.status === "connected");
+    const youtube = connected.filter(c => c.platform === "YouTube");
+    const option = c => `<option value="${esc(c.id)}">${esc(c.name)} · ${esc(c.platform)}</option>`;
+    // Long videos only go to YouTube; Shorts to any connected channel.
+    [["#genChannelSelect", youtube, "Selecione um canal"], ["#ytLibChannelSelect", screenFormat(document) === "long" ? youtube : connected, "Selecione um canal…"], ["#agStrategyChannel", connected, "Selecione um canal…"]].forEach(([selector, list, empty]) => {
+      const select = document.querySelector(selector);
+      if (!select) return;
+      const current = select.value;
+      select.innerHTML = `<option value="">${empty}</option>` + list.map(option).join("");
+      const saved = selector === "#genChannelSelect" ? localStorage.getItem(selectedCreateKey("long")) : "";
+      select.value = list.some(c => c.id === current) ? current : list.some(c => c.id === saved) ? saved : "";
+      select.dispatchEvent(new Event("change"));
+    });
+    const list = document.querySelector("#genChannelList");
+    if (!list) return;
+    const checked = new Set([...list.querySelectorAll("input:checked")].map(input => input.value));
+    const primary = localStorage.getItem(selectedCreateKey("short"));
+    if (primary && connected.some(channel => channel.id === primary)) checked.add(primary);
+    list.innerHTML = connected.length
+      ? connected.map(c => `<label style="display:flex;align-items:center;gap:7px;font-size:13px"><input type="checkbox" class="cbx" name="genChannel" value="${esc(c.id)}" data-platform="${esc(c.platform)}" ${checked.has(c.id) ? "checked" : ""} /> ${esc(c.name)} · ${esc(c.platform)}</label>`).join("")
+      : `<div class="card-note" style="font-family:inherit">Nenhum canal conectado ainda.</div>`;
+    list.dispatchEvent(new Event("change"));
+  }
+
+  async function syncChannels(checkPending) {
+    if (!window.CK || !window.CK.CHANNELS) return;
+    try {
+      let channels = await request("/channels");
+      const pending = channels.filter(c => c.platform === "tiktok" && c.status === "pending");
+      if (checkPending && pending.length) {
+        await Promise.all(pending.map(c => request(`/channels/${c.id}/refresh`, { method: "POST" }).catch(() => null)));
+        channels = await request("/channels");
+      }
+      window.CK.CHANNELS.length = 0;
+      window.CK.CHANNELS.push(...channels.map(mapChannel));
+    } catch (_) { return; /* Gateway offline: keep the last known list. */ }
+    fillChannelSelects();
+    // Canais list/detail have no free-text form to lose, so they are safe to repaint.
+    if (window.CK.__refresh && (document.querySelector("#chBody") || document.querySelector("[data-ch-act]") || document.querySelector("#createRoot"))) window.CK.__refresh();
+  }
+  syncChannels();
+  // Coming back from the Google / Upload-Post login tab is when a new channel shows up.
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") syncChannels(true); });
+
+  function openIn(win, url) {
+    if (win && !win.closed) { win.opener = null; win.location.href = url; }
+    else window.open(url, "_blank", "noopener");
+  }
+  const youtubeConnectUrl = rec => `${API}/channels/youtube/connect?${new URLSearchParams({ niche: rec.niche || "", system_prompt: rec.system_prompt || "", ...channelProfilePayload(rec), video_defaults: JSON.stringify(rec.video_defaults || {}), visual_guides: JSON.stringify(rec.visual_guides || {}) })}`;
+
+  async function connectChannel(rec, win) {
+    if (rec.platform !== "TikTok") { openIn(win, youtubeConnectUrl(rec)); return; }
+    const result = await request("/channels/tiktok/connect", { method: "POST", body: JSON.stringify({ niche: rec.niche || "", system_prompt: rec.system_prompt || "", ...channelProfilePayload(rec) }) });
+    openIn(win, result.access_url);
+    await syncChannels();
+  }
+
+  async function channelAction(rec, act, win) {
+    if (act === "disconnect") { await request(`/channels/${rec.id}`, { method: "DELETE" }); return syncChannels(); }
+    if (act === "refresh") { await request(`/channels/${rec.id}/refresh`, { method: "POST" }); return syncChannels(); }
+    if (rec.platform !== "TikTok") { openIn(win, youtubeConnectUrl(rec)); return; }
+    const link = await request(`/channels/${rec.id}/tiktok-link`, { method: "POST" });
+    openIn(win, link.access_url);
+  }
+
+  async function saveChannel(id, patch) {
+    await request(`/channels/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+    await syncChannels();
+  }
 
   /* ── Agentes: each pane loads from the Gateway when its tab opens ── */
   const localInput = iso => { // ISO instant -> datetime-local value in the viewer's zone
@@ -1698,8 +1768,7 @@
     const generator = document.getElementById("viewBody");
     setPipeline(generator, job);
     showArtifact(generator, job);
-    const meta = generator.querySelector("#genMetaBox");
-    (meta && !meta.hidden ? meta : generator.querySelector("#studioProgress"))?.scrollIntoView({ block: "nearest" });
+    generator.querySelector("#genBatchResults")?.scrollIntoView({ block: "nearest" });
   }
   window.CK.__openJob = jobId => openJob(jobId).catch(error => { if (lastNotify) lastNotify(error.message); });
   window.MoneyPrinterRuntime = { request, establishSession, logout, syncNotifications, bindGenerator, deleteJob, retryJob, stopJob, bindConfigSettings, bindYoutubeLibraryPublish, connectChannel, channelAction, saveChannel, selectCreateChannel, bindAgents, bindAssistantChat, bindGrowth, bindAnalytics, bindJobsWorkers, bindLogs };

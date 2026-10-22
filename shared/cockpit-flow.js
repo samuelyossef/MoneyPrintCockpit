@@ -21,6 +21,7 @@ window.CockpitFlow = (function () {
   }
 
   function producoes(scope) {
+    const format = scope.productionFormat === "long" ? "long" : "short";
     const tab = ["jobs", "reviews", "library"].includes(scope.productionTab) ? scope.productionTab : "jobs";
     return `<div id="productionsRoot">
       <div class="view-tabs" id="productionTabs" style="margin-bottom:16px">
@@ -30,7 +31,10 @@ window.CockpitFlow = (function () {
       </div>
       <div data-production-pane="jobs" ${tab === "jobs" ? "" : "hidden"}>${V.jobsWorkers()}</div>
       <div data-production-pane="reviews" ${tab === "reviews" ? "" : "hidden"}>${V.agentes(["revisoes"])}</div>
-      <div data-production-pane="library" ${tab === "library" ? "" : "hidden"}>${V.overview(scope)}</div>
+      <div data-production-pane="library" ${tab === "library" ? "" : "hidden"}>
+        <div class="view-tabs" style="margin-bottom:14px"><button class="view-tab ${format === "short" ? "is-active" : ""}" type="button" data-library-format="short">Shorts</button><button class="view-tab ${format === "long" ? "is-active" : ""}" type="button" data-library-format="long">Vídeos longos</button></div>
+        <div data-format="${format}">${V.libraryCard(format)}</div>${V.overview(scope)}
+      </div>
     </div>`;
   }
 

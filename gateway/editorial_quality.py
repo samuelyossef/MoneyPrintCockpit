@@ -7,24 +7,24 @@ from collections import Counter
 
 def writing_brief(format: str) -> str:
     structure = (
-        "Open the first sentence with a concrete situation, contrast, or specific question; "
-        "deliver the promised answer before the end. Develop one central idea, with a visual "
-        "example and a consequence. End with a useful conclusion, without repeating the opening."
+        "Abra na primeira frase com uma situação concreta, contraste ou pergunta específica; "
+        "entregue a resposta prometida antes do final. Desenvolva uma ideia central, com exemplo "
+        "visual e consequência. Termine com uma conclusão útil, sem repetir a abertura."
         if format == "short" else
-        "Open with the central question and why it matters. Build sections with new information, "
-        "concrete examples, and causal transitions. Return to open questions and close with a useful synthesis."
+        "Abra com a pergunta central e por que ela importa. Construa seções com novas informações, "
+        "exemplos concretos e transições causais. Retome perguntas abertas e conclua com uma síntese útil."
     )
     return (
-        structure + " Write to be heard, in the channel's language: one idea per sentence, varied rhythm, pauses through "
-        "punctuation, and natural vocabulary. Prefer short sentences without making the text "
-        "telegraphic. Write numbers, units, and abbreviations in spoken form when that avoids ambiguous "
-        "pronunciation, preserving their meaning. Do not include SSML or intonation instructions in the text. "
-        "Avoid generic greetings, filler, exaggerated promises, and repeated requests to follow the channel. "
-        "Do not invent statistics, studies, quotations, sources, or recent events; qualify "
-        "uncertainty and do not present fiction or metaphor as fact. Each passage should add something "
-        "and suggest a situation that can be shown. Respect the channel's style and instructions."
-        " Check spelling, accents, grammar, agreement, and punctuation in the requested language; "
-        "do a final read-aloud pass and prefer natural, unambiguous forms for the narration."
+        structure + " Escreva para ser ouvido: uma ideia por frase, variação de ritmo, pausas por "
+        "pontuação e vocabulário natural no idioma do canal. Prefira frases curtas sem deixar o texto "
+        "telegráfico. Escreva números, unidades e siglas na forma falada quando isso evitar ambiguidade "
+        "de pronúncia, preservando seu significado. Não inclua SSML nem instruções de entonação no texto. "
+        "Evite saudações genéricas, enchimento, promessas exageradas e pedidos repetidos para seguir o canal. "
+        "Não invente estatísticas, estudos, citações, fontes ou acontecimentos recentes; qualifique "
+        "incertezas e não apresente ficção ou metáfora como fato. Cada trecho deve acrescentar algo "
+        "e sugerir uma situação que possa ser mostrada. Respeite o estilo e as instruções do canal."
+        " Revise ortografia, acentuação, gramática, concordância e pontuação no idioma solicitado; "
+        "faça uma revisão final em voz alta e prefira formas naturais e inequívocas para a narração."
     )
 
 

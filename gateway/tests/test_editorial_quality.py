@@ -31,8 +31,8 @@ class QualityTests(unittest.TestCase):
         ]}
         specialists.choose_scene_material(scene)
         self.assertEqual(scene["selected"], "best")
-        self.assertIn("free stock", scene["selection_reason"])
-        self.assertEqual(scene["selection"]["cost"], "free")
+        self.assertIn("gratuito", scene["selection_reason"])
+        self.assertEqual(scene["selection"]["cost"], "gratuito")
         specialists.choose_scene_material(scene, {"best"})
         self.assertEqual(scene["selected"], "alternative")
 

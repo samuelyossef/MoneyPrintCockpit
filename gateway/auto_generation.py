@@ -61,7 +61,7 @@ def _unique_text(*parts: str) -> str:
 def _effective_context(project: dict[str, Any], channel: dict[str, Any], request: AutoGenerationInput) -> dict[str, Any]:
     m = main_module()
     if set(request.settings) - EDITABLE_SETTINGS:
-        raise HTTPException(status_code=422, detail="The submitted parameters contain fields that cannot be edited on this screen.")
+        raise HTTPException(status_code=422, detail="Os parâmetros enviados contêm campos não editáveis nesta tela.")
     format = request.format
     settings = {
         **m.generation_defaults(format), **project["defaults"],
@@ -69,7 +69,7 @@ def _effective_context(project: dict[str, Any], channel: dict[str, Any], request
         **m.FORMAT_LOCKED[format],
     }
     if settings.get("video_language") not in m.VOICE_CHOICES:
-        raise HTTPException(status_code=422, detail="Narration language is not supported.")
+        raise HTTPException(status_code=422, detail="Idioma de narração não suportado.")
     if "video_language" in request.settings and "voice_name" not in request.settings:
         settings["voice_name"] = m.default_voice_for_language(settings["video_language"])
     canonical = m.normalize_channel_video_defaults({
@@ -86,22 +86,22 @@ def _effective_context(project: dict[str, Any], channel: dict[str, Any], request
         target = int(settings["paragraph_number"] if format == "short" else settings["target_minutes"])
         count = int(settings.get("video_count", 1))
     except (TypeError, ValueError, KeyError):
-        raise HTTPException(status_code=422, detail="Duration, clip length, or video count is invalid.") from None
+        raise HTTPException(status_code=422, detail="Duração, clipe ou quantidade de vídeos inválida.") from None
     if not 1 <= clip_seconds <= 30:
-        raise HTTPException(status_code=422, detail="Each clip must last between 1 and 30 seconds.")
+        raise HTTPException(status_code=422, detail="A duração de cada clipe deve estar entre 1 e 30 segundos.")
     if format == "short" and (target not in {4, 5, 6} or not 1 <= count <= 5):
-        raise HTTPException(status_code=422, detail="Shorts accept 60, 75, or 90 seconds and 1 to 5 videos.")
+        raise HTTPException(status_code=422, detail="Shorts aceitam 60, 75 ou 90 segundos e de 1 a 5 vídeos.")
     if format == "long" and target not in {5, 8, 10, 15}:
-        raise HTTPException(status_code=422, detail="Long videos accept 5, 8, 10, or 15 minutes.")
+        raise HTTPException(status_code=422, detail="Vídeos longos aceitam 5, 8, 10 ou 15 minutos.")
     if settings.get("video_concat_mode") not in m.VIDEO_CONCAT_MODES:
-        raise HTTPException(status_code=422, detail="Invalid image mode.")
+        raise HTTPException(status_code=422, detail="Modo de imagens inválido.")
     base_prompt = _unique_text(str(settings.get("custom_system_prompt") or ""), project.get("prompt_base") or "", request.screen_system_prompt)
     editorial = _unique_text(
         channel.get("system_prompt") or "", base_prompt,
-        f"Default script requirements: {settings['video_script_prompt']}" if settings.get("video_script_prompt") else "",
+        f"Requisitos padrão do roteiro: {settings['video_script_prompt']}" if settings.get("video_script_prompt") else "",
     )
     if len(editorial) > 12000:
-        raise HTTPException(status_code=422, detail="The channel and generator prompts together exceed 12,000 characters.")
+        raise HTTPException(status_code=422, detail="Os prompts do canal e do gerador juntos excedem 12.000 caracteres.")
     return {
         "format": format,
         "channel": {key: channel[key] for key in ("id", "name", "platform", "niche", "language", "system_prompt")},
@@ -118,9 +118,9 @@ def create_auto_batch(project_id: str, request: AutoGenerationInput) -> dict[str
     project = m.row_as_project(m.get_project_or_404(project_id))
     ids = list(dict.fromkeys(request.channel_ids))
     if len(ids) != len(request.channel_ids):
-        raise HTTPException(status_code=422, detail="Select each channel only once.")
+        raise HTTPException(status_code=422, detail="Selecione cada canal apenas uma vez.")
     if request.format == "long" and len(ids) != 1:
-        raise HTTPException(status_code=422, detail="Long videos accept one YouTube channel at a time.")
+        raise HTTPException(status_code=422, detail="Vídeos longos aceitam um canal do YouTube por vez.")
     input_json = json.dumps(request.model_dump(mode="json"), ensure_ascii=False, sort_keys=True)
     digest = hashlib.sha256(input_json.encode("utf-8")).hexdigest()
     timestamp = m.now()
@@ -132,7 +132,7 @@ def create_auto_batch(project_id: str, request: AutoGenerationInput) -> dict[str
         ).fetchone()
         if existing:
             if existing["request_hash"] != digest:
-                raise HTTPException(status_code=409, detail="This request was already used with different data.")
+                raise HTTPException(status_code=409, detail="Esta solicitação já foi usada com outros dados.")
             return {"batch_id": existing["id"], "status": "accepted"}
         channels = [dict(m.channel_row_or_404(db, channel_id)) for channel_id in ids]
         for channel in channels:
@@ -159,7 +159,7 @@ async def get_auto_batch(batch_id: str) -> dict[str, Any]:
     with m.database() as db:
         batch = db.execute("SELECT * FROM generation_batches WHERE id=?", (batch_id,)).fetchone()
         if not batch:
-            raise HTTPException(status_code=404, detail="Generation not found.")
+            raise HTTPException(status_code=404, detail="Geração não encontrada.")
         items = [dict(row) for row in db.execute(
             "SELECT * FROM generation_batch_items WHERE batch_id=? ORDER BY created_at, id", (batch_id,)
         )]
@@ -192,7 +192,7 @@ async def get_auto_batch(batch_id: str) -> dict[str, Any]:
             try:
                 await m.reconcile_job(job_id)
             except Exception:
-                logger.warning("Could not refresh job %s", job_id)
+                logger.warning("Não foi possível atualizar o trabalho %s", job_id)
         with m.database() as db:
             job = db.execute("SELECT state, progress, error FROM video_jobs WHERE id=?", (job_id,)).fetchone() if job_id else None
             artifact = db.execute("SELECT id FROM artifacts WHERE job_id=? AND kind='video' LIMIT 1", (job_id,)).fetchone() if job_id else None
@@ -280,9 +280,9 @@ def retry_auto_item(batch_id: str, item_id: str) -> dict[str, str]:
     with m.database() as db:
         row = db.execute("SELECT state, generated_json FROM generation_batch_items WHERE id=? AND batch_id=?", (item_id, batch_id)).fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="This generation's channel was not found.")
+            raise HTTPException(status_code=404, detail="Canal desta geração não encontrado.")
         if row["state"] not in {"failed", "paused"}:
-            raise HTTPException(status_code=409, detail="Only failed or paused channels can be resumed.")
+            raise HTTPException(status_code=409, detail="Apenas canais com falha ou pausados podem ser retomados.")
         generated = json.loads(row["generated_json"] or "{}")
         rejected_script = generated.get("editorial_rejected_script")
         if (rejected_script and generated.get("script") and generated["script"] != rejected_script
@@ -310,14 +310,14 @@ def regenerate_paused_script(batch_id: str, item_id: str) -> dict[str, str]:
             (item_id, batch_id),
         ).fetchone()
         if not row or row["state"] != "paused":
-            raise HTTPException(status_code=409, detail="Only a paused script can be regenerated.")
+            raise HTTPException(status_code=409, detail="Apenas um roteiro pausado pode ser regenerado.")
         generated = json.loads(row["generated_json"] or "{}")
         review = generated.get("editorial_review") or {}
         if review.get("approved") is not False or not generated.get("script"):
-            raise HTTPException(status_code=409, detail="There is no rejected script available to replace.")
+            raise HTTPException(status_code=409, detail="Não há um roteiro reprovado disponível para substituir.")
         generated["editorial_rejected_script"] = generated["script"]
         generated["force_script_regeneration"] = True
-        generated["force_script_regeneration_feedback"] = str(review.get("reason") or "Stay on the requested topic.")
+        generated["force_script_regeneration_feedback"] = str(review.get("reason") or "Mantenha o tema solicitado.")
         generated["editorial_script_regenerated_from_review"] = True
         for key in ("script", "editorial_review", "terms", "scenes", "editorial_repair_attempted",
                     "editorial_repair_attempts", "script_manually_reviewed", "orthographic_review"):
@@ -341,9 +341,9 @@ def retry_quality_review(batch_id: str, item_id: str) -> dict[str, str]:
             (item_id, batch_id),
         ).fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="Final review not found.")
+            raise HTTPException(status_code=404, detail="Revisão final não encontrada.")
         if row["state"] != "error" or row["job_state"] != "completed":
-            raise HTTPException(status_code=409, detail="Only an errored review of a completed video can be retried.")
+            raise HTTPException(status_code=409, detail="Apenas uma revisão com erro de um vídeo concluído pode ser repetida.")
         db.execute("UPDATE generation_quality SET state='pending', report_json='{}', updated_at=? WHERE item_id=?",
                    (m.now(), item_id))
     return {"status": "pending"}
@@ -359,7 +359,7 @@ async def resume_blocked_review(batch_id: str, item_id: str) -> dict[str, Any]:
             "WHERE i.id=? AND i.batch_id=?", (item_id, batch_id),
         ).fetchone()
     if not row or row["state"] not in {"blocked", "repairing"}:
-        raise HTTPException(status_code=409, detail="There is no blocked review to resume.")
+        raise HTTPException(status_code=409, detail="Não há uma revisão bloqueada para retomar.")
     if row["state"] == "repairing":
         with m.database() as db:
             child = db.execute("SELECT batch_id, id FROM generation_batch_items WHERE repair_parent_item_id=?", (item_id,)).fetchone()
@@ -370,12 +370,12 @@ async def resume_blocked_review(batch_id: str, item_id: str) -> dict[str, Any]:
         if video.get("checks", {}).get("duration") is False and not video.get("measurements", {}).get("duration_seconds"):
             path = specialists.material_root(item_id) / f"final-review-{index}.mp4"
             if not path.is_file():
-                raise HTTPException(status_code=409, detail="The original video is not available to measure the correction.")
+                raise HTTPException(status_code=409, detail="O vídeo original não está disponível para medir a correção.")
             info = await asyncio.to_thread(specialists.probe, path)
             video["measurements"] = {"duration_seconds": info["duration"]}
     repair = _queue_auto_repair(item_id, report)
     if not repair:
-        raise HTTPException(status_code=409, detail="This review cannot take another safe automatic correction. Use manual review.")
+        raise HTTPException(status_code=409, detail="Esta revisão não admite outra correção automática segura. Use a revisão manual.")
     return {"status": "queued", **repair}
 
 
@@ -395,13 +395,13 @@ def review_auto_item(batch_id: str, item_id: str, input: ManualReviewInput) -> d
         quality = db.execute("SELECT state FROM generation_quality WHERE item_id=?", (item_id,)).fetchone() if row else None
         final_blocked = bool(row and row["state"] == "submitted" and quality and quality["state"] in {"blocked", "error"})
         if not row or row["state"] != "paused" and not final_blocked:
-            raise HTTPException(status_code=409, detail="Only a paused generation can receive a manual review.")
+            raise HTTPException(status_code=409, detail="Apenas uma geração pausada pode receber revisão manual.")
         if final_blocked and input.script is None and input.terms is None and input.scene_index is None:
-            raise HTTPException(status_code=422, detail="Change the script, the search, or a material to create a new edit.")
+            raise HTTPException(status_code=422, detail="Altere o roteiro, a busca ou um material para criar nova montagem.")
         generated = json.loads(row["generated_json"])
         if input.script is not None:
             if not input.script.strip():
-                raise HTTPException(status_code=422, detail="The reviewed script cannot be empty.")
+                raise HTTPException(status_code=422, detail="O roteiro revisado não pode ficar vazio.")
             generated["script"] = input.script.strip()
             generated["script_manually_reviewed"] = True
             generated.pop("editorial_review", None)
@@ -410,21 +410,21 @@ def review_auto_item(batch_id: str, item_id: str, input: ManualReviewInput) -> d
             generated.pop("scenes", None)
         if input.terms is not None:
             if not input.terms.strip():
-                raise HTTPException(status_code=422, detail="Provide concrete keywords for the new search.")
+                raise HTTPException(status_code=422, detail="Informe palavras-chave concretas para a nova busca.")
             generated["terms"] = input.terms.strip()
             generated["terms_manually_reviewed"] = True
             generated.pop("scenes", None)
         if input.scene_index is not None:
             scenes = generated.get("scenes") or []
             if input.scene_index >= len(scenes) or not input.candidate_id:
-                raise HTTPException(status_code=422, detail="Choose a valid visual alternative.")
+                raise HTTPException(status_code=422, detail="Escolha uma alternativa visual válida.")
             scene = scenes[input.scene_index]
             candidate = next((candidate for candidate in scene["candidates"] if candidate["id"] == input.candidate_id), None)
             if not candidate or not candidate.get("filename") or not (specialists.material_root(item_id) / candidate["filename"]).is_file():
-                raise HTTPException(status_code=422, detail="The visual alternative is not available.")
+                raise HTTPException(status_code=422, detail="A alternativa visual não está disponível.")
             candidate["status"] = "approved"
             candidate["manual_override"] = True
-            candidate["reason"] = "Manual user choice; it will be checked again in the edit."
+            candidate["reason"] = "Escolha manual do usuário; será verificada novamente na montagem."
             scene["selected"] = candidate["id"]
         if final_blocked:
             original = db.execute("SELECT * FROM generation_batches WHERE id=?", (batch_id,)).fetchone()
@@ -445,7 +445,7 @@ def review_auto_item(batch_id: str, item_id: str, input: ManualReviewInput) -> d
                     filename = candidate["filename"]
                     source_file = source / filename
                     if not source_file.is_file():
-                        raise HTTPException(status_code=409, detail="The chosen material is no longer available.")
+                        raise HTTPException(status_code=409, detail="O material escolhido não está mais disponível.")
                     shutil.copy2(source_file, destination / filename)
             request_json = json.dumps(request_data, ensure_ascii=False, sort_keys=True)
             db.execute("INSERT INTO generation_batches(id, project_id, client_request_id, request_hash, input_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -463,16 +463,16 @@ def scene_preview(batch_id: str, item_id: str, scene_index: int, candidate_id: s
     with m.database() as db:
         row = db.execute("SELECT generated_json FROM generation_batch_items WHERE id=? AND batch_id=?", (item_id, batch_id)).fetchone()
     if not row:
-        raise HTTPException(status_code=404, detail="Generation not found.")
+        raise HTTPException(status_code=404, detail="Geração não encontrada.")
     scenes = json.loads(row["generated_json"]).get("scenes") or []
     if scene_index < 0 or scene_index >= len(scenes):
-        raise HTTPException(status_code=404, detail="Passage not found.")
+        raise HTTPException(status_code=404, detail="Trecho não encontrado.")
     candidate = next((entry for entry in scenes[scene_index]["candidates"] if entry["id"] == candidate_id), None)
     if not candidate or not candidate.get("filename"):
-        raise HTTPException(status_code=404, detail="Preview not found.")
+        raise HTTPException(status_code=404, detail="Prévia não encontrada.")
     path = specialists.material_root(item_id) / candidate["filename"]
     if not path.is_file():
-        raise HTTPException(status_code=404, detail="File not found.")
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado.")
     if path.suffix == ".mp4":
         frame = path.with_suffix(".jpg")
         if not frame.is_file():
@@ -503,7 +503,7 @@ def _recover_expired(db: Any, current: str) -> None:
                 db.execute(
                     "UPDATE generation_batch_items SET state='reconciliation_required', stage='reconciliation_required', "
                     "error=?, lease_owner=NULL, lease_until=NULL, updated_at=? WHERE id=?",
-                    ("The Turbo submission may have started. Check the jobs before retrying so you do not create a duplicate video.", current, item["id"]),
+                    ("O envio ao Turbo pode ter começado. Confira os trabalhos antes de repetir para evitar vídeo duplicado.", current, item["id"]),
                 )
         else:
             db.execute(
@@ -541,7 +541,7 @@ async def _heartbeat(item_id: str, owner: str) -> None:
                     (until, item_id, owner),
                 )
         except Exception:
-            logger.exception("Could not renew the generation lease %s", item_id)
+            logger.exception("Não foi possível renovar a reserva da geração %s", item_id)
 
 
 def _save(item_id: str, owner: str, stage: str, generated: dict[str, Any] | None = None) -> None:
@@ -558,19 +558,19 @@ def _save(item_id: str, owner: str, stage: str, generated: dict[str, Any] | None
                 (stage, json.dumps(generated, ensure_ascii=False), m.now(), item_id, owner),
             )
         if result.rowcount != 1:
-            raise RuntimeError("The generation lost this channel's lease.")
+            raise RuntimeError("A geração perdeu a reserva deste canal.")
 
 
 def _context_line(context: dict[str, Any]) -> str:
     channel = context["channel"]
     settings = context["settings"]
-    target = (f"{settings['target_minutes']} minutes" if context["format"] == "long"
-              else f"{main_module().SHORT_TARGET_SECONDS[int(settings['paragraph_number'])]} seconds")
+    target = (f"{settings['target_minutes']} minutos" if context["format"] == "long"
+              else f"{main_module().SHORT_TARGET_SECONDS[int(settings['paragraph_number'])]} segundos")
     return (
-        f"Channel: {channel['name']}. Niche: {channel['niche']}. Language: {settings['video_language']}. "
-        f"Format: {context['format']}. Target duration: {target}. Voice rate: {settings['voice_rate']}. "
-        f"Footage source: {settings.get('video_source', 'pexels')}. "
-        f"Editorial instructions: {context['editorial']}. Visual guide: {context.get('visual_guide', '')}"
+        f"Canal: {channel['name']}. Nicho: {channel['niche']}. Idioma: {settings['video_language']}. "
+        f"Formato: {context['format']}. Duração alvo: {target}. Velocidade da voz: {settings['voice_rate']}. "
+        f"Fonte de filmagens: {settings.get('video_source', 'pexels')}. "
+        f"Instruções editoriais: {context['editorial']}. Guia visual: {context.get('visual_guide', '')}"
     )
 
 
@@ -579,9 +579,9 @@ async def _json_generation(prompt: str, key: str, limit: int) -> str:
     result = await m.llm_json_object(prompt, task="json", max_tokens=900, label=key)
     value = str(result.get(key) or "").strip()
     if not value:
-        raise HTTPException(status_code=502, detail=f"The model did not return {key} for this channel.")
+        raise HTTPException(status_code=502, detail=f"A IA não devolveu {key} para este canal.")
     if len(value) > limit:
-        raise HTTPException(status_code=502, detail=f"The model returned {key} above the limit of {limit} characters.")
+        raise HTTPException(status_code=502, detail=f"A IA devolveu {key} acima do limite de {limit} caracteres.")
     return value
 
 
@@ -592,8 +592,8 @@ async def _source_summary(script: str) -> str:
     summaries = []
     for part in parts:
         summaries.append(await _json_generation(
-            "Faithfully summarize the ideas and structure of this script excerpt for adaptation to another channel. "
-            "Respond with JSON only, using the key summary. Excerpt:\n" + part, "summary", 600,
+            "Resuma fielmente as ideias e a estrutura deste trecho de roteiro para adaptação a outro canal. "
+            "Responda apenas JSON com a chave summary. Trecho:\n" + part, "summary", 600,
         ))
     return " ".join(summaries)[:5000]
 
@@ -610,14 +610,14 @@ def _duration_bounds(context: dict[str, Any]) -> tuple[float, float]:
 def _validate_script(script: str, context: dict[str, Any]) -> None:
     m = main_module()
     if not script.strip():
-        raise HTTPException(status_code=502, detail="The generated script was empty.")
+        raise HTTPException(status_code=502, detail="O roteiro gerado ficou vazio.")
     seconds = m.narration_seconds(script, float(context["settings"]["voice_rate"]),
                                   str(context["settings"].get("voice_name") or ""))
     minimum, maximum = _duration_bounds(context)
     if not minimum <= seconds <= maximum:
         raise HTTPException(
             status_code=422,
-            detail=f"The script is about {round(seconds)} s of narration; the selected duration requires between {round(minimum)} and {round(maximum)} s.",
+            detail=f"O roteiro tem cerca de {round(seconds)} s de narração; a duração selecionada exige entre {round(minimum)} e {round(maximum)} s.",
         )
 
 
@@ -626,16 +626,16 @@ async def _generate_script(subject: str, requirements: str, context: dict[str, A
     m = main_module()
     from gateway.editorial_quality import writing_brief
     settings = context["settings"]
-    editorial = _unique_text(_context_line(context), f"Ideas from the reference script: {source_summary}" if source_summary else "")
+    editorial = _unique_text(_context_line(context), f"Ideias do roteiro de referência: {source_summary}" if source_summary else "")
     correction = ""
     if editorial_feedback:
         correction = (
-            f"\nRequired editorial correction: {editorial_feedback}. Rewrite the script from scratch. "
-            f"The requested topic is exclusively {subject}; stay on it from beginning to end and discard any subject "
-            "or claim from the rejected draft that does not answer that topic directly."
+            f"\nCorreção editorial obrigatória: {editorial_feedback}. Reescreva o roteiro do zero. "
+            f"O tema pedido é exclusivamente {subject}; mantenha-se nele do começo ao fim e descarte qualquer assunto "
+            "ou afirmação do rascunho reprovado que não responda diretamente a esse tema."
         )
     if len(editorial) > 12000:
-        raise HTTPException(status_code=422, detail="The prompts and the reference script exceed the editorial context limit.")
+        raise HTTPException(status_code=422, detail="Os prompts e o roteiro de referência excedem o limite de contexto editorial.")
     last_error: HTTPException | None = None
     rate = float(settings["voice_rate"])
     voice_name = str(settings.get("voice_name") or "")
@@ -656,32 +656,31 @@ async def _generate_script(subject: str, requirements: str, context: dict[str, A
                 minimum_words + (maximum_words - minimum_words) * 0.8
             )
             prompt = (
-                f"Rewrite the {context['format']} script in {settings['video_language']} about: {subject}. "
-                f"The selected duration requires {minimum_seconds:.0f}–{maximum_seconds:.0f} seconds with voice {voice_name or 'default'} "
-                f"at {rate}x; the current version has {len(previous_script.split())} words and was estimated at {current_seconds:.1f} seconds. "
-                f"Deliver the full narration at about {correction_target} words, necessarily between {minimum_words} and {maximum_words}. "
-                f"Preserve the topic, facts, language, requirements, and editorial instructions: {requirements}. {editorial}.{correction} "
-                "Expand with useful content if it is short; condense repetition and secondary detail if it is long. "
-                "Do not use filler. Use spoken text only, with no titles, Markdown, bullets, emoji, or scene directions. "
-                f'Current script:\n{previous_script}\nRespond with JSON only: {{"script": "narration complete"}}.'
+                f"Reescreva o roteiro de {context['format']} no idioma {settings['video_language']} sobre: {subject}. "
+                f"A duração selecionada requer {minimum_seconds:.0f}–{maximum_seconds:.0f} segundos na voz {voice_name or 'padrão'} "
+                f"a {rate}x; a versão atual tem {len(previous_script.split())} palavras e foi estimada em {current_seconds:.1f} segundos. "
+                f"Entregue a narração completa com cerca de {correction_target} palavras, obrigatoriamente entre {minimum_words} e {maximum_words}. "
+                f"Preserve tema, fatos, idioma, requisitos e instruções editoriais: {requirements}. {editorial}.{correction} "
+                "Expanda com conteúdo útil se estiver curto; condense repetições e detalhes secundários se estiver longo. "
+                "Não use texto de enchimento. Use apenas texto falado, sem títulos, Markdown, marcadores, emojis ou indicações de cena. "
+                f'Roteiro atual:\n{previous_script}\nResponda apenas JSON: {{"script": "narração completa"}}.'
             )
             result = await m.llm_json_object(
                 prompt, task="json", max_tokens=m.long_script_tokens(maximum_words, m.FAST_LONG_SCRIPT_MAX_TOKENS),
-                fast_script=True, label=f"{context['format']} script duration adjustment",
+                fast_script=True, label=f"ajuste de duração do roteiro {context['format']}",
             )
         elif context["format"] == "short":
             result = await m.llm_json_object(
-                f"Write a Short script in {settings['video_language']} about: {subject}. "
-                f"The selected duration requires between {minimum_seconds:.0f} and {maximum_seconds:.0f} seconds "
-                f"with voice {voice_name or 'default'} at rate {rate}x. Write about {target_words} words of narration, "
-                f"between {minimum_words} and {maximum_words} words. Count the words before answering. "
-                f"Custom requirements: {requirements}. Channel and generator instructions: {editorial}.{correction} "
-                " Use spoken text only, with no title, Markdown, bullets, emoji, or scene directions. "
-                "Keep the narration in the language named above. "
+                f"Escreva um roteiro de Short no idioma {settings['video_language']} sobre: {subject}. "
+                f"A duração selecionada exige entre {minimum_seconds:.0f} e {maximum_seconds:.0f} segundos "
+                f"com voz {voice_name or 'padrão'} na velocidade {rate}x. Escreva cerca de {target_words} palavras de narração, "
+                f"entre {minimum_words} e {maximum_words} palavras. Conte as palavras antes de responder. "
+                f"Requisitos personalizados: {requirements}. Instruções do canal e do gerador: {editorial}.{correction} "
+                " Use apenas texto falado, sem título, Markdown, marcadores, emojis ou indicações de cena. "
                 + writing_brief("short")
-                + ' Respond with JSON only: {"script": "narration"}.',
+                + ' Responda apenas JSON: {"script": "narração"}.',
                 task="json", max_tokens=max(1024, round(maximum_words * 4)), fast_script=True,
-                label="Short script",
+                label="roteiro do Short",
             )
             script = m.clean_narration(str(result.get("script") or "")).strip()
             result = {"script": script}
@@ -693,7 +692,7 @@ async def _generate_script(subject: str, requirements: str, context: dict[str, A
             ))
         script = str(result.get("script") or "").strip()
         if not script:
-            raise HTTPException(status_code=502, detail="The provider did not return a valid script to fit the duration.")
+            raise HTTPException(status_code=502, detail="O provedor não devolveu um roteiro válido para ajustar à duração.")
         try:
             _validate_script(script, context)
             return script
@@ -709,7 +708,7 @@ async def _repair_duration_script(generated: dict[str, Any], context: dict[str, 
     previous = generated.get("repair_previous_script") or ""
     measured = float(generated["repair_plan"]["duration_seconds"] or 0)
     if not previous or measured <= 0:
-        raise PauseGeneration("The real narration duration is not available to correct the script.")
+        raise PauseGeneration("A duração real da narração não está disponível para corrigir o roteiro.")
     settings = context["settings"]
     budget = m.script_duration_budget(context["format"],
         int(settings["paragraph_number"] if context["format"] == "short" else settings["target_minutes"]),
@@ -724,20 +723,20 @@ async def _repair_duration_script(generated: dict[str, Any], context: dict[str, 
             min(maximum_words, round(len(candidate.split()) * budget["maximum_seconds"] / max(estimated, 1))),
         )
         correction = (
-            f"Correct the duration of a {context['format']} script in {settings['video_language']}. "
-            f"The current version has {len(candidate.split())} words and was estimated at {estimated:.1f}s with voice "
-            f"{settings.get('voice_name') or 'default'} at rate {settings['voice_rate']}x. "
-            f"The required range is {budget['minimum_seconds']:.0f}–{budget['maximum_seconds']:.0f}s; "
-            f"write between {minimum_words} and {maximum_words} words, aiming for {correction_target} words "
-            f"(safe duration range: {budget['minimum_seconds']:.0f}–{budget['maximum_seconds']:.0f}s). Preserve topic {generated['subject']}, facts, language, "
-            f"channel instructions {context['editorial']}, and requirements {generated['requirements']}. "
-            "If the current version is still short or long, adjust it in the direction and proportion indicated by the estimate. "
-            "Do not add filler, headings, Markdown, or scene directions. Use spoken narration only, in the language named above. "
-            f'Current script:\n{candidate}\nRespond with JSON only: {{"script": "narration corrected"}}.'
+            f"Corrija a duração de um roteiro para {context['format']} no idioma {settings['video_language']}. "
+            f"A versão atual tem {len(candidate.split())} palavras e foi estimada em {estimated:.1f}s com a voz "
+            f"{settings.get('voice_name') or 'padrão'} na velocidade {settings['voice_rate']}x. "
+            f"A faixa exigida é {budget['minimum_seconds']:.0f}–{budget['maximum_seconds']:.0f}s; "
+            f"escreva entre {minimum_words} e {maximum_words} palavras, mirando {correction_target} palavras "
+            f"(faixa de duração segura: {budget['minimum_seconds']:.0f}–{budget['maximum_seconds']:.0f}s). Preserve tema {generated['subject']}, fatos, idioma, "
+            f"instruções do canal {context['editorial']} e requisitos {generated['requirements']}. "
+            "Se a versão atual continuar curta ou longa, ajuste-a na direção e proporção indicadas pela estimativa. "
+            "Não acrescente enchimento, cabeçalhos, Markdown ou indicações de cena. Use apenas narração falada. "
+            f'Roteiro atual:\n{candidate}\nResponda apenas JSON: {{"script": "narração corrigida"}}.'
         )
         result = await m.llm_json_object(correction, task="json",
                                          max_tokens=m.long_script_tokens(maximum_words, m.FAST_LONG_SCRIPT_MAX_TOKENS),
-                                         fast_script=True, label="real duration correction")
+                                         fast_script=True, label="correção da duração real")
         candidate = m.clean_narration(str(result.get("script") or "")).strip()
         try:
             _validate_script(candidate, context)
@@ -769,10 +768,9 @@ async def _prepare_and_submit(item: dict[str, Any], owner: str) -> None:
             generated["subject"] = manual_subject
         else:
             generated["subject"] = await _json_generation(
-                _context_line(context) + "\nSuggest a specific, new, filmable topic for this channel. "
-                + (f"Adapt this user idea: {manual_subject}. " if manual_subject else "")
-                + "The topic title should be in the channel language. "
-                + 'Respond with JSON only: {"topic": "topic"}.', "topic", 500,
+                _context_line(context) + "\nSugira um tema específico, novo e filmável para este canal. "
+                + (f"Adapte esta ideia do usuário: {manual_subject}. " if manual_subject else "")
+                + 'Responda apenas JSON: {"topic": "tema"}.', "topic", 500,
             )
         _save(item_id, owner, "topic_done", generated)
     if not generated.get("requirements"):
@@ -781,15 +779,14 @@ async def _prepare_and_submit(item: dict[str, Any], owner: str) -> None:
             generated["requirements"] = request.requirements.strip()
         else:
             adapted = await _json_generation(
-                _context_line(context) + f"\nTopic: {generated['subject']}. "
-                + (f"Preserve these user requirements: {request.requirements.strip()}. " if request.requirements.strip() else "")
-                + "Create objective requirements for structure, tone, and narrative that fit the channel and the duration. "
-                + "Write those requirements in the channel language. "
-                + 'Respond with JSON only: {"requirements": "instructions"}.', "requirements", 2000,
+                _context_line(context) + f"\nTema: {generated['subject']}. "
+                + (f"Preserve estes requisitos do usuário: {request.requirements.strip()}. " if request.requirements.strip() else "")
+                + "Crie requisitos objetivos de estrutura, tom e narrativa compatíveis com o canal e a duração. "
+                + 'Responda apenas JSON: {"requirements": "instruções"}.', "requirements", 2000,
             )
             generated["requirements"] = _unique_text(request.requirements, adapted) if multi else adapted
             if len(generated["requirements"]) > 4000:
-                raise HTTPException(status_code=422, detail="The adapted requirements exceed the script limit.")
+                raise HTTPException(status_code=422, detail="Os requisitos adaptados excedem o limite do roteiro.")
         _save(item_id, owner, "requirements_done", generated)
     if not generated.get("script"):
         _save(item_id, owner, "script")
@@ -815,7 +812,7 @@ async def _prepare_and_submit(item: dict[str, Any], owner: str) -> None:
         preserve_script = bool((manual_script and not multi) or generated.get("script_manually_reviewed"))
         if proofread["changed"] and preserve_script:
             generated["orthographic_review"] = {
-                "approved": False, "reason": "The agent found spelling changes. Review the suggested text before generating voice and captions.",
+                "approved": False, "reason": "O agente encontrou ajustes ortográficos. Revise o texto sugerido antes de gerar voz e legendas.",
                 "suggested_script": proofread["script"], "corrections": proofread["corrections"],
             }
             _save(item_id, owner, "orthographic_review_done", generated)
@@ -843,7 +840,7 @@ async def _prepare_and_submit(item: dict[str, Any], owner: str) -> None:
             generated["editorial_repair_attempted"] = True
             generated["editorial_review_before_repair"] = generated["editorial_review"]
             _save(item_id, owner, "editorial_repair", generated)
-            feedback = str(generated["editorial_review"].get("reason") or "Revise the script according to the editorial instructions.")
+            feedback = str(generated["editorial_review"].get("reason") or "Revise o roteiro segundo as instruções editoriais.")
             # Do not feed an off-topic script back as source material: that anchors
             # the writer to the very subject the reviewer rejected.
             generated["script"] = await _generate_script(
@@ -860,7 +857,7 @@ async def _prepare_and_submit(item: dict[str, Any], owner: str) -> None:
             repairs += 1
             _save(item_id, owner, "editorial_review_done", generated)
         if not generated["editorial_review"]["approved"]:
-            raise PauseGeneration("The editorial reviewer requested changes: " + generated["editorial_review"]["reason"])
+            raise PauseGeneration("O revisor editorial pediu revisão: " + generated["editorial_review"]["reason"])
     if not generated.get("terms"):
         _save(item_id, owner, "terms")
         manual_terms = "" if generated.get("editorial_script_regenerated_from_review") else request.terms.strip()
@@ -871,7 +868,7 @@ async def _prepare_and_submit(item: dict[str, Any], owner: str) -> None:
         if manual_terms and not multi:
             generated["terms"] = manual_terms
         else:
-            terms_context = _unique_text(_context_line(context), f"User search preferences: {manual_terms}" if manual_terms else "")
+            terms_context = _unique_text(_context_line(context), f"Preferências de busca do usuário: {manual_terms}" if manual_terms else "")
             terms, _ = await m.visual_terms(
                 generated["subject"], generated["script"], float(context["settings"]["video_clip_duration"]),
                 float(context["settings"]["voice_rate"]), context=terms_context,
@@ -880,7 +877,7 @@ async def _prepare_and_submit(item: dict[str, Any], owner: str) -> None:
         if generated.get("editorial_script_regenerated_from_review"):
             generated["editorial_assets_refreshed"] = True
         if not generated["terms"].strip() or "b-roll footage" in generated["terms"].lower():
-            raise PauseGeneration("The keywords do not describe concrete scenes from the script. Review the terms before curation.")
+            raise PauseGeneration("As palavras-chave não descrevem cenas concretas do roteiro. Revise os termos antes da curadoria.")
         _save(item_id, owner, "terms_done", generated)
     if not generated.get("scenes") or any(not scene.get("selected") for scene in generated["scenes"]):
         _save(item_id, owner, "visual_curator")
@@ -915,7 +912,7 @@ async def _prepare_and_submit(item: dict[str, Any], owner: str) -> None:
                 if result.get("selected"):
                     used.add(result["selected"])
                 else:
-                    failures.append(PauseGeneration(f"Passage {index + 1} has no coherent image or video. Choose an alternative or adjust the search."))
+                    failures.append(PauseGeneration(f"O trecho {index + 1} não tem imagem ou vídeo coerente. Escolha uma alternativa ou ajuste a busca."))
             generated["scenes"] = scenes
             _save(item_id, owner, "visual_curator", generated)
             if failures:
@@ -933,7 +930,7 @@ async def _prepare_and_submit(item: dict[str, Any], owner: str) -> None:
             (m.now(), m.now(), item_id, owner),
         )
         if result.rowcount != 1:
-            raise RuntimeError("The generation lost its lease before submission.")
+            raise RuntimeError("A geração perdeu a reserva antes do envio.")
     job = await m.create_job(
         batch["project_id"],
         m.JobCreate(subject=generated["subject"], script=generated["script"], format=context["format"],
@@ -970,9 +967,9 @@ async def process_next_item(owner: str) -> bool:
         await _prepare_and_submit(item, owner)
     except Exception as exc:
         if isinstance(exc, (HTTPException, PauseGeneration)):
-            logger.warning("Expected failure preparing channel %s: %s", item["channel_id"], getattr(exc, "detail", str(exc)))
+            logger.warning("Falha esperada na preparação do canal %s: %s", item["channel_id"], getattr(exc, "detail", str(exc)))
         else:
-            logger.exception("Failed to prepare channel %s", item["channel_id"])
+            logger.exception("Falha na preparação do canal %s", item["channel_id"])
         with m.database() as db:
             current = db.execute("SELECT submission_started_at FROM generation_batch_items WHERE id=?", (item["id"],)).fetchone()
             uncertain = bool(current and current["submission_started_at"])
@@ -985,9 +982,9 @@ async def process_next_item(owner: str) -> bool:
                 )
                 db.execute("INSERT OR IGNORE INTO generation_quality(item_id, job_id, state, updated_at) VALUES (?, ?, 'pending', ?)", (item["id"], persisted["id"], m.now()))
                 return True
-            detail = str(exc.detail) if isinstance(exc, HTTPException) else str(exc) if isinstance(exc, PauseGeneration) else "Could not prepare the video for this channel."
+            detail = str(exc.detail) if isinstance(exc, HTTPException) else str(exc) if isinstance(exc, PauseGeneration) else "Não foi possível preparar o vídeo para este canal."
             if uncertain:
-                detail = "The Turbo submission may have started. Check the jobs before retrying so you do not create a duplicate video."
+                detail = "O envio ao Turbo pode ter começado. Confira os trabalhos antes de repetir para evitar vídeo duplicado."
             db.execute(
                 "UPDATE generation_batch_items SET state=?, stage=?, error=?, lease_owner=NULL, lease_until=NULL, updated_at=? "
                 "WHERE id=? AND lease_owner=?",
@@ -1107,7 +1104,7 @@ def _queue_auto_repair(item_id: str, report: dict[str, Any]) -> dict[str, Any] |
                 if selected and selected.get("filename"):
                     source_file = source / selected["filename"]
                     if not source_file.is_file():
-                        raise PauseGeneration("The approved material is no longer available to rebuild the video.")
+                        raise PauseGeneration("O material aprovado não está mais disponível para remontar o vídeo.")
                     destination.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source_file, destination / selected["filename"])
         timestamp = m.now()
@@ -1149,8 +1146,8 @@ async def review_next_completed_job() -> bool:
         context = json.loads(row["context_json"])
         expected_count = int(context["settings"].get("video_count", 1))
         if job["state"] != "completed" or len(artifacts) != expected_count:
-            reason = (f"The render delivered {len(artifacts)} video(s), but the channel requested {expected_count}."
-                      if job["state"] == "completed" else "The render failed before delivering the complete video.")
+            reason = (f"O render entregou {len(artifacts)} vídeo(s), mas o canal solicitou {expected_count}."
+                      if job["state"] == "completed" else "O render falhou antes de entregar o vídeo completo.")
             reports = [{"approved": False, "failed_checks": ["render_failed"], "reason": reason,
                         "checks": {}, "measurements": {}, "observations": []}]
         else:
@@ -1187,17 +1184,17 @@ async def review_next_completed_job() -> bool:
         try:
             repair = _queue_auto_repair(row["item_id"], report)
         except Exception as exc:
-            logger.exception("Failed to prepare the automatic correction for item %s", row["item_id"])
+            logger.exception("Falha ao preparar correção automática do item %s", row["item_id"])
             report["repair_error"] = str(getattr(exc, "detail", exc))[:500]
         if not repair:
             failed_checks = {check for video in report.get("videos", []) for check in video.get("failed_checks", [])}
             if failed_checks & {"audio", "continuous_audio"}:
-                report.setdefault("repair_error", "Automatic correction does not adjust the audio track. Review the voice or music and generate again.")
+                report.setdefault("repair_error", "A correção automática não ajusta a trilha de áudio. Revise voz ou música e gere novamente.")
             else:
-                report.setdefault("repair_error", "Correction limit reached, or manual intervention is required.")
+                report.setdefault("repair_error", "Limite de correções atingido ou intervenção manual necessária.")
             with m.database() as db:
                 db.execute("UPDATE generation_quality SET report_json=?, updated_at=? WHERE item_id=? AND state='blocked'",
                            (json.dumps(report, ensure_ascii=False), m.now(), row["item_id"]))
     if operator_run and state not in {"approved", "pending"} and not repair:
-        m.pause_operator(operator_run["channel_id"], report.get("reason") or "The final review rejected the video.", row["job_id"])
+        m.pause_operator(operator_run["channel_id"], report.get("reason") or "A revisão final reprovou o vídeo.", row["job_id"])
     return True
