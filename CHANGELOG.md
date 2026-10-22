@@ -4,6 +4,8 @@ Mudanças relevantes do MoneyPrinter Cockpit são registradas aqui por versão. 
 
 ## [Unreleased]
 
+- Divide os serviços de domínio do gateway em `gateway/services/` (`util`, `db`, `auth`, `observability`, `projects`, `turbo`, `jobs`, `settings`, `scripts`, `assistant`, `channels`, `agents`); `gateway/main.py` mantém configuração, modelos, montagem da aplicação e um facade que re-exporta os serviços, preservando `gateway.main` como namespace compartilhado (testes e workers não mudam).
+- `setup.ps1` aplica a senha local do PostgreSQL em serviço com `ALTER USER` quando o volume do Growth OS já existe — não é mais preciso `docker compose down -v` nem perder dados — e ganha o switch `-RotateGrowthPassword` para troca manual a qualquer momento.
 - Divide as rotas HTTP do gateway em `gateway/routers/` (`system`, `auth`, `projects`, `settings`, `jobs`, `assistant`, `scripts`, `channels`, `agents`); `gateway/main.py` mantém os serviços compartilhados e a montagem da aplicação.
 - Adiciona CI no GitHub Actions: testes do gateway com pytest e checagem do SemVer unificado (`npm run version:check`).
 - Remove do versionamento os artefatos locais (`scraps/`, `screenshots/`, `uploads/`, `screens/`, `graphify-out/`, `.playwright-cli/` e PNGs/HTMLs soltos na raiz); os arquivos permanecem no disco e passam a ser ignorados pelo git.

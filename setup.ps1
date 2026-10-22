@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
   [switch]$NonInteractive,
-  [switch]$AdminOnly
+  [switch]$AdminOnly,
+  [switch]$RotateGrowthPassword
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,10 +11,29 @@ $secretsPath = Join-Path $runtimePath 'secrets'
 $mptPath = Join-Path $runtimePath 'moneyprinter'
 New-Item -ItemType Directory -Force -Path $secretsPath, $mptPath | Out-Null
 
-# Senhas locais do Growth OS (PostgreSQL/MinIO): geradas uma única vez em `.env`,
-# que fica fora do versionamento e é lida automaticamente pelo Docker Compose.
-# Valores já presentes em `.env` são preservados (o volume do PostgreSQL guarda a
-# senha da primeira inicialização; trocar a senha exige recriar o volume).
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Docker Desktop não foi encontrado no PATH.' }
+
+# PS 5.1: stderr de comando nativo é convertido em ErrorRecord e, com
+# ErrorActionPreference=Stop, abortaria o setup. Os helpers abaixo isolam isso.
+function Invoke-DockerExit([string[]]$DockerArguments) {
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try { & docker @DockerArguments *> $null } finally { $ErrorActionPreference = $previous }
+  return $LASTEXITCODE
+}
+function Invoke-DockerText([string[]]$DockerArguments) {
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try { return ((& docker @DockerArguments 2>$null) -join [Environment]::NewLine) } finally { $ErrorActionPreference = $previous }
+}
+
+if ((Invoke-DockerExit @('info')) -ne 0) { throw 'Docker Desktop não está em execução.' }
+
+# ---- Senhas locais do Growth OS (PostgreSQL/MinIO) -------------------------
+# Ficam em `.env`, fora do versionamento e lido automaticamente pelo Docker
+# Compose; valores já presentes são preservados. Quando o volume do PostgreSQL
+# já existe (instalação anterior), a senha nova é aplicada em serviço com
+# ALTER USER: não é preciso recriar o volume nem perder dados do Growth OS.
 $envPath = Join-Path $PSScriptRoot '.env'
 $envContent = if (Test-Path $envPath) { [IO.File]::ReadAllText($envPath) } else { '' }
 function New-LocalPasswordHex([int]$bytes = 24) {
@@ -22,17 +42,89 @@ function New-LocalPasswordHex([int]$bytes = 24) {
   try { $rng.GetBytes($buffer) } finally { $rng.Dispose() }
   ([BitConverter]::ToString($buffer)).Replace('-', '').ToLowerInvariant()
 }
-foreach ($name in @('GROWTH_POSTGRES_PASSWORD', 'MINIO_ROOT_PASSWORD')) {
-  if ($envContent -notmatch ("(?m)^" + $name + "=\S")) {
-    if ($envContent -and -not $envContent.EndsWith([Environment]::NewLine)) { $envContent += [Environment]::NewLine }
-    $envContent += "$name=$(New-LocalPasswordHex)" + [Environment]::NewLine
+function Get-EnvValue([string]$name) {
+  if ($envContent -match ("(?m)^" + $name + "=([^\r\n]+)")) { return $Matches[1].Trim() }
+  return $null
+}
+function Set-EnvValue([string]$name, [string]$value) {
+  if ($script:envContent -match ("(?m)^" + $name + "=([^\r\n]*)")) {
+    $script:envContent = [regex]::Replace($script:envContent, ("(?m)^" + $name + "=[^\r\n]*"), ($name + '=' + $value))
+  } else {
+    if ($script:envContent -and -not $script:envContent.EndsWith([Environment]::NewLine)) { $script:envContent += [Environment]::NewLine }
+    $script:envContent += ($name + '=' + $value) + [Environment]::NewLine
   }
+}
+
+# MinIO não tem volume na composição atual: basta gerar a senha se faltar.
+if (-not (Get-EnvValue 'MINIO_ROOT_PASSWORD')) { Set-EnvValue 'MINIO_ROOT_PASSWORD' (New-LocalPasswordHex) }
+
+$growthExisting = Get-EnvValue 'GROWTH_POSTGRES_PASSWORD'
+$growthUser = Get-EnvValue 'GROWTH_POSTGRES_USER'
+if (-not $growthUser) { $growthUser = 'moneyprinter' }
+$composeProject = $null
+$configJson = Invoke-DockerText @('compose', 'config', '--format', 'json')
+if (-not $configJson) { throw 'Não foi possível ler a configuração do Docker Compose.' }
+try { $composeProject = ($configJson | ConvertFrom-Json).name } catch { }
+$volumeExists = $false
+if ($composeProject) {
+  $growthVolume = "${composeProject}_growth-postgres-data"
+  $volumeNames = (Invoke-DockerText @('volume', 'ls', '--format', '{{.Name}}')) -split '\r?\n'
+  $volumeExists = [bool]($volumeNames | Where-Object { $_ -eq $growthVolume })
+}
+
+$rotate = $false
+if (-not $volumeExists) {
+  # Primeira inicialização: o Compose cria o volume já com a senha de `.env`.
+  if ($RotateGrowthPassword -or -not $growthExisting) { Set-EnvValue 'GROWTH_POSTGRES_PASSWORD' (New-LocalPasswordHex) }
+} elseif ($RotateGrowthPassword) {
+  $rotate = $true
+} elseif ($AdminOnly) {
+  if (-not $growthExisting) {
+    Write-Warning "O volume do Growth OS já existe e não há senha registrada em .env. Rode .\setup.ps1 -RotateGrowthPassword para gerar uma senha forte sem perder dados."
+  }
+} else {
+  if ((Invoke-DockerExit @('compose', 'up', '-d', '--wait', 'postgresql')) -ne 0) {
+    throw 'Não foi possível iniciar o serviço postgresql para verificar a senha local.'
+  }
+  if (-not $growthExisting) {
+    $rotate = $true
+    Write-Output 'Volume do Growth OS detectado sem senha registrada: a senha local do PostgreSQL será gerada e aplicada em serviço (sem perda de dados).'
+  } else {
+    $probeUri = "postgresql://${growthUser}:${growthExisting}@localhost:5432/postgres"
+    Invoke-DockerExit @('compose', 'exec', '-T', 'postgresql', 'psql', $probeUri, '-c', 'SELECT 1') | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      $rotate = $true
+      Write-Output 'A senha registrada em .env não corresponde à do volume do Growth OS: a senha local do PostgreSQL será trocada em serviço (sem perda de dados).'
+    }
+  }
+}
+
+if ($rotate) {
+  $newPassword = New-LocalPasswordHex
+  if ((Invoke-DockerExit @('compose', 'up', '-d', '--wait', 'postgresql')) -ne 0) {
+    throw 'Não foi possível iniciar o serviço postgresql para trocar a senha local.'
+  }
+  # O socket local do container aceita conexões sem senha (trust); o ALTER USER
+  # aplica a senha nova ao usuário existente, preservando todos os dados.
+  $alter = "ALTER USER ${growthUser} WITH PASSWORD '${newPassword}';"
+  if ((Invoke-DockerExit @('compose', 'exec', '-T', 'postgresql', 'psql', '-U', $growthUser, '-d', 'postgres', '-c', $alter)) -ne 0) {
+    throw "Não foi possível trocar a senha do usuário '${growthUser}' no PostgreSQL."
+  }
+  Set-EnvValue 'GROWTH_POSTGRES_PASSWORD' $newPassword
 }
 [IO.File]::WriteAllText($envPath, $envContent, [Text.UTF8Encoding]::new($false))
 
-if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Docker Desktop não foi encontrado no PATH.' }
-docker info *> $null
-if ($LASTEXITCODE -ne 0) { throw 'Docker Desktop não está em execução.' }
+# Serviços já em execução precisam ser recriados para enxergar a senha nova.
+if ($rotate) {
+  $running = @((Invoke-DockerText @('compose', 'ps', '--services', '--filter', 'status=running')) -split '\r?\n' | Where-Object { $_ })
+  if ($running.Count -gt 0) {
+    if ((Invoke-DockerExit @('compose', 'up', '-d', '--wait')) -eq 0) {
+      Write-Output 'Serviços recriados com a senha nova do Growth OS.'
+    } else {
+      Write-Warning 'A senha foi trocada, mas a recriação dos serviços falhou. Rode: docker compose up -d --wait'
+    }
+  }
+}
 
 function Read-SecretValue([string]$label, [string]$environmentName) {
   if ($NonInteractive) { return [Environment]::GetEnvironmentVariable($environmentName) }

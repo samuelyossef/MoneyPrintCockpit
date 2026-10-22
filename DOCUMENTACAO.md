@@ -26,7 +26,7 @@ docker compose up -d --build --wait
 
 `setup.ps1` cria `runtime/secrets/admin.json`, `runtime/secrets/mpt_api_key.txt` e `runtime/moneyprinter/config.toml`. Chaves de Moonshot/Kimi, Pexels e Upload-Post podem ficar em branco e ser preenchidas depois. Os valores de exemplo estão em `.env.example`. Não coloque segredos no navegador nem no repositório.
 
-O setup também grava em `.env` senhas locais aleatórias para o PostgreSQL e o MinIO do Growth OS (o arquivo fica fora do versionamento e é lido automaticamente pelo Docker Compose; valores já presentes são preservados). Se o volume do PostgreSQL já existir de uma instalação anterior com senha padrão, recrie-o com `docker compose down -v` para a nova senha valer.
+O setup também grava em `.env` senhas locais aleatórias para o PostgreSQL e o MinIO do Growth OS (o arquivo fica fora do versionamento e é lido automaticamente pelo Docker Compose; valores já presentes são preservados). Se o volume do PostgreSQL já existir de uma instalação anterior, a senha nova é aplicada em serviço com `ALTER USER`, sem recriar o volume e sem perder dados; serviços em execução são recriados para enxergar a senha nova. Para trocar a senha manualmente a qualquer momento, rode `.\setup.ps1 -RotateGrowthPassword`.
 
 Abra [http://127.0.0.1:3000/Login.html](http://127.0.0.1:3000/Login.html).
 
@@ -69,7 +69,8 @@ Tentativas repetidas de login são limitadas por 15 minutos.
 
 ## Estrutura do código
 
-- `gateway/main.py` — serviços compartilhados (banco, sessões, cliente do Turbo, helpers de job, agentes) e montagem da aplicação FastAPI. Os workers (`cockpit-operator`, `cockpit-generation-worker`) e os testes usam esse módulo diretamente.
+- `gateway/main.py` — configuração, modelos de entrada, montagem da aplicação FastAPI e um facade que re-exporta os serviços. `gateway.main` continua sendo o namespace compartilhado: workers (`cockpit-operator`, `cockpit-generation-worker`) e testes usam esse módulo diretamente.
+- `gateway/services/` — serviços de domínio por área: `util` (tempo), `db` (SQLite e schema), `auth` (sessões), `observability` (notificações/eventos), `projects`, `turbo` (cliente do MoneyPrinterTurbo), `jobs`, `settings` (defaults, provedores e LLM), `scripts`, `assistant`, `channels` (perfis, credenciais e publicação) e `agents` (estratégia, analytics e operadores). Cada módulo acessa o restante por `gateway.main`, no mesmo padrão de `gateway/auto_generation.py`.
 - `gateway/routers/` — rotas HTTP por área: `system` (saúde, versão, status, logs, notificações), `auth`, `projects`, `settings`, `jobs`, `assistant`, `scripts`, `channels` e `agents`. Cada módulo expõe um `APIRouter` e acessa os serviços por `gateway.main`, no mesmo padrão de `gateway/auto_generation.py`.
 - `gateway/growth/` — domínio do Growth OS (PostgreSQL, Temporal, outbox).
 - `gateway/auto_generation.py` — preparação durável e revisão editorial antes do render.
