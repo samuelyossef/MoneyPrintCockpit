@@ -1,4 +1,4 @@
-# MoneyPrinter Cockpit
+# MoneyPrint Cockpit 💸
 
 Cockpit local para gerar, revisar e publicar vídeos pelo MoneyPrinterTurbo. A aplicação usa FastAPI, SQLite e Docker. Há um único administrador local. Não há billing, organizações, planos nem usuários simulados.
 
