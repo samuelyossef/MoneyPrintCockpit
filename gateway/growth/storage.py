@@ -12,11 +12,11 @@ def ensure_media_bucket(attempts: int = 10, delay_seconds: float = 0.5) -> str:
     endpoint = os.getenv("OBJECT_STORAGE_ENDPOINT", "")
     bucket = os.getenv("OBJECT_STORAGE_BUCKET", "moneyprinter-media")
     if not endpoint:
-        raise ObjectStorageUnavailable("OBJECT_STORAGE_ENDPOINT não está configurado.")
+        raise ObjectStorageUnavailable("OBJECT_STORAGE_ENDPOINT is not configured.")
     try:
         from minio import Minio
     except ImportError as exc:
-        raise ObjectStorageUnavailable("O cliente S3/MinIO não está instalado.") from exc
+        raise ObjectStorageUnavailable("The S3/MinIO client is not installed.") from exc
     client = Minio(
         endpoint,
         access_key=os.environ.get("MINIO_ROOT_USER", ""),
@@ -33,4 +33,4 @@ def ensure_media_bucket(attempts: int = 10, delay_seconds: float = 0.5) -> str:
             last_error = exc
             if attempt + 1 < attempts:
                 time.sleep(delay_seconds)
-    raise ObjectStorageUnavailable(f"Object storage indisponível: {last_error}")
+    raise ObjectStorageUnavailable(f"Object storage is unavailable: {last_error}")

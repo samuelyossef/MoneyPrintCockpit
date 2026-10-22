@@ -1,10 +1,10 @@
 # Changelog
 
-Mudanças relevantes do MoneyPrinter Cockpit são registradas aqui por versão. As versões seguem SemVer: MAJOR para incompatibilidades, MINOR para funcionalidades compatíveis e PATCH para correções compatíveis.
+Relevant MoneyPrinter Cockpit changes are recorded here by version. Versions follow SemVer: MAJOR for breaking changes, MINOR for compatible features, and PATCH for compatible fixes.
 
 ## [1.2.0] - 2026-09-26
 
-- Estabelece o primeiro identificador SemVer unificado para interface, API e pacote.
-- Adiciona endpoint de versão, identificação no cockpit e fluxo documentado de atualização.
+- Establishes the first unified SemVer identifier for the interface, API, and package.
+- Adds a version endpoint, cockpit identification, and a documented update flow.
 
 ## [Unreleased]

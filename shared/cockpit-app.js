@@ -122,13 +122,18 @@
     document.getElementById("topbar-root").innerHTML = `
       <button class="icon-btn menu-toggle" id="menuToggle" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
       <div class="top-right">
-        <span class="top-pill"><span class="dot"></span> ${safe((status.environment || "local").toLowerCase())}</span>
-        <span class="top-pill"><span class="dot" style="background:${status.turbo === "online" ? "var(--ok)" : "var(--warn)"}"></span> Gateway: ${safe(status.gateway || "verificando")}</span>
-        <span class="top-pill">LLM: <b style="font-weight:600">${safe(llm)}</b></span>
-        <span class="top-pill"><span class="dot" style="background:${active ? "var(--warn)" : "var(--ok)"}"></span> ${safe(task)}</span>
+        <div class="ctx">
+          <button class="top-pill" type="button" data-pop="statusPop" aria-label="Status dos serviços" title="Status dos serviços"><span class="dot" style="background:${active || status.turbo !== "online" ? "var(--warn)" : "var(--ok)"}"></span><span class="top-pill-label">${safe(active ? task : (status.turbo ? (status.turbo === "online" ? "Tudo certo" : "Verificar serviços") : "Verificando"))}</span></button>
+          <div class="pop to-right" id="statusPop" style="min-width:280px">
+            <div class="pop-label">Status</div>
+            <div class="status-detail"><span>Ambiente</span><b>${safe((status.environment || "local").toLowerCase())}</b></div>
+            <div class="status-detail"><span>Gateway</span><b>${safe(status.gateway || "verificando")}</b></div>
+            <div class="status-detail"><span>LLM</span><b>${safe(llm)}</b></div>
+            <div class="status-detail"><span>Tarefa</span><b>${safe(task)}</b></div>
+          </div>
+        </div>
         <button class="icon-btn assistant-panel-toggle" id="assistantPanelToggle" type="button" aria-label="Abrir chat do assistente" aria-expanded="false" title="Abrir chat do assistente">${ic("spark")}<span>Chat</span></button>
         <button class="icon-btn" type="button" data-view="config" aria-label="Configurações" title="Configurações">${ic("settings")}</button>
-        <button class="icon-btn" type="button" data-view="logs" aria-label="Logs e traces" title="Logs e traces">${ic("logs")}</button>
         <button class="icon-btn" id="themeBtn" aria-label="Alternar tema">${ic(S.theme === "dark" ? "sun" : "moon")}</button>
         <div class="ctx">
           <button class="icon-btn" data-pop="notifPop" aria-label="Notificações">${ic("bell")}</button>
@@ -226,11 +231,8 @@
     const goto = t.closest("[data-goto]"); if (goto) { if (goto.dataset.jobId) D.__openJob?.(goto.dataset.jobId); else go(goto.dataset.goto); return; }
     const library = t.closest("[data-open-library]");
     if (library) {
-      S.productionFormat = library.dataset.libraryKind === "horiz" ? "long" : "short";
-      S.productionTab = "library"; go("producoes");
-      const select = document.getElementById("ytLibrarySelect");
-      if (select) select.value = library.dataset.openLibrary;
-      select?.scrollIntoView({ block: "nearest" });
+      closePops();
+      if (library.dataset.openLibrary) D.__openJob?.(library.dataset.openLibrary);
       return;
     }
     const copy = t.closest("[data-copy]");

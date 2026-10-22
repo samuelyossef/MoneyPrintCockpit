@@ -166,7 +166,7 @@ class VisualSpecialistsTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as raised:
                 specialists.vision_model()
         self.assertEqual(raised.exception.status_code, 409)
-        self.assertIn("mesmo provedor", raised.exception.detail)
+        self.assertIn("same provider", raised.exception.detail)
 
     def test_blocked_final_video_creates_review_batch_for_selected_alternative(self):
         original_id = "00000000-0000-0000-0000-000000000002"
@@ -199,7 +199,7 @@ class VisualSpecialistsTests(unittest.TestCase):
         path.write_bytes(b"mp4")
         scenes = [{"narration": "sun", "selected": "a", "candidates": [{"id": "a", "source_page": "https://pexels.com/a"}]}]
         async def judge(*_args):
-            return {"approved": False, "score": 10, "reason": "Tela preta"}
+            return {"approved": False, "score": 10, "reason": "Black frame"}
         with patch.object(specialists, "probe", return_value={"width": 1080, "height": 1920, "duration": 60, "audio": True}), \
              patch.object(specialists, "sample_frame", return_value=b"frame"), patch.object(specialists, "judge_frame", new=judge), \
              patch.object(specialists, "detect_black_segments", return_value=[]), \
@@ -207,7 +207,7 @@ class VisualSpecialistsTests(unittest.TestCase):
              patch.object(main, "narration_seconds", return_value=60):
             report = asyncio.run(specialists.inspect_final_video(path, scenes, {"video_aspect": "9:16", "voice_rate": 1}, "script"))
         self.assertFalse(report["approved"])
-        self.assertEqual(report["observations"][0]["reason"], "Tela preta")
+        self.assertEqual(report["observations"][0]["reason"], "Black frame")
         self.assertEqual(report["failed_checks"], ["visual_scenes"])
 
     def test_final_review_enforces_actual_short_duration(self):

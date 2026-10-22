@@ -1,264 +1,304 @@
-# Graph Report - Moneyprint layout  (2026-09-14)
+# Graph Report - Moneyprint layout  (2026-09-18)
 
 ## Corpus Check
-- 117 files · ~442,761 words
+- 47 files · ~463,820 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 633 nodes · 971 edges · 83 communities (34 shown, 49 thin omitted)
-- Extraction: 84% EXTRACTED · 16% INFERRED · 0% AMBIGUOUS · INFERRED: 157 edges (avg confidence: 0.85)
-- Token cost: 252,219 input · 11,809 output
+- 901 nodes · 1759 edges · 89 communities (50 shown, 39 thin omitted)
+- Extraction: 91% EXTRACTED · 9% INFERRED · 0% AMBIGUOUS · INFERRED: 167 edges (avg confidence: 0.85)
+- Token cost: 0 input · 0 output
+
+## Graph Freshness
+- Built from commit: `ac2044f9`
+- Run `git rev-parse HEAD` and compare to check if the graph is stale.
+- Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
-- DC Canvas Component Runtime
-- Gateway API Backend
-- Cockpit App Shell
-- Cockpit Views
-- Image Slot Web Component
-- Lattice App Core
-- Lattice App Core (uploads copy)
-- Artifact Panel (Lattice)
-- Lattice Views
-- Artifact Panel (uploads copy)
-- Lattice Views (uploads copy)
-- Package Manifest & Repo Refs
-- UI Primitives (Lattice)
-- Tweaks Panel (Lattice)
-- UI Primitives (uploads copy)
-- Tweaks Panel (uploads copy)
-- Moneyprinter Runtime Bridge
-- Lattice Entry Points & Source Refs
-- Account/Settings Modals (Lattice)
-- Account/Settings Modals (uploads copy)
-- Connectors Panel (Lattice)
-- Static File Server
-- Connectors Panel (uploads copy)
-- Gateway Contract Tests
-- Composer (Lattice)
-- Composer (uploads copy)
-- Message/Artifact Business Rules
-- OpenRouter Integration Docs
-- i18n (Lattice)
-- Skills Panel (Lattice)
-- i18n (uploads copy)
-- Skills Panel (uploads copy)
-- Docs & QA Screenshots
-- Moneyprinter Concept Mockups
-- Confirm Modal Business Rules
-- Shared Shell/Icon
-- Projects Domain Rules
-- Docker Compose / Turbo Config
-- Project Detail View Spec
-- Project Memory Domain
-- OpenRouter Activity Docs
-- Views Screenshot Ref
-- Pasted Screenshots
+- support.js
+- main.py
+- cockpit-app.js
+- cockpit-views.js
+- ImageSlot
+- lattice-app/app.jsx
+- uploads/app.jsx
+- lattice-app/artifact-panel.jsx
+- lattice-app/views.jsx
+- uploads/artifact-panel.jsx
+- uploads/views.jsx
+- package.json
+- lattice-app/primitives.jsx
+- lattice-app/tweaks-panel.jsx
+- uploads/primitives.jsx
+- uploads/tweaks-panel.jsx
+- moneyprinter-runtime.js
+- Artifact Rules
+- lattice-app/modals.jsx
+- uploads/modals.jsx
+- lattice-app/connectors.jsx
+- server.js
+- uploads/connectors.jsx
+- GatewayContractTests
+- lattice-app/composer.jsx
+- uploads/composer.jsx
+- review_job
+- MoneyPrinter V2
+- lattice-app/i18n.jsx
+- lattice-app/skills.jsx
+- uploads/i18n.jsx
+- uploads/skills.jsx
+- Cockpit SPA
+- MoneyPrinter V2 System
+- create_job
+- shell.js
+- database
+- Docker Compose
+- Any
+- row_as_job
+- refresh_channel
+- Lattice Admin Activity Overview
+- UI Buttons - Video Actions
 - Activity Page
-- Artifact Business Rules
-- Composer Business Rules
-- Conversation Business Rules
-- Knowledge Base Business Rules
-- Task Business Rules
-- Profile Page
-- Connectors Source Ref
-- i18n Source Ref
-- Skills Source Ref
-- Artifacts DB Schema
-- Runs DB Schema
-- OpenRouter Screenshot
-- OpenRouter Screenshot
-- OpenRouter Screenshot
-- OpenRouter Screenshot
-- OpenRouter Screenshot
-- OpenRouter Screenshot
-- Copylab Screenshot
-- Uploads Documentation
-- Pasted Screenshot
-- Pasted Screenshot
-- Pasted Screenshot
-- Pasted Screenshot
-- Pasted Screenshot
-- Pasted Screenshot
-- Pasted Screenshot
-- Pasted Screenshot
-- Pasted Screenshot
-- Pasted Screenshot
-- Pasted Screenshot
-- Pasted Screenshot
-- Pasted Screenshot
-- Users Page
+- get
+- parse_json_object
+- 2. Project Details Tabs
+- 2. Database Models (SQLite)
+- User Profile
+- Documentação Funcional — Lattice Cockpit
+- 💻 Como Executar
+- OpenRouter Logs - Generations View (Past Month)
+- OpenRouter Activity Dashboard
+- OpenRouter Logs - Upstream Requests
+- OpenRouter Logs - Sessions View
+- OpenRouter Logs - Jobs View
+- OpenRouter Credits Page
+- Copy Lab Logo
+- Lattice Documentation
+- AI Platform Dashboard - Visão Geral
+- AI Platform Dashboard - Visão Geral (Variant)
+- AI Platform Dashboard - Visão Geral (Variant 2)
+- Recent Videos Grid UI
+- Solid Purple Background
+- AI Chat Interface
+- Marketing/Landing Page Component
+- OpenRouter Profile & API Keys
+- Usage Metrics Widgets
+- UI Snippet - TTS and STT Provider Selection
+- Dashboard - Analytics Charts
+- Dashboard - Account Counters
+- UI Buttons - Video Actions (Duplicate)
+- Users Management
+- patch
+- no_cache_for_static_app
+- Conversation Rules
+- Lattice Home UI Screenshot
 
 ## God Nodes (most connected - your core abstractions)
-1. `ImageSlot` - 27 edges
-2. `createRuntime()` - 22 edges
-3. `get()` - 21 edges
-4. `database()` - 19 edges
-5. `create_job()` - 12 edges
-6. `renderView()` - 12 edges
-7. `boot()` - 12 edges
-8. `now()` - 11 edges
-9. `afterRender()` - 11 edges
-10. `reconcile_job()` - 10 edges
+1. `GatewayContractTests` - 74 edges
+2. `database()` - 51 edges
+3. `now()` - 27 edges
+4. `ImageSlot` - 27 edges
+5. `createRuntime()` - 22 edges
+6. `create_job()` - 21 edges
+7. `get()` - 21 edges
+8. `request()` - 19 edges
+9. `row_as_job()` - 17 edges
+10. `review_job()` - 16 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `Cockpit UI Screenshot` --semantically_similar_to--> `Cockpit SPA`  [EXTRACTED] [semantically similar]
   .qa-moneyprint-desktop.png → Cockpit.html
-- `Lattice Home UI Screenshot` --references--> `App`  [INFERRED]
-  screens/lattice-home.png → src/app.jsx
-- `index.html` --references--> `App`  [EXTRACTED]
-  Lattice.html → src/app.jsx
-- `App` --conceptually_related_to--> `Conversation Rules`  [EXTRACTED]
-  src/app.jsx → uploads/Documentation.md
-- `Lattice Admin Activity Overview` --references--> `Views`  [INFERRED]
-  scraps/01-act1.png → src/views.jsx
+- `MoneyPrinter V2 Turbo UI` --semantically_similar_to--> `Video Generator UI - Topic Selection`  [INFERRED] [semantically similar]
+  uploads/pasted-1789258829854-0.png → uploads/draw-f065a5c3-89e8-4eb8-9c2d-a6a0f2522f2a.png
+- `Technical Documentation` --cites--> `Cockpit SPA`  [EXTRACTED]
+  DOCUMENTACAO.md → Cockpit.html
+- `Technical Documentation` --cites--> `Lattice Desktop App`  [EXTRACTED]
+  DOCUMENTACAO.md → lattice-app/Lattice.html
+- `MoneyPrinter V2` --conceptually_related_to--> `OpenRouter Integration`  [INFERRED]
+  uploads/pasted-1789258829854-0.png → uploads/Captura de tela_2-7-2026_181232_openrouter.ai.jpeg
 
 ## Import Cycles
 - None detected.
 
 ## Hyperedges (group relationships)
 - **Lattice Admin Suite** — activity_html, users_html, profile_html [EXTRACTED 0.90]
-- **Lattice Core Architecture** — src_app, src_primitives, src_i18n, uploads_documentation_md [EXTRACTED 0.95]
-- **Chat Interface Flow** — src_composer, src_artifact_panel, src_app [EXTRACTED 0.90]
-- **Structured Chat Output Flow** — elements_app_message, elements_app_textblock, elements_app_toolcard, elements_app_artifactcard, elements_artifact_panel_artifactpanel [EXTRACTED 1.00]
-- **Project Management System** — business_rn_pj, elements_views_projectdetailview, technical_db_projects, functional_projects_overview [INFERRED 0.90]
-- **Destructive Action Safety Pattern** — business_rn_co, elements_primitives_useconfirm, elements_primitives_modal [EXTRACTED 1.00]
+- **MoneyPrinter V2 User Interface Flow** — uploads_pasted_1789271113409_0_png, uploads_pasted_1789275495991_0_png, uploads_pasted_1789259029316_0_png [EXTRACTED 0.95]
 - **OpenRouter Observability Suite** — uploads_captura_de_tela_2_7_2026_181232_openrouter_ai_jpeg, uploads_captura_de_tela_2_7_2026_18126_openrouter_ai_jpeg, uploads_captura_de_tela_2_7_2026_181315_openrouter_ai_jpeg, uploads_captura_de_tela_2_7_2026_181332_openrouter_ai_jpeg, uploads_pasted_1783027881539_0_png [EXTRACTED 1.00]
 - **MoneyPrinter UI Design System** — uploads_draw_2f7f6ae8_f104_4e59_822a_8cb858dda68e_png, uploads_draw_aa4f5de5_6435_4929_80c6_e4cfd06b3e14_png, uploads_draw_f065a5c3_89e8_4eb8_9c2d_a6a0f2522f2a_png, uploads_pasted_1789258829854_0_png [INFERRED 0.90]
-- **MoneyPrinter V2 User Interface Flow** — uploads_pasted_1789271113409_0_png, uploads_pasted_1789275495991_0_png, uploads_pasted_1789259029316_0_png [EXTRACTED 0.95]
 
-## Communities (83 total, 49 thin omitted)
+## Communities (89 total, 39 thin omitted)
 
-### Community 0 - "DC Canvas Component Runtime"
+### Community 0 - "support.js"
 Cohesion: 0.07
 Nodes (65): boot(), collectProps(), compileAttr(), compileTemplate(), contentKey(), createComponentFactory(), getDC(), Dispatcher() (+57 more)
 
-### Community 1 - "Gateway API Backend"
-Cohesion: 0.11
-Nodes (54): Any, BaseModel, Connection, delete, FastAPI, FileResponse, api_key(), artifact_or_404() (+46 more)
+### Community 1 - "main.py"
+Cohesion: 0.10
+Nodes (35): AsyncClient, BaseModel, datetime, FastAPI, agent_loop(), as_utc(), _config_string(), default_generation_settings() (+27 more)
 
-### Community 2 - "Cockpit App Shell"
-Cohesion: 0.12
+### Community 2 - "cockpit-app.js"
+Cohesion: 0.11
 Nodes (32): addWorkspace(), afterRender(), bindTopbar(), channelAction(), closeDrawer(), closePops(), collectChannel(), collectOrg() (+24 more)
 
-### Community 3 - "Cockpit Views"
-Cohesion: 0.08
-Nodes (23): area(), bars(), canais(), canal(), canalRows(), clientes(), custosIA(), gerador() (+15 more)
+### Community 3 - "cockpit-views.js"
+Cohesion: 0.07
+Nodes (30): area(), bars(), canais(), canal(), canalRows(), chStatus(), clientes(), custosIA() (+22 more)
 
-### Community 4 - "Image Slot Web Component"
+### Community 4 - "ImageSlot"
 Cohesion: 0.13
 Nodes (7): flushNow(), getSlot(), ImageSlot, load(), save(), setSlot(), toDataUrl()
 
-### Community 5 - "Lattice App Core"
+### Community 5 - "lattice-app/app.jsx"
 Cohesion: 0.08
 Nodes (12): ACCENTS, DEMO_BLOCKS, describeTask(), INITIAL_ACCOUNT, INITIAL_APP_SETTINGS, initialConvos, MODELS, RECENT_GROUPS (+4 more)
 
-### Community 6 - "Lattice App Core (uploads copy)"
+### Community 6 - "uploads/app.jsx"
 Cohesion: 0.08
 Nodes (12): ACCENTS, DEMO_BLOCKS, describeTask(), INITIAL_ACCOUNT, INITIAL_APP_SETTINGS, initialConvos, MODELS, RECENT_GROUPS (+4 more)
 
-### Community 7 - "Artifact Panel (Lattice)"
+### Community 7 - "lattice-app/artifact-panel.jsx"
 Cohesion: 0.21
 Nodes (17): ArtifactCard(), ArtifactPanel(), ARTIFACTS_SAMPLE, artKindLabel(), artLineCount(), DocumentView(), escapeHtml(), extractTables() (+9 more)
 
-### Community 8 - "Lattice Views"
+### Community 8 - "lattice-app/views.jsx"
 Cohesion: 0.15
 Nodes (11): FILE_ICON_COLOR, FILE_ICON_NAME, fileIcon(), FileMark(), FileViewerPanel(), knFormatSize(), knKindFromName(), KnowledgeInline() (+3 more)
 
-### Community 9 - "Artifact Panel (uploads copy)"
+### Community 9 - "uploads/artifact-panel.jsx"
 Cohesion: 0.24
 Nodes (15): ArtifactCard(), ArtifactPanel(), ARTIFACTS_SAMPLE, artKindLabel(), artLineCount(), escapeHtml(), extractTables(), highlightCode() (+7 more)
 
-### Community 10 - "Lattice Views (uploads copy)"
+### Community 10 - "uploads/views.jsx"
 Cohesion: 0.15
 Nodes (11): FILE_ICON_COLOR, FILE_ICON_NAME, fileIcon(), FileMark(), FileViewerPanel(), knFormatSize(), knKindFromName(), KnowledgeInline() (+3 more)
 
-### Community 11 - "Package Manifest & Repo Refs"
+### Community 11 - "package.json"
 Cohesion: 0.12
-Nodes (15): author, description, keywords, license, main, name, scripts, dev (+7 more)
+Nodes (15): author, description, keywords, license, main, name, scripts, start (+7 more)
 
-### Community 12 - "UI Primitives (Lattice)"
+### Community 12 - "lattice-app/primitives.jsx"
 Cohesion: 0.19
 Nodes (9): Action(), Badge(), cn(), ConfirmContext, ConfirmProvider(), ICONS, InlineEditable(), Switch() (+1 more)
 
-### Community 14 - "UI Primitives (uploads copy)"
+### Community 14 - "uploads/primitives.jsx"
 Cohesion: 0.19
 Nodes (9): Action(), Badge(), cn(), ConfirmContext, ConfirmProvider(), ICONS, InlineEditable(), Switch() (+1 more)
 
-### Community 16 - "Moneyprinter Runtime Bridge"
-Cohesion: 0.42
-Nodes (10): bindGenerator(), integer(), projectFor(), request(), restoreDraft(), saveDraft(), setPipeline(), showArtifact() (+2 more)
+### Community 16 - "moneyprinter-runtime.js"
+Cohesion: 0.14
+Nodes (42): applyConfigDefaults(), applyDefaults(), bindAgents(), bindAiHelpers(), bindConfigSettings(), bindGenerationDefaults(), bindGenerator(), bindJobsWorkers() (+34 more)
 
-### Community 17 - "Lattice Entry Points & Source Refs"
-Cohesion: 0.22
-Nodes (9): index.html, Artifact Rules, Conversation Rules, Lattice Home UI Screenshot, App, Artifact Panel, Composer, Primitives (+1 more)
-
-### Community 20 - "Connectors Panel (Lattice)"
+### Community 20 - "lattice-app/connectors.jsx"
 Cohesion: 0.29
 Nodes (5): AUDIT_LOG, CONNECTORS, ConnectorsView(), INITIAL_CONNECTOR_STATE, statusPill()
 
-### Community 21 - "Static File Server"
+### Community 21 - "server.js"
 Cohesion: 0.25
 Nodes (6): fs, http, MIME_TYPES, path, port, server
 
-### Community 22 - "Connectors Panel (uploads copy)"
+### Community 22 - "uploads/connectors.jsx"
 Cohesion: 0.29
 Nodes (5): AUDIT_LOG, CONNECTORS, ConnectorsView(), INITIAL_CONNECTOR_STATE, statusPill()
 
-### Community 24 - "Composer (Lattice)"
+### Community 24 - "lattice-app/composer.jsx"
 Cohesion: 0.38
 Nodes (6): ATT_COLOR, AttachChip(), attKind(), Composer(), fmtBytes(), ROTATING_PROMPTS
 
-### Community 25 - "Composer (uploads copy)"
+### Community 25 - "uploads/composer.jsx"
 Cohesion: 0.38
 Nodes (6): ATT_COLOR, AttachChip(), attKind(), Composer(), fmtBytes(), ROTATING_PROMPTS
 
-### Community 26 - "Message/Artifact Business Rules"
-Cohesion: 0.33
-Nodes (6): Chat Output Rules, ArtifactCard Component, Message Component, TextBlock Component, ToolCard Component, ArtifactPanel Component
+### Community 26 - "review_job"
+Cohesion: 0.10
+Nodes (29): Exception, api_key(), config_value(), create_thumbnail(), download_turbo_file(), extract_review_frames(), generate_image(), health() (+21 more)
 
-### Community 27 - "OpenRouter Integration Docs"
+### Community 27 - "MoneyPrinter V2"
 Cohesion: 0.33
 Nodes (6): MoneyPrinter V2, OpenRouter Integration, OpenRouter Logs - Generations View, Video Generator UI - Topic Selection, Logs and Traces UI, MoneyPrinter V2 Turbo UI
 
-### Community 28 - "i18n (Lattice)"
+### Community 28 - "lattice-app/i18n.jsx"
 Cohesion: 0.40
 Nodes (3): LangContext, LANGUAGES, STRINGS
 
-### Community 30 - "i18n (uploads copy)"
+### Community 30 - "uploads/i18n.jsx"
 Cohesion: 0.40
 Nodes (3): LangContext, LANGUAGES, STRINGS
 
-### Community 32 - "Docs & QA Screenshots"
+### Community 32 - "Cockpit SPA"
 Cohesion: 0.50
 Nodes (4): Cockpit SPA, Technical Documentation, Lattice Desktop App, Cockpit UI Screenshot
 
-### Community 34 - "Moneyprinter Concept Mockups"
+### Community 34 - "MoneyPrinter V2 System"
 Cohesion: 0.50
 Nodes (4): MoneyPrinter V2 System, Settings UI - AI Providers and General Configuration, UI Form - Add YouTube Shorts Account, YouTube Shorts Automator UI
 
-### Community 36 - "Confirm Modal Business Rules"
+### Community 36 - "create_job"
+Cohesion: 0.13
+Nodes (23): build_turbo_payload(), clean_narration(), create_job(), job_max_words(), JobCreate, long_script(), LongScriptInput, Caps an AI-written script at max_words, backing up to the end of the last full… (+15 more)
+
+### Community 39 - "database"
+Cohesion: 0.18
+Nodes (22): delete, agent_tick(), cancel_schedule(), connect(), database(), delete_channel(), delete_job(), delete_project() (+14 more)
+
+### Community 41 - "Any"
+Cohesion: 0.18
+Nodes (19): Any, analytics_overview(), analytics_score(), create_project(), get_or_create_project(), get_project(), get_project_or_404(), list_projects() (+11 more)
+
+### Community 42 - "row_as_job"
+Cohesion: 0.23
+Nodes (18): Connection, approve_job(), channel_row_or_404(), generate_metadata(), job_language(), job_row_or_404(), normalize_youtube_metadata(), publish_job() (+10 more)
+
+### Community 43 - "refresh_channel"
+Cohesion: 0.15
+Nodes (18): ChannelConnect, ChannelPatch, clean_language(), list_channels(), patch_channel(), TikTok goes through one Upload-Post profile per Cockpit channel; the user links…, Titles trending on YouTube in the channel's region. Only a hint for the…, refresh_channel() (+10 more)
+
+### Community 48 - "get"
+Cohesion: 0.15
+Nodes (17): FileResponse, artifact_or_404(), artifact_proxy(), get_thumbnail(), job_events(), list_schedule(), Upserts by YouTube channel id, so reconnecting a channel refreshes it (keeping…, root() (+9 more)
+
+### Community 49 - "parse_json_object"
+Cohesion: 0.19
+Nodes (13): ai_image_materials(), _fill_visual_terms(), narration_seconds(), parse_json_object(), Kimi sometimes wraps the JSON in prose or a code fence; take the outermost…, Splits narration into `parts` contiguous, roughly-equal chunks by word count,…, Turbo drops a term's candidates once its URLs are already claimed by an earlier…, One stock-footage search term per script chunk, in narration order. Combined… (+5 more)
+
+### Community 51 - "2. Project Details Tabs"
+Cohesion: 0.15
+Nodes (12): 1. Overview, 1. Projects Dashboard, 2. Chats, 2. Project Details Tabs, 3. Knowledge, 4. Runs, 5. Artifacts, 6. Memory (+4 more)
+
+### Community 52 - "2. Database Models (SQLite)"
+Cohesion: 0.15
+Nodes (12): 1. Tenant & Resource Hierarchy, 2. Database Models (SQLite), 3. Permissions & Role Mapping (RBAC), 4. Run Summarization & Memory Generation, `artifacts`, `audit_events`, Constraints & Security Boundaries:, `project_contexts` (+4 more)
+
+### Community 56 - "Documentação Funcional — Lattice Cockpit"
+Cohesion: 0.17
+Nodes (11): 10. Tema, 11. Dados, 1. Estrutura geral, 2. Visão geral (Home), 4. Gerador de Vídeo, 5. YouTube Shorts, 6. Canais, 7. Notificações (+3 more)
+
+### Community 59 - "💻 Como Executar"
+Cohesion: 0.29
+Nodes (6): 💻 Como Executar, 🚀 Moneyprint — Cockpit Frontend Layout, Opção 1: Via Dois Cliques (Windows), Opção 2: Via Node.js / NPM, Opção 3: Abrir Diretamente no Navegador, 📱 Telas & Módulos Disponíveis
+
+### Community 84 - "no_cache_for_static_app"
 Cohesion: 0.67
-Nodes (3): Destructive Confirmations Rules, Modal Component, useConfirm Hook
+Nodes (3): no_cache_for_static_app(), Without this, Chrome heuristically caches the HTML document itself (no Cache-…, middleware
 
 ## Knowledge Gaps
-- **140 isolated node(s):** `MODELS`, `ACCENTS`, `INITIAL_APP_SETTINGS`, `INITIAL_ACCOUNT`, `DEMO_BLOCKS` (+135 more)
+- **145 isolated node(s):** `MODELS`, `ACCENTS`, `INITIAL_APP_SETTINGS`, `INITIAL_ACCOUNT`, `DEMO_BLOCKS` (+140 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **49 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **39 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Are the 7 inferred relationships involving `createRuntime()` (e.g. with `adoptParsed()` and `dcUpdate()`) actually correct?**
-  _`createRuntime()` has 7 INFERRED edges - model-reasoned connections that need verification._
+- **Why does `GatewayContractTests` connect `GatewayContractTests` to `._completed_job`, `patch`, `._channel`, `._async_return`, `._ai_images_job`?**
+  _High betweenness centrality (0.041) - this node is a cross-community bridge._
+- **Why does `database()` connect `database` to `main.py`, `create_job`, `Any`, `row_as_job`, `refresh_channel`, `get`, `review_job`?**
+  _High betweenness centrality (0.002) - this node is a cross-community bridge._
+- **Why does `no_cache_for_static_app()` connect `no_cache_for_static_app` to `get`, `main.py`?**
+  _High betweenness centrality (0.001) - this node is a cross-community bridge._
 - **What connects `MODELS`, `ACCENTS`, `INITIAL_APP_SETTINGS` to the rest of the system?**
-  _140 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `DC Canvas Component Runtime` be split into smaller, more focused modules?**
+  _145 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **Should `support.js` be split into smaller, more focused modules?**
   _Cohesion score 0.06698564593301436 - nodes in this community are weakly interconnected._
-- **Should `Gateway API Backend` be split into smaller, more focused modules?**
-  _Cohesion score 0.10707070707070707 - nodes in this community are weakly interconnected._
-- **Should `Cockpit App Shell` be split into smaller, more focused modules?**
-  _Cohesion score 0.11666666666666667 - nodes in this community are weakly interconnected._
-- **Should `Cockpit Views` be split into smaller, more focused modules?**
-  _Cohesion score 0.08408408408408409 - nodes in this community are weakly interconnected._
-- **Should `Image Slot Web Component` be split into smaller, more focused modules?**
-  _Cohesion score 0.1319073083778966 - nodes in this community are weakly interconnected._
+- **Should `main.py` be split into smaller, more focused modules?**
+  _Cohesion score 0.1036036036036036 - nodes in this community are weakly interconnected._
+- **Should `cockpit-app.js` be split into smaller, more focused modules?**
+  _Cohesion score 0.11219512195121951 - nodes in this community are weakly interconnected._

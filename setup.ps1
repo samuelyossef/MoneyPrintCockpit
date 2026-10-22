@@ -10,9 +10,9 @@ $secretsPath = Join-Path $runtimePath 'secrets'
 $mptPath = Join-Path $runtimePath 'moneyprinter'
 New-Item -ItemType Directory -Force -Path $secretsPath, $mptPath | Out-Null
 
-if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Docker Desktop não foi encontrado no PATH.' }
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Docker Desktop was not found on PATH.' }
 docker info *> $null
-if ($LASTEXITCODE -ne 0) { throw 'Docker Desktop não está em execução.' }
+if ($LASTEXITCODE -ne 0) { throw 'Docker Desktop is not running.' }
 
 function Read-SecretValue([string]$label, [string]$environmentName) {
   if ($NonInteractive) { return [Environment]::GetEnvironmentVariable($environmentName) }
@@ -36,24 +36,24 @@ function Get-PasswordHash([string]$password) {
 }
 
 $mptKey = [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
-$adminName = Read-PlainValue 'Nome do administrador local' 'COCKPIT_ADMIN_NAME'
-$adminEmail = Read-PlainValue 'E-mail do administrador local' 'COCKPIT_ADMIN_EMAIL'
-$adminPassword = Read-SecretValue 'Senha do administrador local' 'COCKPIT_ADMIN_PASSWORD'
+$adminName = Read-PlainValue 'Local administrator name' 'COCKPIT_ADMIN_NAME'
+$adminEmail = Read-PlainValue 'Local administrator email' 'COCKPIT_ADMIN_EMAIL'
+$adminPassword = Read-SecretValue 'Local administrator password' 'COCKPIT_ADMIN_PASSWORD'
 if ([string]::IsNullOrWhiteSpace($adminName) -or [string]::IsNullOrWhiteSpace($adminEmail) -or $adminPassword.Length -lt 12) {
-  throw 'Informe nome, e-mail e uma senha de pelo menos 12 caracteres para o administrador local.'
+  throw 'Enter a name, email, and a password of at least 12 characters for the local administrator.'
 }
 $adminHash = Get-PasswordHash $adminPassword
 $admin = @{ name=$adminName.Trim(); email=$adminEmail.Trim().ToLowerInvariant(); algorithm=$adminHash.algorithm; iterations=$adminHash.iterations; salt=$adminHash.salt; hash=$adminHash.hash } | ConvertTo-Json -Compress
 [IO.File]::WriteAllText((Join-Path $secretsPath 'admin.json'), $admin + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
 if ($AdminOnly) {
   icacls $runtimePath /inheritance:r /grant:r "$env:USERNAME`:(OI)(CI)F" | Out-Null
-  Write-Output 'Administrador local configurado.'
+  Write-Output 'Local administrator configured.'
   exit 0
 }
-$moonshotKey = Read-SecretValue 'Chave Moonshot/Kimi (Enter para configurar depois)' 'MOONSHOT_API_KEY'
-$pexelsKey = Read-SecretValue 'Chave Pexels (Enter para configurar depois)' 'PEXELS_API_KEY'
-$uploadPostKey = Read-SecretValue 'Chave Upload-Post (Enter para configurar depois)' 'UPLOAD_POST_API_KEY'
-$uploadPostUser = if ($NonInteractive) { [Environment]::GetEnvironmentVariable('UPLOAD_POST_USERNAME') } else { Read-Host 'Usuário Upload-Post (Enter para configurar depois)' }
+$moonshotKey = Read-SecretValue 'Moonshot/Kimi key (press Enter to configure later)' 'MOONSHOT_API_KEY'
+$pexelsKey = Read-SecretValue 'Pexels key (press Enter to configure later)' 'PEXELS_API_KEY'
+$uploadPostKey = Read-SecretValue 'Upload-Post key (press Enter to configure later)' 'UPLOAD_POST_API_KEY'
+$uploadPostUser = if ($NonInteractive) { [Environment]::GetEnvironmentVariable('UPLOAD_POST_USERNAME') } else { Read-Host 'Upload-Post username (press Enter to configure later)' }
 
 [IO.File]::WriteAllText((Join-Path $secretsPath 'mpt_api_key.txt'), $mptKey + [Environment]::NewLine)
 $toml = @"
@@ -84,4 +84,4 @@ edge_tts_timeout = 30
 "@
 [IO.File]::WriteAllText((Join-Path $mptPath 'config.toml'), $toml, [Text.UTF8Encoding]::new($false))
 icacls $runtimePath /inheritance:r /grant:r "$env:USERNAME`:(OI)(CI)F" | Out-Null
-Write-Output 'Configuração local criada. Execute: docker compose up -d --wait'
+Write-Output 'Local configuration created. Run: docker compose up -d --wait'

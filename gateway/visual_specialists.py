@@ -27,13 +27,13 @@ def main_module():
 
 def material_root(item_id: str) -> Path:
     if not re.fullmatch(r"[0-9a-f-]{36}", item_id):
-        raise HTTPException(status_code=422, detail="Identificador de geração inválido.")
+        raise HTTPException(status_code=422, detail="Invalid generation identifier.")
     return main_module().DATA_DIR / "curated_materials" / item_id
 
 
 def turbo_material_url(item_id: str, filename: str) -> str:
     if not re.fullmatch(r"[a-z0-9_-]+\.(mp4|jpg|jpeg|png|webp)", filename):
-        raise HTTPException(status_code=422, detail="Nome de material inválido.")
+        raise HTTPException(status_code=422, detail="Invalid material name.")
     return f"/MoneyPrinterTurbo/storage/local_videos/curated/{item_id}/{filename}"
 
 
@@ -152,7 +152,7 @@ def aspect_matches(candidate: dict[str, Any], aspect: str) -> bool:
 async def download_candidate(candidate: dict[str, Any], item_id: str, scene_index: int, alternative_index: int) -> Path:
     url = candidate["url"]
     if not _safe_url(url):
-        raise HTTPException(status_code=502, detail="O banco retornou um endereço de mídia inválido.")
+        raise HTTPException(status_code=502, detail="The stock service returned an invalid media address.")
     extension = "jpg" if candidate["kind"] == "image" else "mp4"
     target = material_root(item_id) / f"scene{scene_index:03d}option{alternative_index}.{extension}"
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -163,7 +163,7 @@ async def download_candidate(candidate: dict[str, Any], item_id: str, scene_inde
                     from urllib.parse import urljoin
                     url = urljoin(url, response.headers.get("location", ""))
                     if not _safe_url(url):
-                        raise HTTPException(status_code=502, detail="Redirecionamento de mídia fora dos bancos permitidos.")
+                        raise HTTPException(status_code=502, detail="Media redirect is outside the allowed stock hosts.")
                     continue
                 response.raise_for_status()
                 size = 0
@@ -204,7 +204,7 @@ def sample_frame(path: Path, second: float = 0) -> bytes:
 def detect_black_segments(path: Path) -> list[str]:
     result = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(path), "-vf", "blackdetect=d=1.0:pix_th=0.08", "-an", "-f", "null", "-"], capture_output=True, text=True, timeout=900, check=False)
     if result.returncode:
-        raise ValueError("Não foi possível analisar quadros pretos no vídeo final.")
+        raise ValueError("Could not analyze black frames in the final video.")
     return re.findall(r"black_start:[^\r\n]+", result.stderr)
 
 
@@ -215,10 +215,10 @@ def inspect_audio(path: Path) -> dict[str, Any]:
         "silencedetect=noise=-45dB:d=3,volumedetect", "-f", "null", "-",
     ], capture_output=True, text=True, timeout=900, check=False)
     if result.returncode:
-        raise ValueError("Não foi possível medir o áudio do vídeo final.")
+        raise ValueError("Could not measure the final video's audio.")
     peak = re.search(r"max_volume:\s*(-?[\d.]+|[-+]?inf) dB", result.stderr)
     if not peak:
-        raise ValueError("A análise não retornou o volume do áudio.")
+        raise ValueError("The analysis did not return the audio volume.")
     peak_db = float(peak.group(1))
     silences = [float(value) for value in re.findall(r"silence_duration:\s*([\d.]+)", result.stderr)]
     longest = max(silences, default=0)
@@ -231,13 +231,13 @@ def vision_model() -> tuple[str, str, str]:
     m = main_module()
     provider, base_url, key, model = m.llm_config()
     if not key:
-        raise HTTPException(status_code=409, detail="Configure a chave do provedor de IA selecionado antes da curadoria visual.")
+        raise HTTPException(status_code=409, detail="Configure the selected AI provider key before visual curation.")
     if provider == "nvidia":
         capable = any(entry["id"] == model and entry["capabilities"].get("image") for entry in m.NVIDIA_MODELS)
     else:
         capable = "vision" in model.lower() or "kimi-k2.5" in model.lower()
     if not capable:
-        raise HTTPException(status_code=409, detail=f"O modelo configurado ({model}) não declara suporte a imagens. Selecione um modelo com visão no mesmo provedor.")
+        raise HTTPException(status_code=409, detail=f"The configured model ({model}) does not declare image support. Select a vision model from the same provider.")
     return base_url, key, model
 
 
@@ -245,7 +245,7 @@ async def judge_frame(frame: bytes, prompt: str) -> dict[str, Any]:
     m = main_module()
     base_url, key, model = vision_model()
     body = {"model": model, "messages": [{"role": "user", "content": [
-        {"type": "text", "text": prompt + '\nResponda apenas JSON: {"approved": true/false, "score": 0-100, "reason": "motivo observável"}.'},
+        {"type": "text", "text": prompt + '\nRespond with JSON only: {"approved": true/false, "score": 0-100, "reason": "observable reason"}.'},
         {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(frame).decode("ascii")}},
     ]}], "max_tokens": 300}
     try:
@@ -268,11 +268,11 @@ async def judge_frame(frame: bytes, prompt: str) -> dict[str, Any]:
         content = response.json()["choices"][0]["message"]["content"]
         verdict = m.parse_json_object(content)
         if type(verdict.get("approved")) is not bool or type(verdict.get("score")) not in (int, float) or not 0 <= verdict["score"] <= 100 or not isinstance(verdict.get("reason"), str):
-            raise ValueError("Resposta de visão incompleta")
+            raise ValueError("Incomplete vision response")
         return {"approved": bool(verdict["approved"]) and float(verdict["score"]) >= 70, "score": float(verdict["score"]), "reason": verdict["reason"][:500]}
     except (httpx.HTTPError, KeyError, ValueError, TypeError) as exc:
         status = f" HTTP {exc.response.status_code}" if isinstance(exc, httpx.HTTPStatusError) else ""
-        raise HTTPException(status_code=502, detail=f"O modelo de visão configurado não avaliou a imagem: {type(exc).__name__}{status}.") from exc
+        raise HTTPException(status_code=502, detail=f"The configured vision model did not evaluate the image: {type(exc).__name__}{status}.") from exc
 
 
 async def review_script(script: str, subject: str, requirements: str, context: dict[str, Any], *, manual: bool) -> dict[str, Any]:
@@ -285,23 +285,24 @@ async def review_script(script: str, subject: str, requirements: str, context: d
     if not minimum <= seconds <= maximum:
         return {
             "approved": False,
-            "reason": f"A narração estimada ({seconds:.0f}s) está fora da duração selecionada ({minimum:.0f}-{maximum:.0f}s).",
+            "reason": f"The estimated narration ({seconds:.0f}s) is outside the selected duration ({minimum:.0f}-{maximum:.0f}s).",
             "estimated_seconds": round(seconds), "manual": manual,
             "narration": narration_diagnostics(script),
         }
-    prompt = (f"Atue como revisor editorial independente. Tema: {subject}. Idioma: {context['settings']['video_language']}. "
-              f"Canal/nicho: {context['channel']['name']} / {context['channel']['niche']}. Requisitos: {requirements}. "
-              f"Instruções editoriais: {context['editorial']}. Guia visual: {context.get('visual_guide', '')}. "
-              f"Duração estimada: {seconds:.0f}s; faixa permitida: {minimum:.0f}-{maximum:.0f}s. "
-              "Verifique primeiro se o conteúdo inteiro responde ao tema solicitado; reprove se o roteiro tratar de outro assunto, "
-              "mesmo que seja bem escrito. Depois verifique idioma, instruções, abertura, progressão, conclusão e coerência. "
-              "Revise cada frase quanto a ortografia, acentuação, gramática, concordância e pontuação no idioma indicado. "
-              "Não aprove erros linguísticos; indique no motivo o trecho e a correção necessária para que o roteiro seja refeito. "
+    prompt = (f"Act as an independent editorial reviewer. Topic: {subject}. Language: {context['settings']['video_language']}. "
+              f"Channel/niche: {context['channel']['name']} / {context['channel']['niche']}. Requirements: {requirements}. "
+              f"Editorial instructions: {context['editorial']}. Visual guide: {context.get('visual_guide', '')}. "
+              f"Estimated duration: {seconds:.0f}s; allowed range: {minimum:.0f}-{maximum:.0f}s. "
+              "First check that the whole piece answers the requested topic; reject it if the script is about something else, "
+              "even if it is well written. Then check language, instructions, opening, progression, ending, and coherence. "
+              "Review every sentence for spelling, accents, grammar, agreement, and punctuation in the indicated language. "
+              "Do not approve language errors; name the passage and the correction needed so the script can be rewritten. "
+              "The narration, title, and any metadata must stay in the channel language above. "
               + writing_brief(context["format"]) + " "
-              "Não reescreva texto manual. Responda JSON com approved boolean e reason string. Roteiro:\n" + script[:40000])
-    result = await m.llm_json_object(prompt, task="json", max_tokens=450, label="revisão editorial")
+              "Do not rewrite manual text. Respond with JSON containing an approved boolean and a reason string. Script:\n" + script[:40000])
+    result = await m.llm_json_object(prompt, task="json", max_tokens=450, label="editorial review")
     approved = result.get("approved") is True
-    reason = str(result.get("reason") or "Revisão editorial sem justificativa.")[:600]
+    reason = str(result.get("reason") or "Editorial review without a justification.")[:600]
     return {"approved": approved, "reason": reason, "estimated_seconds": round(seconds), "manual": manual,
             "narration": narration_diagnostics(script)}
 
@@ -309,17 +310,18 @@ async def review_script(script: str, subject: str, requirements: str, context: d
 async def proofread_script(script: str, language: str) -> dict[str, Any]:
     """Correct only language errors before this exact text feeds TTS and subtitles."""
     result = await main_module().llm_json_object(
-        f"Atue como revisor ortográfico e gramatical. Revise este roteiro no idioma {language}. "
-        "Corrija ortografia, acentuação, gramática, concordância e pontuação. Preserve integralmente o sentido, "
-        "os fatos, a ordem, o tom, o tamanho aproximado e as quebras de parágrafo; não acrescente, resuma ou reescreva ideias. "
-        "Use formas naturais e inequívocas para a voz e para a legenda. Se já estiver correto, devolva o texto sem alterações. "
-        'Responda JSON: {"script": "roteiro integral revisado", "corrections": ["descrições curtas"]}.\nRoteiro:\n'
+        f"Act as a spelling and grammar reviewer. Review this script in {language}. "
+        "Correct spelling, accents, grammar, agreement, and punctuation. Preserve the meaning, "
+        "facts, order, tone, approximate length, and paragraph breaks; do not add, summarize, or rewrite ideas. "
+        "Use natural, unambiguous forms for the voice and the captions. If it is already correct, return the text unchanged. "
+        "Keep the script in the language above; do not translate it. "
+        'Respond with JSON: {"script": "full reviewed script", "corrections": ["short descriptions"]}.\nScript:\n'
         + script[:40000],
-        task="json", max_tokens=4096, label="revisão ortográfica",
+        task="json", max_tokens=4096, label="spelling review",
     )
     corrected = str(result.get("script") or "").strip()
     if not corrected:
-        raise HTTPException(status_code=502, detail="O agente ortográfico não devolveu o roteiro revisado.")
+        raise HTTPException(status_code=502, detail="The spelling agent did not return the reviewed script.")
     corrections = result.get("corrections")
     return {"script": corrected, "changed": corrected != script.strip(),
             "corrections": [str(value)[:200] for value in corrections[:10]] if isinstance(corrections, list) else []}
@@ -335,18 +337,18 @@ def choose_scene_material(scene: dict[str, Any], used: set[str] | None = None) -
         ))
         scene["selected"] = selected["id"]
         discarded = [
-            {"id": candidate["id"], "reason": candidate.get("reason") or ("pontuação menor ou clipe repetido" if candidate.get("status") == "approved" else "rejeitado na curadoria")}
+            {"id": candidate["id"], "reason": candidate.get("reason") or ("lower score or repeated clip" if candidate.get("status") == "approved" else "rejected in curation")}
             for candidate in scene["candidates"] if candidate["id"] != selected["id"]
         ][:5]
-        motion = "movimento de vídeo" if selected.get("kind") == "video" else "imagem estática"
-        provider = selected.get("provider") or "banco de stock"
+        motion = "video motion" if selected.get("kind") == "video" else "still image"
+        provider = selected.get("provider") or "stock library"
         scene["selection"] = {
             "chosen_id": selected["id"], "score": selected.get("score"), "kind": selected.get("kind"),
-            "provider": provider, "cost": "gratuito", "discarded": discarded,
+            "provider": provider, "cost": "free", "discarded": discarded,
         }
         scene["selection_reason"] = (
-            f"Relevância {float(selected.get('score') or 0):.0f}, {motion}, stock gratuito ({provider}). "
-            + ("Descartados: " + ", ".join(f"{item['id']} ({item['reason']})" for item in discarded[:3]) if discarded else "Nenhuma alternativa restante.")
+            f"Relevance {float(selected.get('score') or 0):.0f}, {motion}, free stock ({provider}). "
+            + ("Discarded: " + ", ".join(f"{item['id']} ({item['reason']})" for item in discarded[:3]) if discarded else "No alternatives left.")
         )
         scene["selection"]["reason"] = scene["selection_reason"]
 
@@ -361,12 +363,12 @@ async def curate_scene(item_id: str, index: int, chunk: str, query: str, context
         if search_index:
             try:
                 replacement = await main_module().llm_json_object(
-                    f"Tema do vídeo: {context.get('subject', '')}. Narração do corte: {chunk}. "
-                    f"A busca anterior '{query}' só encontrou cenas rejeitadas. "
-                    "Escreva uma busca visual alternativa em inglês, com 2 a 8 palavras, "
-                    "que represente diretamente a narração. Sem conceitos abstratos nem ações alheias ao trecho. "
-                    'Responda apenas JSON: {"query": "visual stock search"}.',
-                    task="json", max_tokens=128, label="busca visual alternativa",
+                    f"Video topic: {context.get('subject', '')}. Narration of this cut: {chunk}. "
+                    f"The previous search '{query}' found only rejected scenes. "
+                    "Write an alternative visual search in English, with 2 to 8 words, "
+                    "that directly represents the narration. No abstract concepts or actions unrelated to the passage. "
+                    'Respond with JSON only: {"query": "visual stock search"}.',
+                    task="json", max_tokens=128, label="alternative visual search",
                 )
                 replacement = str(replacement.get("query") or "").strip()
                 if not replacement or len(replacement) > 120 or replacement.casefold() == query.casefold():
@@ -389,13 +391,13 @@ async def curate_scene(item_id: str, index: int, chunk: str, query: str, context
                 path = await download_candidate(candidate, item_id, index, len(scene["candidates"]))
                 info = await asyncio.to_thread(probe, path)
                 if info["width"] < 500 or info["height"] < 500 or not aspect_matches(info, aspect) or (candidate["kind"] == "video" and info["duration"] < clip_seconds):
-                    record["reason"] = "Resolução, proporção ou duração insuficiente."
+                    record["reason"] = "Resolution, aspect ratio, or duration is insufficient."
                 else:
-                    prompt = (f"Avalie o quadro REAL de um material de banco para um vídeo sobre {context['channel']['niche']}. "
-                              f"Tema: {context.get('subject', '')}. Narração deste corte: {chunk}. "
-                              f"Estilo visual e elementos proibidos: {context.get('visual_guide', '')}. "
-                              "Aprove somente se o conteúdo visível corresponder ao assunto concreto deste trecho e ao estilo. "
-                              "Rejeite coincidências superficiais, marcas indesejadas e cenas fora do tema.")
+                    prompt = (f"Evaluate the REAL frame of stock material for a video about {context['channel']['niche']}. "
+                              f"Topic: {context.get('subject', '')}. Narration of this cut: {chunk}. "
+                              f"Visual style and forbidden elements: {context.get('visual_guide', '')}. "
+                              "Approve only if the visible content matches this passage's concrete subject and the style. "
+                              "Reject superficial matches, unwanted brands, and off-topic scenes.")
                     frame = await asyncio.to_thread(sample_frame, path, info["duration"] / 2 if candidate["kind"] == "video" else 0)
                     verdict = await judge_frame(frame, prompt)
                     record.update(verdict)
@@ -419,10 +421,10 @@ def approved_materials(item_id: str, scenes: list[dict[str, Any]]) -> list[dict[
     for scene in scenes:
         selected = next((candidate for candidate in scene["candidates"] if candidate["id"] == scene.get("selected") and candidate.get("status") == "approved"), None)
         if not selected:
-            raise HTTPException(status_code=409, detail=f"O trecho {scene['index'] + 1} está sem material visual aprovado.")
+            raise HTTPException(status_code=409, detail=f"Passage {scene['index'] + 1} has no approved visual material.")
         filename = selected.get("filename")
         if not filename or not (material_root(item_id) / filename).is_file():
-            raise HTTPException(status_code=409, detail=f"O material aprovado do trecho {scene['index'] + 1} não está disponível.")
+            raise HTTPException(status_code=409, detail=f"The approved material for passage {scene['index'] + 1} is not available.")
         result.append({"provider": "local", "url": turbo_material_url(item_id, filename), "duration": math.ceil(float(selected["duration"]))})
     return result
 
@@ -430,7 +432,7 @@ def approved_materials(item_id: str, scenes: list[dict[str, Any]]) -> list[dict[
 async def inspect_final_video(path: Path, scenes: list[dict[str, Any]], settings: dict[str, Any], script: str,
                               duration_bounds: tuple[float, float] | None = None) -> dict[str, Any]:
     if not scenes:
-        raise ValueError("Não há cenas aprovadas para comparar com a montagem.")
+        raise ValueError("There are no approved scenes to compare with the edit.")
     info = await asyncio.to_thread(probe, path)
     expected = main_module().narration_seconds(script, float(settings["voice_rate"]),
                                                 str(settings.get("voice_name") or ""))
@@ -447,15 +449,15 @@ async def inspect_final_video(path: Path, scenes: list[dict[str, Any]], settings
     failed_checks = [name for name, passed in checks.items() if not passed]
     observations = []
     if not all(checks.values()):
-        reason = (f"O vídeo final tem {info['duration']:.1f} s; o formato exige entre {minimum:.0f} e {maximum:.0f} s."
-                  if not checks["duration"] else "Proporção, áudio baixo, silêncio excessivo ou trechos pretos incompatíveis.")
+        reason = (f"The final video is {info['duration']:.1f} s; the format requires between {minimum:.0f} and {maximum:.0f} s."
+                  if not checks["duration"] else "Aspect ratio, low audio, excessive silence, or incompatible black sections.")
         return {"approved": False, "checks": checks, "failed_checks": failed_checks,
                 "measurements": measurements, "audio_analysis": audio,
                 "black_segments": black_segments, "observations": observations, "reason": reason}
     async def review_frame(index: int, scene: dict[str, Any]) -> dict[str, Any]:
         offset = min(info["duration"] - 0.2, (index + 0.5) * info["duration"] / len(scenes))
         frame = await asyncio.to_thread(sample_frame, path, offset)
-        verdict = await judge_frame(frame, f"Revisor de montagem. Quadro do trecho {index + 1}/{len(scenes)}. Narração esperada: {scene['narration']}. Material aprovado: {next(c['source_page'] for c in scene['candidates'] if c['id'] == scene['selected'])}. Verifique imagem coerente, sem tela preta, ordem da cena e legenda legível. Informe apenas o que o quadro permite observar; não presuma sincronia de áudio.")
+        verdict = await judge_frame(frame, f"Edit reviewer. Frame of passage {index + 1}/{len(scenes)}. Expected narration: {scene['narration']}. Approved material: {next(c['source_page'] for c in scene['candidates'] if c['id'] == scene['selected'])}. Check for a coherent image, no black screen, scene order, and readable captions. Report only what the frame lets you observe; do not assume audio sync.")
         return {"scene": index + 1, **verdict}
     for start in range(0, len(scenes), 3):
         observations.extend(await asyncio.gather(*(review_frame(index, scenes[index]) for index in range(start, min(start + 3, len(scenes))))))
@@ -463,4 +465,4 @@ async def inspect_final_video(path: Path, scenes: list[dict[str, Any]], settings
     return {"approved": approved, "checks": checks,
             "failed_checks": failed_checks + (["visual_scenes"] if any(not entry["approved"] for entry in observations) else []),
             "measurements": measurements, "audio_analysis": audio, "black_segments": black_segments, "observations": observations,
-            "reason": "Montagem aprovada nas amostras verificadas." if approved else "Uma ou mais cenas não passaram na revisão visual."}
+            "reason": "Edit approved on the checked samples." if approved else "One or more scenes failed the visual review."}

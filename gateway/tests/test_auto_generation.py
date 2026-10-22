@@ -101,7 +101,7 @@ class AutoGenerationTests(unittest.TestCase):
             script = asyncio.run(auto_generation._generate_script("Morning sunlight", "Explain circadian rhythm", context, ""))
         self.assertEqual(len(prompts), 3)
         self.assertIn(str(round(budget["minimum_words"] + (budget["maximum_words"] - budget["minimum_words"]) * 0.8)), prompts[1])
-        self.assertIn(f"{budget['maximum_words']} palavras", prompts[2])
+        self.assertIn(f"{budget['maximum_words']} words", prompts[2])
         self.assertEqual(len(script.split()), 158)
         auto_generation._validate_script(script, context)
 
@@ -120,7 +120,7 @@ class AutoGenerationTests(unittest.TestCase):
                 "jejum intermitente", "Explique com precisão", context, "",
                 editorial_feedback="O roteiro anterior falava de sono, não do tema pedido.",
             ))
-        self.assertIn("reescreva o roteiro do zero", observed["prompt"].lower())
+        self.assertIn("rewrite the script from scratch", observed["prompt"].lower())
         self.assertIn("jejum intermitente", observed["prompt"].lower())
         self.assertNotIn("acordar sob a luz da manhã", observed["prompt"].lower())
         self.assertTrue(script.startswith("jejum"))
@@ -223,7 +223,7 @@ class AutoGenerationTests(unittest.TestCase):
         with patch.object(main, "llm_json_object", new=fake_json):
             script = asyncio.run(auto_generation._generate_script("Morning sunlight", "Explain circadian rhythm", context, ""))
         self.assertEqual(len(prompts), 2)
-        self.assertIn("148 palavras", prompts[-1])
+        self.assertIn("148 words", prompts[-1])
         self.assertEqual(len(script.split()), 158)
         auto_generation._validate_script(script, context)
 
@@ -242,7 +242,7 @@ class AutoGenerationTests(unittest.TestCase):
                 asyncio.run(auto_generation._generate_script("Morning sunlight", "Explain circadian rhythm", context, ""))
         self.assertEqual(len(calls), 3)
         self.assertIn("57", str(raised.exception.detail))
-        self.assertIn("entre 60 e 66 s", str(raised.exception.detail))
+        self.assertIn("between 60 and 66 s", str(raised.exception.detail))
 
     def test_jenny_voice_uses_measured_faster_narration_rate(self):
         self.add_channel("en-short", "youtube", "en-US", "English Short", "Natural voice", 4)
@@ -323,11 +323,11 @@ class AutoGenerationTests(unittest.TestCase):
             self.calls.append(prompt)
             if '"topic"' in prompt:
                 return json.dumps({"topic": "Tema " + ("TikTok" if "English channel" in prompt else "YouTube")})
-            if "chave summary" in prompt:
+            if "key summary" in prompt:
                 return json.dumps({"summary": "ideias principais"})
             if '"requirements"' in prompt:
                 return json.dumps({"requirements": "Tom adequado ao canal"})
-            if '"script": "narração"' in prompt:
+            if '"script": "narration"' in prompt:
                 self.assertIn("Natureza", prompt)
                 self.assertIn("Prompt do projeto", prompt)
                 return json.dumps({"script": " ".join(["palavra"] * (240 if "en-US" in prompt else 150))})
@@ -427,7 +427,7 @@ class AutoGenerationTests(unittest.TestCase):
             return None
 
         async def rate_limited(*_args):
-            raise HTTPException(status_code=502, detail="O modelo de visão configurado não avaliou a imagem: HTTPStatusError HTTP 429.")
+            raise HTTPException(status_code=502, detail="The configured vision model did not evaluate the image: HTTPStatusError HTTP 429.")
 
         with patch.object(main, "download_turbo_file", new=download), \
              patch.object(auto_generation.specialists, "inspect_final_video", new=rate_limited):
@@ -484,7 +484,7 @@ class AutoGenerationTests(unittest.TestCase):
         auto_generation.create_auto_batch("project", request)
 
         async def forbidden(*args, **kwargs):
-            raise AssertionError("Campos manuais não exigem IA")
+            raise AssertionError("Manual fields do not require AI")
 
         async def fake_turbo(method, path, **kwargs):
             self.assertEqual(kwargs["json"]["video_terms"], "my footage")
@@ -507,14 +507,14 @@ class AutoGenerationTests(unittest.TestCase):
         auto_generation.create_auto_batch("project", request)
 
         async def forbidden(*args, **kwargs):
-            raise AssertionError("O render não deve começar acima do limite")
+            raise AssertionError("Rendering must not start above the limit")
 
         with patch.object(main, "turbo_request", new=forbidden):
             asyncio.run(auto_generation.process_next_item("worker"))
         with main.database() as db:
             item = db.execute("SELECT state, error, job_id FROM generation_batch_items").fetchone()
         self.assertEqual(item["state"], "failed")
-        self.assertIn("limite de 80", item["error"])
+        self.assertIn("limit of 80", item["error"])
         self.assertIsNone(item["job_id"])
 
     def test_expired_pre_submission_lease_resumes_saved_stages(self):
@@ -550,7 +550,7 @@ class AutoGenerationTests(unittest.TestCase):
                        (main.now(), main.now(), items[0]["id"]))
             db.execute("UPDATE generation_batch_items SET state='submitted', stage='rendering', job_id='done-job', generated_json=? WHERE id=?",
                        (json.dumps({"subject": "Tema pronto", "requirements": "Regra", "script": "Texto", "terms": "forest"}), items[0]["id"]))
-            db.execute("UPDATE generation_batch_items SET state='failed', stage='failed', error='Falha do provedor' WHERE id=?", (items[1]["id"],))
+            db.execute("UPDATE generation_batch_items SET state='failed', stage='failed', error='Provider failure' WHERE id=?", (items[1]["id"],))
 
         async def no_reconcile(_job_id):
             return {}
@@ -560,7 +560,7 @@ class AutoGenerationTests(unittest.TestCase):
         self.assertEqual(result["status"], "partial_failure")
         self.assertEqual({item["state"] for item in result["items"]}, {"submitted", "failed"})
         self.assertTrue(any(item["generated"].get("subject") == "Tema pronto" for item in result["items"]))
-        self.assertTrue(any(item["error"] == "Falha do provedor" for item in result["items"]))
+        self.assertTrue(any(item["error"] == "Provider failure" for item in result["items"]))
 
     def test_final_duration_review_queues_one_repair_and_exposes_current_item(self):
         batch = auto_generation.create_auto_batch("project", self.payload(channel_ids=["yt"]))
@@ -626,7 +626,7 @@ class AutoGenerationTests(unittest.TestCase):
         generated = {"subject": "Sunlight", "requirements": "Explain accurately", "repair_previous_script": "sun " * 160,
                      "repair_plan": {"duration_seconds": 56.4}}
         async def respond(prompt, **_kwargs):
-            self.assertIn("160 palavras", prompt)
+            self.assertIn("160 words", prompt)
             self.assertIn("en-US-JennyNeural", prompt)
             return {"script": "sun " * 179}
         with patch.object(main, "llm_json_object", new=respond):
@@ -648,7 +648,7 @@ class AutoGenerationTests(unittest.TestCase):
         self.assertEqual(len(prompts), 3)
         self.assertIn("59.3s", prompts[1])
         budget = main.script_duration_budget("short", 4, 1.0, "en-US-JennyNeural")
-        self.assertIn(f"{budget['maximum_words']} palavras", prompts[1])
+        self.assertIn(f"{budget['maximum_words']} words", prompts[1])
         self.assertGreaterEqual(main.narration_seconds(script, 1.0, "en-US-JennyNeural"), 60)
 
     def test_manual_script_is_not_changed_by_automatic_duration_repair(self):

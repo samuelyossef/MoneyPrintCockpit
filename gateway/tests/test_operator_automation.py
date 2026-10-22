@@ -192,7 +192,7 @@ class OperatorAutomationTests(unittest.TestCase):
         upload.assert_not_called()
         with self.main.database() as db:
             self.assertEqual(db.execute("SELECT state FROM video_jobs WHERE id='j'").fetchone()[0], "completed")
-            self.assertIn("revisão final", db.execute("SELECT paused_reason FROM operators WHERE channel_id='yt'").fetchone()[0])
+            self.assertIn("final review", db.execute("SELECT paused_reason FROM operators WHERE channel_id='yt'").fetchone()[0])
 
     def test_old_pending_job_is_not_published_after_opt_in(self) -> None:
         self.configure()
