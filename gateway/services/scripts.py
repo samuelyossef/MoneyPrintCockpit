@@ -177,7 +177,9 @@ async def long_script_events(input: m.LongScriptInput) -> AsyncIterator[tuple[st
     # whole instruction set here - the outline call must stay valid JSON and each section call must
     # stay narration-only, or the multi-step pipeline breaks. It's folded in as an extra, higher-weight
     # instruction on every call instead, same mechanism as `requirements` but framed as a standing rule.
-    style = (f" Instruções de estilo do sistema, siga em tudo o que escrever: {system_prompt}." if system_prompt else "")
+    persona = input.persona.strip()
+    style = (f" Identidade e tom do canal, siga em tudo o que escrever: {persona}." if persona else "")
+    style += (f" Instruções de estilo do sistema, siga em tudo o que escrever: {system_prompt}." if system_prompt else "")
     style += " " + writing_brief("long")
     if input.proposal.strip():
         style += " Proposta editorial confirmada, siga este ângulo sem copiar fontes: " + input.proposal.strip()
@@ -343,7 +345,8 @@ async def visual_terms(subject: str, script: str, clip_seconds: float, voice_rat
         "Para cada trecho, gere uma busca de banco de vídeos em INGLÊS (1 a 3 palavras) que mostre algo filmável e "
         "concreto do que é dito naquele trecho: uma cena, objeto, ação ou lugar. Nada abstrato, sem nomes próprios, "
         "sem texto na tela. Os termos devem ser diferentes entre si - não repita o tema geral em todos.\n"
-        f'Responda apenas JSON: {{"terms": lista com exatamente {len(chunks)} strings, na mesma ordem dos trechos}}',
+        + (f"Estilo visual do canal, escolha filmagens compatíveis: {context[:1000]}.\n" if context else "")
+        + f'Responda apenas JSON: {{"terms": lista com exatamente {len(chunks)} strings, na mesma ordem dos trechos}}',
         label="as palavras-chave das filmagens",
     )
     raw_terms = [str(term).strip() for term in generated.get("terms") or [] if str(term).strip()]

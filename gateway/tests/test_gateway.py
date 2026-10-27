@@ -208,6 +208,24 @@ class GatewayContractTests(unittest.TestCase):
         self.assertEqual(self.main.generation_defaults()["video_source"], "pexels")
         self.assertEqual(self.main.generation_defaults("short")["video_source"], "pexels")
 
+    def test_thumbnail_path_is_safe_for_legacy_job_ids(self):
+        path = self.main.thumbnail_path("../outside")
+        self.assertEqual(path.parent, self.main.DATA_DIR / "thumbnails")
+        self.assertEqual(len(path.stem), 64)
+
+    def test_nvidia_image_generation_uses_commercial_schnell_parameters(self):
+        from unittest.mock import AsyncMock
+        config = self.main.DATA_DIR / "moneyprinter" / "config.toml"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text('nvidia_api_key = "test-key"\n', encoding="utf-8")
+        response = type("Response", (), {"status_code": 200, "json": lambda _self: {"artifacts": [{"finishReason": "SUCCESS", "base64": "aW1hZ2U="}]}})()
+        with patch.object(self.main, "send_with_retry", new=AsyncMock(return_value=response)) as send:
+            image = asyncio.run(self.main.generate_image("scene", 1344, 768))
+        self.assertEqual(image, b"image")
+        self.assertEqual(send.call_args.args[2], "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-schnell")
+        self.assertEqual(send.call_args.kwargs["json"]["steps"], 4)
+        self.assertEqual(send.call_args.kwargs["json"]["cfg_scale"], 0)
+
     def test_validate_provider_key_reports_rejection(self):
         from unittest.mock import AsyncMock, patch
         fake_response = type("FakeResponse", (), {"status_code": 401})()
@@ -250,6 +268,8 @@ class GatewayContractTests(unittest.TestCase):
             "moonshot": True, "nvidia": False, "pexels": True, "pixabay": False, "coverr": False, "upload_post": False,
             "edge_tts": True, "moonshot_model": "", "llm_provider": "moonshot",
             "nvidia_text_model": self.main.NVIDIA_DEFAULT_TEXT_MODEL,
+            "nvidia_vision_model": self.main.NVIDIA_DEFAULT_VISION_MODEL,
+            "nvidia_image_model": self.main.NVIDIA_DEFAULT_IMAGE_MODEL,
         })
         self.assertTrue(response["restart_required"])
         self.assertTrue(response["turbo_pending_restart"])
@@ -546,6 +566,20 @@ class GatewayContractTests(unittest.TestCase):
         self.main.put_metadata("job-1", self.main.MetadataInput(title="Título", description="d", tags="a,b,c"))
         self.assertEqual(self.main.approve_job("job-1")["state"], "approved")
 
+    def test_thumbnail_generation_uses_associated_channel_and_persists_artifact(self):
+        from unittest.mock import AsyncMock
+        channel_id = self._channel()
+        self._completed_job(channel_id)
+        with self.main.database() as db:
+            db.execute("UPDATE channels SET visual_style='cinematic blue', thumbnail_prompt='Close-up' WHERE id=?", (channel_id,))
+        with patch.object(self.main, "generate_image", new=AsyncMock(return_value=b"jpeg-bytes")) as generate:
+            job = asyncio.run(self.main.create_thumbnail("job-1", self.main.ThumbnailInput(channel_id=channel_id)))
+        self.assertIsNotNone(job["thumbnail_updated_at"])
+        self.assertTrue(self.main.thumbnail_path("job-1").is_file())
+        prompt = generate.await_args.args[0]
+        self.assertIn("Close-up", prompt)
+        self.assertIn("cinematic blue", prompt)
+
     def test_job_language_follows_the_youtube_channel_not_the_stale_column(self):
         # Regression: video_jobs.channel_id is never written by create_job (only by the
         # pre-multi-channel migration backfill), so job_language must resolve the channel
@@ -612,7 +646,7 @@ class GatewayContractTests(unittest.TestCase):
             job = asyncio.run(self.main.publish_job("job-1", self.main.PublishInput(confirm_not_uploaded=True)))
         self.assertEqual(credentials.call_args.args[0], "ch-1")
         self.assertEqual(upload.call_args.args[2]["title"], "Título")
-        self.assertEqual(len(upload.call_args.args), 5)
+        self.assertEqual(upload.call_args.args[5], self.main.thumbnail_path("job-1"))
         self.assertEqual(job["publications"][0]["external_id"], "yt123")
         self.assertEqual(self._publication()["state"], "published")
         self.assertEqual(self._publication()["attempts"], 2)
@@ -649,6 +683,26 @@ class GatewayContractTests(unittest.TestCase):
         self.assertEqual((channels[0]["name"], channels[0]["niche"], channels[0]["language"]), ("Novo Nome", "fatos", "pt-BR"))
         asyncio.run(self.main.delete_channel(first))
         self.assertNotEqual(self.main.save_youtube_channel(info, {}), first)  # a deleted channel can be connected again
+
+    def test_youtube_channel_creation_keeps_personalization(self):
+        info = {"external_id": "UC-persona", "name": "Canal", "handle": "@canal", "stats": {}}
+        channel_id = self.main.save_youtube_channel(info, {
+            "persona": "Narrador direto", "visual_style": "cinematic blue", "image_source": "ai_images",
+            "thumbnail_prompt": "Close-up e alto contraste",
+        })
+        with self.main.database() as db:
+            channel = self.main.row_as_channel(db.execute("SELECT * FROM channels WHERE id=?", (channel_id,)).fetchone())
+        self.assertEqual((channel["persona"], channel["visual_style"], channel["image_source"], channel["thumbnail_prompt"]),
+                         ("Narrador direto", "cinematic blue", "ai_images", "Close-up e alto contraste"))
+
+    def test_tiktok_channel_creation_keeps_personalization(self):
+        with patch.object(self.main, "upload_post_request", new=self._async_return({})), \
+                patch.object(self.main, "upload_post_connect_link", new=self._async_return("https://upload.example.test/login")):
+            result = asyncio.run(self.main.tiktok_connect(self.main.ChannelConnect(
+                persona="Narrador direto", visual_style="cinematic blue", image_source="stock", thumbnail_prompt="Close-up",
+            )))
+        self.assertEqual((result["channel"]["persona"], result["channel"]["visual_style"], result["channel"]["image_source"], result["channel"]["thumbnail_prompt"]),
+                         ("Narrador direto", "cinematic blue", "stock", "Close-up"))
 
     def test_tiktok_publish_waits_for_upload_post_then_completes(self):
         from unittest.mock import patch

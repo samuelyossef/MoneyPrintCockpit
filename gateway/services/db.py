@@ -320,6 +320,11 @@ def _initialize_database_locked() -> None:
             db.execute("UPDATE channels SET video_defaults_json=?", (json.dumps(defaults),))
         if "visual_guides_json" not in channel_columns:
             db.execute("ALTER TABLE channels ADD COLUMN visual_guides_json TEXT NOT NULL DEFAULT '{}'")
+        channel_columns = {column["name"] for column in db.execute("PRAGMA table_info(channels)")}
+        for column in ("persona", "visual_style", "image_source", "thumbnail_prompt"):
+            if column not in channel_columns:
+                db.execute(f"ALTER TABLE channels ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+        db.execute("CREATE TABLE IF NOT EXISTS job_reviews (job_id TEXT PRIMARY KEY REFERENCES video_jobs(id), value_json TEXT NOT NULL, created_at TEXT NOT NULL)")
         # Backfill format profiles from the old shared channel fields. Existing values in either
         # format are preserved, so this is safe to run on every startup.
         for row in db.execute("SELECT * FROM channels").fetchall():

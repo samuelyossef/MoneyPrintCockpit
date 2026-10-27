@@ -56,6 +56,9 @@ def patch_channel(channel_id: str, input: m.ChannelPatch) -> dict[str, Any]:
         )
     if "system_prompt" in fields:
         fields["system_prompt"] = fields["system_prompt"].strip()
+    for key in ("persona", "visual_style", "thumbnail_prompt"):
+        if key in fields:
+            fields[key] = fields[key].strip()
     if fields:
         m.update_channel(channel_id, **fields)
     with m.database() as db:
@@ -83,6 +86,7 @@ def youtube_connect(
     subtitle_enabled: bool = True, subtitle_position: str = "bottom", font_size: int = 56,
     text_fore_color: str = "#FFFFFF", stroke_color: str = "#000000", stroke_width: float = 1.5,
     publish_privacy: Literal["private", "public"] = "private", video_defaults: str = "", visual_guides: str = "",
+    persona: str = "", visual_style: str = "", image_source: Literal["", "stock", "ai_images"] = "", thumbnail_prompt: str = "",
 ) -> Any:
     from google_auth_oauthlib.flow import Flow
 
@@ -109,7 +113,8 @@ def youtube_connect(
     url, state = flow.authorization_url(access_type="offline", prompt="consent")
     m.oauth_flows[state] = (
         flow,
-        {"niche": niche[:200], "system_prompt": system_prompt.strip()[:4000], "publish_privacy": publish_privacy, "video_defaults": video_profile, "visual_guides": guides, **profile},
+        {"niche": niche[:200], "system_prompt": system_prompt.strip()[:4000], "publish_privacy": publish_privacy, "video_defaults": video_profile, "visual_guides": guides,
+         "persona": persona.strip()[:2000], "visual_style": visual_style.strip()[:1000], "image_source": image_source, "thumbnail_prompt": thumbnail_prompt.strip()[:1000], **profile},
         session["token_hash"],
     )
     return RedirectResponse(url)
@@ -150,8 +155,8 @@ async def tiktok_connect(input: m.ChannelConnect) -> dict[str, Any]:
     video_defaults = m.normalize_channel_video_defaults(input.video_defaults, fallback=m.channel_video_profile_fallback(profile), language=profile["language"])
     with m.database() as db:
         db.execute(
-            "INSERT INTO channels(id, platform, name, handle, external_id, status, niche, language, system_prompt, publish_privacy, voice_name, voice_rate, voice_volume, subtitle_enabled, subtitle_position, font_size, text_fore_color, stroke_color, stroke_width, video_defaults_json, visual_guides_json, created_at, updated_at) VALUES (?, 'tiktok', 'TikTok (aguardando login)', '', ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (channel_id, username, input.niche.strip(), profile["language"], input.system_prompt.strip(), input.publish_privacy, profile["voice_name"], profile["voice_rate"], profile["voice_volume"], int(profile["subtitle_enabled"]), profile["subtitle_position"], profile["font_size"], profile["text_fore_color"], profile["stroke_color"], profile["stroke_width"], json.dumps(video_defaults), json.dumps(visual_guides), m.now(), m.now()),
+            "INSERT INTO channels(id, platform, name, handle, external_id, status, niche, language, system_prompt, persona, visual_style, image_source, thumbnail_prompt, publish_privacy, voice_name, voice_rate, voice_volume, subtitle_enabled, subtitle_position, font_size, text_fore_color, stroke_color, stroke_width, video_defaults_json, visual_guides_json, created_at, updated_at) VALUES (?, 'tiktok', 'TikTok (aguardando login)', '', ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (channel_id, username, input.niche.strip(), profile["language"], input.system_prompt.strip(), input.persona.strip(), input.visual_style.strip(), input.image_source, input.thumbnail_prompt.strip(), input.publish_privacy, profile["voice_name"], profile["voice_rate"], profile["voice_volume"], int(profile["subtitle_enabled"]), profile["subtitle_position"], profile["font_size"], profile["text_fore_color"], profile["stroke_color"], profile["stroke_width"], json.dumps(video_defaults), json.dumps(visual_guides), m.now(), m.now()),
         )
         channel = m.row_as_channel(m.channel_row_or_404(db, channel_id))
     return {"channel": channel, "access_url": access_url}

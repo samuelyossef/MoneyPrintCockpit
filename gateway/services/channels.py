@@ -201,7 +201,7 @@ def conflicting_channel_profile_fields(channels: list[sqlite3.Row], format: Lite
 
 
 def row_as_channel(row: sqlite3.Row) -> dict[str, Any]:
-    result = {key: row[key] for key in ("id", "platform", "name", "handle", "external_id", "status", "niche", "language", "system_prompt", "publish_privacy", *m.CHANNEL_PROFILE_FIELDS, "created_at", "updated_at")}
+    result = {key: row[key] for key in ("id", "platform", "name", "handle", "external_id", "status", "niche", "language", "system_prompt", "persona", "visual_style", "image_source", "thumbnail_prompt", "publish_privacy", *m.CHANNEL_PROFILE_FIELDS, "created_at", "updated_at")}
     result["subtitle_enabled"] = bool(result["subtitle_enabled"])
     result["video_defaults"] = m.channel_video_defaults(row)
     result["visual_guides"] = json.loads(row["visual_guides_json"] or "{}")
@@ -277,8 +277,8 @@ def save_youtube_channel(info: dict[str, Any], options: dict[str, Any]) -> str:
         video_defaults = m.normalize_channel_video_defaults(options.get("video_defaults", {}), fallback=m.channel_video_profile_fallback(profile), language=profile["language"])
         channel_id = str(uuid4())
         db.execute(
-            "INSERT INTO channels(id, platform, name, handle, external_id, status, niche, language, system_prompt, publish_privacy, voice_name, voice_rate, voice_volume, subtitle_enabled, subtitle_position, font_size, text_fore_color, stroke_color, stroke_width, video_defaults_json, visual_guides_json, stats_json, created_at, updated_at) VALUES (?, 'youtube', ?, ?, ?, 'connected', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (channel_id, info["name"], info["handle"], info["external_id"], options.get("niche", ""), profile["language"], options.get("system_prompt", ""), options.get("publish_privacy", "private"), profile["voice_name"], profile["voice_rate"], profile["voice_volume"], int(profile["subtitle_enabled"]), profile["subtitle_position"], profile["font_size"], profile["text_fore_color"], profile["stroke_color"], profile["stroke_width"], json.dumps(video_defaults), json.dumps(m.normalize_visual_guides(options.get("visual_guides", {}))), json.dumps(info["stats"]), m.now(), m.now()),
+            "INSERT INTO channels(id, platform, name, handle, external_id, status, niche, language, system_prompt, persona, visual_style, image_source, thumbnail_prompt, publish_privacy, voice_name, voice_rate, voice_volume, subtitle_enabled, subtitle_position, font_size, text_fore_color, stroke_color, stroke_width, video_defaults_json, visual_guides_json, stats_json, created_at, updated_at) VALUES (?, 'youtube', ?, ?, ?, 'connected', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (channel_id, info["name"], info["handle"], info["external_id"], options.get("niche", ""), profile["language"], options.get("system_prompt", ""), options.get("persona", ""), options.get("visual_style", ""), options.get("image_source", ""), options.get("thumbnail_prompt", ""), options.get("publish_privacy", "private"), profile["voice_name"], profile["voice_rate"], profile["voice_volume"], int(profile["subtitle_enabled"]), profile["subtitle_position"], profile["font_size"], profile["text_fore_color"], profile["stroke_color"], profile["stroke_width"], json.dumps(video_defaults), json.dumps(m.normalize_visual_guides(options.get("visual_guides", {}))), json.dumps(info["stats"]), m.now(), m.now()),
         )
         return channel_id
 
@@ -322,7 +322,7 @@ def youtube_description(metadata: dict[str, Any]) -> str:
     return description[:5000]
 
 
-def youtube_upload(credentials: Any, video_path: Path, metadata: dict[str, Any], publish_at: datetime | None = None, publish_privacy: str = "private") -> str:
+def youtube_upload(credentials: Any, video_path: Path, metadata: dict[str, Any], publish_at: datetime | None = None, publish_privacy: str = "private", thumbnail: Path | None = None) -> str:
     from googleapiclient.discovery import build
     from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaFileUpload
@@ -349,7 +349,13 @@ def youtube_upload(credentials: Any, video_path: Path, metadata: dict[str, Any],
         if exc.resp.status < 500:
             raise m.PublishRejected(str(exc)) from exc
         raise
-    return response["id"]
+    video_id = response["id"]
+    if thumbnail and thumbnail.is_file():
+        try:
+            youtube.thumbnails().set(videoId=video_id, media_body=MediaFileUpload(str(thumbnail), mimetype="image/jpeg")).execute()
+        except Exception as exc:
+            m.logger.warning("Não foi possível definir a thumbnail do vídeo %s: %s", video_id, exc)
+    return video_id
 
 
 async def tiktok_upload(username: str, video_path: Path, metadata: dict[str, Any], publish_privacy: str = "private") -> tuple[str, str]:
@@ -451,7 +457,7 @@ async def publish_to_channel(job_id: str, channel: sqlite3.Row, video: Any, meta
     try:
         # ponytail: uploads run inside the request, one channel after another; move to a background task if long videos hit browser/proxy timeouts.
         if platform == "youtube":
-            external_id, state = await asyncio.to_thread(m.youtube_upload, credentials, video_path, metadata, auto_publish_at, "private" if auto_publish_at else channel["publish_privacy"]), "platform_scheduled" if auto_publish_at else "published"
+            external_id, state = await asyncio.to_thread(m.youtube_upload, credentials, video_path, metadata, auto_publish_at, "private" if auto_publish_at else channel["publish_privacy"], m.thumbnail_path(job_id)), "platform_scheduled" if auto_publish_at else "published"
         else:
             external_id, state = await m.tiktok_upload(channel["external_id"], video_path, metadata, channel["publish_privacy"])
     except m.PublishRejected as exc:

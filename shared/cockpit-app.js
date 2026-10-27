@@ -395,6 +395,7 @@
     collectChannel(rec);
     window.MoneyPrinterRuntime.saveChannel(rec.id, {
       niche: rec.niche, language: rec.language, system_prompt: rec.system_prompt || "", publish_privacy: rec.publish_privacy || "private",
+      persona: rec.persona || "", visual_style: rec.visual_style || "", image_source: rec.image_source || "", thumbnail_prompt: rec.thumbnail_prompt || "",
       video_defaults: rec.video_defaults, visual_guides: rec.visual_guides || { short: "", long: "" },
     })
       .then(() => { S.chEditing = 0; save(); renderView(); showToast("Canal salvo"); })

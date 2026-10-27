@@ -620,6 +620,25 @@ def _install_video_patch(video_module: ModuleType) -> None:
     video_module.concat_video_clips_with_ffmpeg = concat
 
 
+def _install_moviepy_encoding_patch(video_clip: type) -> None:
+    if getattr(video_clip, "_moneyprinter_encoding_installed", False):
+        return
+    original = video_clip.write_videofile
+    presets = {"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
+    preset = os.getenv("TURBO_X264_PRESET", "veryfast")
+    if preset not in presets:
+        preset = "veryfast"
+    threads = _int_env("TURBO_ENCODE_THREADS", os.cpu_count() or 2, 1, 32)
+
+    def write_videofile(self: Any, *args: Any, **kwargs: Any) -> Any:
+        kwargs.setdefault("preset", preset)
+        kwargs.setdefault("threads", threads)
+        return original(self, *args, **kwargs)
+
+    video_clip.write_videofile = write_videofile
+    video_clip._moneyprinter_encoding_installed = True
+
+
 def install() -> None:
     """Patch exactly the two upstream seams needed by the local acceleration."""
     try:
@@ -632,5 +651,10 @@ def install() -> None:
         return
     _install_material_patch(material)
     _install_video_patch(video)
+    try:
+        from moviepy.video.VideoClip import VideoClip
+        _install_moviepy_encoding_patch(VideoClip)
+    except Exception as exc:
+        material.logger.warning(f"MoviePy encoding acceleration unavailable: {type(exc).__name__}")
     material._moneyprinter_accelerator_installed = True
     material.logger.info("local material acceleration layer installed")

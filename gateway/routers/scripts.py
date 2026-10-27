@@ -50,6 +50,8 @@ async def short_script(input: m.ShortScriptInput) -> dict[str, Any]:
     for attempt in range(3):
         trimmed_this_attempt = False
         prompt = m.short_script_prompt(input.script_prompt, input.paragraph_number, input.voice_rate, input.voice_name)
+        if input.persona.strip():
+            prompt = f"Identidade e tom do canal, siga durante todo o roteiro: {input.persona.strip()}.\n{prompt}"
         if input.proposal.strip():
             prompt += "\nProposta editorial confirmada. Siga este ângulo sem copiar fontes:\n" + input.proposal.strip()
         if input.reference_brief.strip():

@@ -76,6 +76,20 @@ class AutoGenerationTests(unittest.TestCase):
             auto_generation.create_auto_batch("project", request.model_copy(update={"subject": "outro"}))
         self.assertEqual(raised.exception.status_code, 409)
 
+    def test_channel_persona_and_image_source_reach_generation_context(self):
+        config = main.DATA_DIR / "moneyprinter" / "config.toml"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text('nvidia_api_key = "test-key"\n', encoding="utf-8")
+        with main.database() as db:
+            db.execute("UPDATE channels SET persona=?, visual_style=?, image_source=? WHERE id='yt'", ("Narrador direto", "cinematic blue", "ai_images"))
+        batch = auto_generation.create_auto_batch("project", self.payload(channel_ids=["yt"], client_request_id="request-image"))
+        with main.database() as db:
+            row = db.execute("SELECT context_json FROM generation_batch_items WHERE batch_id=?", (batch["batch_id"],)).fetchone()
+        context = json.loads(row["context_json"])
+        self.assertIn("Narrador direto", context["editorial"])
+        self.assertEqual(context["channel"]["visual_style"], "cinematic blue")
+        self.assertEqual(context["settings"]["video_source"], "ai_images")
+
     def test_no_channel_invalid_voice_and_duration_are_rejected(self):
         with self.assertRaises(Exception):
             self.payload(channel_ids=[])

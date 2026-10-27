@@ -13,8 +13,7 @@ from gateway import main as m
 
 
 def default_generation_settings() -> dict[str, Any]:
-    """Base compartilhada (Configurações): equilíbrio entre velocidade e qualidade
-    com stock-only (Pexels/Pixabay/Coverr). Os presets por formato refinam por cima."""
+    """Base compartilhada com Pexels como origem padrão; os perfis podem escolher NVIDIA."""
     return {
         "video_language": "pt-BR",
         "video_aspect": "9:16",

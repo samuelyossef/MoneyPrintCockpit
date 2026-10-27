@@ -252,6 +252,20 @@
     act($("#genMetaAiBtn"), () => request(`/jobs/${job.id}/metadata/generate`, { method: "POST" }), true);
     act($("#genMetaSaveBtn"), save, true);
     act($("#genApproveBtn"), async () => { await save(); return request(`/jobs/${job.id}/approve`, { method: "POST" }); }, false);
+    const reviewButton = $("#genReviewBtn"), reviewResult = $("#genReviewResult");
+    if (reviewButton) {
+      reviewButton.disabled = !["completed", "approved"].includes(job.state);
+      reviewResult.textContent = job.review?.summary || "";
+      reviewButton.onclick = async () => {
+        reviewButton.disabled = true; reviewButton.textContent = "Revisando…";
+        try {
+          job = await request(`/jobs/${job.id}/review`, { method: "POST" });
+          const mismatches = (job.review?.frames || []).filter(frame => !frame.matches);
+          reviewResult.innerHTML = `${esc(job.review?.summary || "")}${mismatches.map(frame => `<div>Quadro ${frame.index + 1}: ${esc(frame.reason || "não combina com o roteiro")}</div>`).join("")}`;
+        } catch (error) { window.alert(error.message); }
+        finally { reviewButton.disabled = false; reviewButton.textContent = "Revisar imagens com IA"; }
+      };
+    }
     const shortsBtn = $("#genDeriveShortsBtn");
     if (shortsBtn) shortsBtn.onclick = async () => {
       shortsBtn.disabled = true;
@@ -713,13 +727,13 @@
     localStorage.setItem(key, JSON.stringify({ ...draft, channel_ids: oldChannels[0] === channelId ? oldChannels : [channelId] }));
   }
   const DRAFT_TEXT_SELECTORS = ["#genTopicInput", "#genScriptInput", "#genTermsInput", "#genScriptRequirements", "#genSystemPrompt"];
-  const DRAFT_PARAMETER_SELECTORS = ["#genLanguageSelect", "#genVoiceSelect", "#genVoiceRate", "#genVoiceVolume", "#genParagraphInput", "#genTargetMinutes", "#genDurationInput", "#genVideoCount", "#genConcatMode", "#genTransition", "#genClipSpeed", "#genSubtitleEnabled", "#genSubtitlePosition", "#genStrokeWidth", "#genFontSizeInput", "#genTextColorInput", "#genStrokeColorInput", "#genBgmSelect", "#genBgmVolume"];
+  const DRAFT_PARAMETER_SELECTORS = ["#genLanguageSelect", "#genVoiceSelect", "#genVoiceRate", "#genVoiceVolume", "#genParagraphInput", "#genTargetMinutes", "#genDurationInput", "#genVideoCount", "#genConcatMode", "#genTransition", "#genClipSpeed", "#genSubtitleEnabled", "#genSubtitlePosition", "#genStrokeWidth", "#genFontSizeInput", "#genTextColorInput", "#genStrokeColorInput", "#genBgmSelect", "#genBgmVolume", "#genVideoSource"];
   const GENERATOR_SETTING_FIELDS = {
     "#genLanguageSelect": "video_language", "#genVoiceSelect": "voice_name", "#genVoiceRate": "voice_rate", "#genVoiceVolume": "voice_volume",
     "#genParagraphInput": "paragraph_number", "#genTargetMinutes": "target_minutes", "#genDurationInput": "video_clip_duration", "#genVideoCount": "video_count",
     "#genConcatMode": "video_concat_mode", "#genTransition": "video_transition_mode", "#genClipSpeed": "video_clip_speed",
     "#genSubtitleEnabled": "subtitle_enabled", "#genSubtitlePosition": "subtitle_position", "#genStrokeWidth": "stroke_width", "#genFontSizeInput": "font_size",
-    "#genTextColorInput": "text_fore_color", "#genStrokeColorInput": "stroke_color", "#genBgmSelect": "bgm_type", "#genBgmVolume": "bgm_volume",
+    "#genTextColorInput": "text_fore_color", "#genStrokeColorInput": "stroke_color", "#genBgmSelect": "bgm_type", "#genBgmVolume": "bgm_volume", "#genVideoSource": "video_source",
   };
 
   function saveDraft(body, dirtyParams = [], dirtyText = [], metadataOverrides = {}) {
@@ -1079,7 +1093,7 @@
         voice_rate: Number.parseFloat(value(body, "#genVoiceRate", "1")) || 1,
         voice_name: value(body, "#genVoiceSelect", ""),
         script_prompt: value(body, "#genScriptRequirements", "").trim(),         system_prompt: [channelById(selectedChannels(body)[0])?.system_prompt, value(body, "#genSystemPrompt", "").trim()].filter(Boolean).join("\n\n"),
-        proposal: value(body, "#genProposal", "").trim(), reference_brief: body.dataset.referenceBrief || "",
+        proposal: value(body, "#genProposal", "").trim(), reference_brief: body.dataset.referenceBrief || "", persona: channelById(selectedChannels(body)[0])?.persona || "",
       }) });
       body.querySelector("#genScriptInput").value = result.script || "";
       markGeneratedScript();
@@ -1136,7 +1150,7 @@
         voice_rate: Number.parseFloat(value(body, "#genVoiceRate", "1")) || 1,
         voice_name: value(body, "#genVoiceSelect", ""),
         requirements: value(body, "#genScriptRequirements", "").trim(), system_prompt: [channel && channel.system_prompt, value(body, "#genSystemPrompt", "").trim()].filter(Boolean).join("\n\n"),
-        proposal: value(body, "#genProposal", "").trim(), reference_brief: body.dataset.referenceBrief || "",
+        proposal: value(body, "#genProposal", "").trim(), reference_brief: body.dataset.referenceBrief || "", persona: channel?.persona || "",
       }, (_event, progress) => {
         const btn = body.querySelector("#genLongScriptBtn");
         if (btn && progress.message) btn.textContent = progress.message;
@@ -1151,7 +1165,7 @@
       const channel = channelById(selectedChannels(body)[0]);
       const format = body.querySelector("[data-format]")?.dataset.format === "long" ? "long" : "short";
       const result = await request("/scripts/proposal", { method: "POST", body: JSON.stringify({
-        subject, format, language: value(body, "#genLanguageSelect", "pt-BR"), channel_context: (channel && channel.niche) || "",
+        subject, format, language: value(body, "#genLanguageSelect", "pt-BR"), channel_context: [channel?.niche, channel?.persona, channel?.system_prompt].filter(Boolean).join("\n").slice(0, 2000),
       }) });
       const box = body.querySelector("#genProposal");
       if (box) { box.value = result.brief; box.dispatchEvent(new Event("input")); }
@@ -1180,6 +1194,50 @@
       const result = await scheduleAlignedTerms(subject, { announce: true });
       if (!result && !value(body, "#genScriptInput", "").trim()) notify("Escreva ou gere o roteiro primeiro.");
     });
+    bindThumbnailTab(body, notify);
+  }
+
+  function bindThumbnailTab(body, notify) {
+    const $ = selector => body.querySelector(selector), channelSelect = $("#thbChannel"), videoSelect = $("#thbVideo");
+    if (!channelSelect || !videoSelect || channelSelect.dataset.bound) return;
+    channelSelect.dataset.bound = "true";
+    const videos = () => window.CK.VIDEOS[screenFormat(body) === "long" ? "horiz" : "vert"];
+    const fillVideos = () => {
+      const selected = videoSelect.value;
+      videoSelect.innerHTML = `<option value="">Selecione um vídeo concluído…</option>` + videos().map(v => `<option value="${esc(v[4])}">${esc(v[2])}</option>`).join("");
+      videoSelect.value = videos().some(v => v[4] === selected) ? selected : "";
+    };
+    const show = job => {
+      $("#thbResult").hidden = !(job && job.thumbnail_updated_at);
+      if (job && job.thumbnail_updated_at) {
+        const url = `${API}/jobs/${job.id}/thumbnail?t=${job.thumbnail_updated_at}`;
+        $("#thbImg").src = url; $("#thbDownload").href = url;
+      }
+    };
+    channelSelect.onchange = () => { $("#thbSystemPrompt").value = channelById(channelSelect.value)?.thumbnail_prompt || ""; };
+    videoSelect.onchange = async () => { show(videoSelect.value ? await request(`/jobs/${videoSelect.value}`).catch(() => null) : null); };
+    const savePrompt = async () => {
+      const channel = channelById(channelSelect.value);
+      if (!channel) throw new Error("Selecione o canal.");
+      const prompt = $("#thbSystemPrompt").value.trim();
+      if (prompt !== (channel.thumbnail_prompt || "")) await saveChannel(channel.id, { thumbnail_prompt: prompt });
+    };
+    $("#thbSaveBtn").onclick = async () => {
+      try { await savePrompt(); $("#thbSaveNote").textContent = "Salvo no canal."; }
+      catch (error) { notify(error.message); }
+    };
+    $("#thbGenBtn").onclick = async event => {
+      const button = event.currentTarget; button.disabled = true;
+      try {
+        if (!videoSelect.value) throw new Error("Selecione um vídeo concluído.");
+        await savePrompt();
+        const job = await request(`/jobs/${videoSelect.value}/thumbnail`, { method: "POST", body: JSON.stringify({ channel_id: channelSelect.value, prompt: $("#thbIdea").value.trim() }) });
+        show(job); notify("Thumbnail gerada.");
+      } catch (error) { notify(error.message); }
+      finally { button.disabled = false; }
+    };
+    $("[data-gentab='thumbnail']")?.addEventListener("click", fillVideos);
+    fillVideos();
   }
 
   /* "YouTube Shorts" screen's "Publicar vídeo existente da biblioteca" card: picks a
@@ -1235,6 +1293,7 @@
     const stats = c.stats || {};
     return { id: c.id, name: c.name, platform: c.platform === "tiktok" ? "TikTok" : "YouTube", handle: c.handle, status: c.status,
       niche: c.niche, language: c.language, publish_privacy: c.publish_privacy || "private", system_prompt: c.system_prompt || "", visual_guides: c.visual_guides || { short: "", long: "" }, voice_name: c.voice_name, voice_rate: c.voice_rate, voice_volume: c.voice_volume,
+      persona: c.persona || "", visual_style: c.visual_style || "", image_source: c.image_source || "", thumbnail_prompt: c.thumbnail_prompt || "",
       subtitle_enabled: c.subtitle_enabled, subtitle_position: c.subtitle_position, font_size: c.font_size, text_fore_color: c.text_fore_color,
       stroke_color: c.stroke_color, stroke_width: c.stroke_width, video_defaults: c.video_defaults, followers: stats.followers || 0, videos: stats.videos || 0, views: stats.views || 0, last: "—" };
   }
@@ -1245,7 +1304,7 @@
     const youtube = connected.filter(c => c.platform === "YouTube");
     const option = c => `<option value="${esc(c.id)}">${esc(c.name)} · ${esc(c.platform)}</option>`;
     // Long videos only go to YouTube; Shorts to any connected channel.
-    [["#genChannelSelect", youtube, "Selecione um canal"], ["#ytLibChannelSelect", screenFormat(document) === "long" ? youtube : connected, "Selecione um canal…"], ["#agStrategyChannel", connected, "Selecione um canal…"]].forEach(([selector, list, empty]) => {
+    [["#genChannelSelect", youtube, "Selecione um canal"], ["#ytLibChannelSelect", screenFormat(document) === "long" ? youtube : connected, "Selecione um canal…"], ["#thbChannel", screenFormat(document) === "long" ? youtube : connected, "Selecione um canal…"], ["#agStrategyChannel", connected, "Selecione um canal…"]].forEach(([selector, list, empty]) => {
       const select = document.querySelector(selector);
       if (!select) return;
       const current = select.value;
@@ -1289,11 +1348,11 @@
     if (win && !win.closed) { win.opener = null; win.location.href = url; }
     else window.open(url, "_blank", "noopener");
   }
-  const youtubeConnectUrl = rec => `${API}/channels/youtube/connect?${new URLSearchParams({ niche: rec.niche || "", system_prompt: rec.system_prompt || "", ...channelProfilePayload(rec), video_defaults: JSON.stringify(rec.video_defaults || {}), visual_guides: JSON.stringify(rec.visual_guides || {}) })}`;
+  const youtubeConnectUrl = rec => `${API}/channels/youtube/connect?${new URLSearchParams({ niche: rec.niche || "", system_prompt: rec.system_prompt || "", persona: rec.persona || "", visual_style: rec.visual_style || "", image_source: rec.image_source || "", thumbnail_prompt: rec.thumbnail_prompt || "", ...channelProfilePayload(rec), video_defaults: JSON.stringify(rec.video_defaults || {}), visual_guides: JSON.stringify(rec.visual_guides || {}) })}`;
 
   async function connectChannel(rec, win) {
     if (rec.platform !== "TikTok") { openIn(win, youtubeConnectUrl(rec)); return; }
-    const result = await request("/channels/tiktok/connect", { method: "POST", body: JSON.stringify({ niche: rec.niche || "", system_prompt: rec.system_prompt || "", ...channelProfilePayload(rec) }) });
+    const result = await request("/channels/tiktok/connect", { method: "POST", body: JSON.stringify({ niche: rec.niche || "", system_prompt: rec.system_prompt || "", persona: rec.persona || "", visual_style: rec.visual_style || "", image_source: rec.image_source || "", thumbnail_prompt: rec.thumbnail_prompt || "", video_defaults: rec.video_defaults || {}, visual_guides: rec.visual_guides || {}, ...channelProfilePayload(rec) }) });
     openIn(win, result.access_url);
     await syncChannels();
   }

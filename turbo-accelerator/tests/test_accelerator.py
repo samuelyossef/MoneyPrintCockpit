@@ -62,6 +62,21 @@ class _Item:
 
 
 class AcceleratorTests(unittest.TestCase):
+    def test_moviepy_encoding_uses_faster_preset_and_keeps_call_overrides(self):
+        class Clip:
+            def write_videofile(self, **kwargs):
+                return kwargs
+
+        old_preset = os.environ.get("TURBO_X264_PRESET")
+        old_threads = os.environ.get("TURBO_ENCODE_THREADS")
+        self.addCleanup(lambda: os.environ.__setitem__("TURBO_X264_PRESET", old_preset) if old_preset is not None else os.environ.pop("TURBO_X264_PRESET", None))
+        self.addCleanup(lambda: os.environ.__setitem__("TURBO_ENCODE_THREADS", old_threads) if old_threads is not None else os.environ.pop("TURBO_ENCODE_THREADS", None))
+        os.environ["TURBO_X264_PRESET"] = "fast"
+        os.environ["TURBO_ENCODE_THREADS"] = "3"
+        accelerator._install_moviepy_encoding_patch(Clip)
+        self.assertEqual(Clip().write_videofile(), {"preset": "fast", "threads": 3})
+        self.assertEqual(Clip().write_videofile(preset="slow", threads=1), {"preset": "slow", "threads": 1})
+
     def test_final_download_batch_is_limited_to_remaining_clips(self):
         self.assertEqual(
             accelerator._download_batch_size(audio_duration=12, total_duration=10, max_clip_duration=5, concurrency=3),

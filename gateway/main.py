@@ -155,6 +155,8 @@ class ProviderCredentials(BaseModel):
     moonshot_model_name: str | None = Field(default=None, max_length=100)
     nvidia_api_key: str | None = Field(default=None, max_length=500)
     nvidia_text_model: str | None = Field(default=None, max_length=200)
+    nvidia_vision_model: str | None = Field(default=None, max_length=200)
+    nvidia_image_model: str | None = Field(default=None, max_length=200)
     pexels_api_key: str | None = Field(default=None, max_length=500)
     pixabay_api_key: str | None = Field(default=None, max_length=500)
     coverr_api_key: str | None = Field(default=None, max_length=500)
@@ -174,6 +176,9 @@ class NvidiaModelTest(BaseModel):
 MOONSHOT_ENDPOINTS = {"china": "https://api.moonshot.cn/v1", "global": "https://api.moonshot.ai/v1"}
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
 NVIDIA_DEFAULT_TEXT_MODEL = "moonshotai/kimi-k3"
+NVIDIA_DEFAULT_VISION_MODEL = "google/diffusiongemma-26b-a4b-it"
+NVIDIA_DEFAULT_IMAGE_MODEL = "black-forest-labs/flux.1-schnell"
+NVIDIA_GENAI_BASE_URL = "https://ai.api.nvidia.com/v1/genai"
 NVIDIA_CATALOG_CACHE_SECONDS = 600
 NVIDIA_PROBE_TIMEOUT_SECONDS = 30
 # Long-form scripts issue several sequential completions.  Kimi K3 may spend
@@ -235,6 +240,9 @@ class MetadataInput(BaseModel):
     category_id: str = Field(default="22", max_length=10)
 
 
+class ThumbnailInput(BaseModel):
+    prompt: str = Field(default="", max_length=1000)
+    channel_id: str | None = Field(default=None, max_length=36)
 
 class AssistantChatMessage(BaseModel):
     role: Literal["user", "assistant"]
@@ -268,6 +276,7 @@ class ShortScriptInput(BaseModel):
     system_prompt: str = Field(default="", max_length=12000)
     proposal: str = Field(default="", max_length=2000)
     reference_brief: str = Field(default="", max_length=1000)
+    persona: str = Field(default="", max_length=2000)
 
 
 class LongScriptInput(BaseModel):
@@ -281,6 +290,7 @@ class LongScriptInput(BaseModel):
     system_prompt: str = Field(default="", max_length=12000)
     proposal: str = Field(default="", max_length=2000)
     reference_brief: str = Field(default="", max_length=1000)
+    persona: str = Field(default="", max_length=2000)
 
 
 MAX_VISUAL_TERMS = 80  # ponytail: cap on Pexels searches per video; raise alongside the API's hourly quota
@@ -345,6 +355,10 @@ class ChannelPatch(BaseModel):
     stroke_width: float | None = Field(default=None)
     video_defaults: dict[str, Any] | None = None
     visual_guides: dict[str, str] | None = None
+    persona: str | None = Field(default=None, max_length=2000)
+    visual_style: str | None = Field(default=None, max_length=1000)
+    image_source: Literal["", "stock", "ai_images"] | None = None
+    thumbnail_prompt: str | None = Field(default=None, max_length=1000)
 
 
 class ChannelConnect(BaseModel):
@@ -363,6 +377,10 @@ class ChannelConnect(BaseModel):
     stroke_width: float = 1.5
     video_defaults: dict[str, Any] = Field(default_factory=dict)
     visual_guides: dict[str, str] = Field(default_factory=dict)
+    persona: str = Field(default="", max_length=2000)
+    visual_style: str = Field(default="", max_length=1000)
+    image_source: Literal["", "stock", "ai_images"] = ""
+    thumbnail_prompt: str = Field(default="", max_length=1000)
 
 
 class PublishInput(BaseModel):
@@ -509,11 +527,12 @@ from gateway.routers.system import app_version, health, health_live, list_notifi
 from gateway.routers.auth import auth_session, login, logout
 from gateway.routers.projects import create_project, delete_project, get_project, list_projects, patch_project
 from gateway.routers.settings import generation_defaults, list_nvidia_models, provider_readiness, put_generation_defaults, test_nvidia_model, update_providers, validate_provider_key
-from gateway.routers.jobs import approve_job, artifact_proxy, cancel_job, cancel_schedule, create_job, delete_job, derive_shorts, generate_metadata, get_job, job_events, list_jobs, publish_job, put_metadata, retry_job
+from gateway.routers.jobs import approve_job, artifact_proxy, cancel_job, cancel_schedule, create_job, create_thumbnail, delete_job, derive_shorts, generate_metadata, get_job, get_thumbnail, job_events, list_jobs, publish_job, put_metadata, review_job, retry_job
 from gateway.routers.assistant import assistant_chat
 from gateway.routers.scripts import long_script, long_script_stream, script_proposal, script_reference, script_terms, short_script
 from gateway.routers.channels import delete_channel, list_channels, patch_channel, refresh_channel, tiktok_connect, tiktok_reconnect_link, youtube_auth_callback, youtube_connect
 from gateway.routers.agents import analytics_overview, analytics_platform_overview, list_operators, list_schedule, put_operator, refresh_analytics, run_operator, strategy
+from gateway.services.visuals import ai_image_materials, generate_image, review_job as review_video_job, thumbnail_path
 
 
 # Domain services: implementations live in gateway/services; this module stays the

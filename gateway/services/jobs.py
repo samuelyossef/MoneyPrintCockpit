@@ -18,11 +18,15 @@ def row_as_job(row: sqlite3.Row, db: sqlite3.Connection | None = None) -> dict[s
     result = {key: row[key] for key in row.keys() if key not in {"request_json", "turbo_payload_json"}}
     result["request"] = json.loads(row["request_json"])
     result["turbo"] = json.loads(row["turbo_payload_json"])
+    thumbnail = m.thumbnail_path(row["id"])
+    result["thumbnail_updated_at"] = thumbnail.stat().st_mtime if thumbnail.is_file() else None
     if db:
         result["artifacts"] = [dict(item) for item in db.execute("SELECT * FROM artifacts WHERE job_id = ?", (row["id"],))]
         result["publications"] = [dict(item) for item in db.execute("SELECT * FROM publications WHERE job_id = ?", (row["id"],))]
         metadata = db.execute("SELECT value_json FROM job_metadata WHERE job_id = ?", (row["id"],)).fetchone()
         result["metadata"] = json.loads(metadata["value_json"]) if metadata else None
+        review = db.execute("SELECT value_json FROM job_reviews WHERE job_id=?", (row["id"],)).fetchone()
+        result["review"] = json.loads(review["value_json"]) if review else None
     return result
 
 

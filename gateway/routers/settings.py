@@ -24,8 +24,7 @@ def generation_defaults(format: Literal["long", "short"] | None = None) -> dict[
             "SELECT key, value_json FROM settings WHERE key IN (?, ?)", ("generation-defaults", m.settings_key(format))
         )}
     base = rows.get("generation-defaults", m.default_generation_settings())
-    if base.get("video_source") not in {"pexels", "pixabay", "coverr"}:
-        # Fontes de IA removidas (só stock): um padrão antigo salvo cai para o Pexels.
+    if base.get("video_source") not in {"pexels", "pixabay", "coverr", "ai_images"} or (base.get("video_source") == "ai_images" and not m.config_value("nvidia_api_key")):
         base = {**base, "video_source": "pexels"}
     if not format:
         return base
@@ -62,6 +61,8 @@ def provider_readiness() -> dict[str, Any]:
         "moonshot_model": model_match.group(1) if model_match else "",
         "llm_provider": m._config_string(value, "cockpit_llm_provider") or "moonshot",
         "nvidia_text_model": m._config_string(value, "nvidia_text_model") or m.NVIDIA_DEFAULT_TEXT_MODEL,
+        "nvidia_vision_model": m._config_string(value, "nvidia_vision_model") or m.NVIDIA_DEFAULT_VISION_MODEL,
+        "nvidia_image_model": m._config_string(value, "nvidia_image_model") or m.NVIDIA_DEFAULT_IMAGE_MODEL,
     }
 
 
@@ -152,6 +153,9 @@ async def update_providers(input: m.ProviderCredentials) -> dict[str, Any]:
     text = config_path.read_text(encoding="utf-8")
     if input.nvidia_text_model:
         m.nvidia_model_or_422(input.nvidia_text_model)
+    for model in (input.nvidia_vision_model, input.nvidia_image_model):
+        if model and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}", model):
+            raise HTTPException(status_code=422, detail="Nome de modelo NVIDIA inválido.")
     active_provider = m._config_string(text, "cockpit_llm_provider") or "moonshot"
     effective_provider = input.llm_provider or active_provider
     turbo_changed = bool(input.llm_provider) or (
@@ -174,6 +178,10 @@ async def update_providers(input: m.ProviderCredentials) -> dict[str, Any]:
         text = m._toml_set(text, "nvidia_api_key", f'"{m._toml_escape(input.nvidia_api_key)}"')
     if input.nvidia_text_model:
         text = m._toml_set(text, "nvidia_text_model", f'"{m._toml_escape(input.nvidia_text_model)}"')
+    if input.nvidia_vision_model:
+        text = m._toml_set(text, "nvidia_vision_model", f'"{m._toml_escape(input.nvidia_vision_model)}"')
+    if input.nvidia_image_model:
+        text = m._toml_set(text, "nvidia_image_model", f'"{m._toml_escape(input.nvidia_image_model)}"')
     if input.llm_provider:
         text = m._toml_set(text, "cockpit_llm_provider", f'"{input.llm_provider}"')
         if input.llm_provider == "nvidia":

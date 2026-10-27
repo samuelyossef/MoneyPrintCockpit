@@ -51,11 +51,32 @@ async def create_job(project_id: str, input: m.JobCreate, *, generation_item_id:
     if channel_prompts:
         generator_prompt = str(merged.get("custom_system_prompt") or "").strip()
         merged["custom_system_prompt"] = "\n\n".join([channel_prompts[0], generator_prompt]).strip()
+    personas = list(dict.fromkeys(str(channel["persona"] or "").strip() for channel in channels if str(channel["persona"] or "").strip()))
+    visual_styles = list(dict.fromkeys(str(channel["visual_style"] or "").strip() for channel in channels if str(channel["visual_style"] or "").strip()))
+    if len(personas) > 1 or len(visual_styles) > 1:
+        raise HTTPException(status_code=409, detail="Os canais selecionados têm identidades ou estilos visuais diferentes. Gere vídeos separados.")
+    persona = personas[0] if personas else ""
+    visual_style = visual_styles[0] if visual_styles else ""
+    channel_source = str(channels[0]["image_source"] or "") if channels else ""
+    if merged.get("video_source") in {"", "stock"}:
+        merged["video_source"] = m.generation_defaults(input.format).get("video_source", "pexels")
+        if merged["video_source"] == "ai_images":
+            merged["video_source"] = "pexels"
+    if channel_source and "video_source" not in input.settings:
+        if channel_source == "ai_images":
+            merged["video_source"] = "ai_images"
+        elif channel_source == "stock" and merged.get("video_source") == "ai_images":
+            merged["video_source"] = "pexels"
+    if persona:
+        merged["video_script_prompt"] = "\n".join(part for part in (f"Identidade e tom do canal: {persona}", str(merged.get("video_script_prompt") or "")) if part)
     # Turbo's encoder defaults to 2 threads; this container sees the same Docker VM CPUs as Turbo.
     merged.setdefault("n_threads", os.cpu_count() or 2)
     script_text = input.script.strip()
+    ai_images = merged.get("video_source") == "ai_images"
+    if ai_images and not m.config_value("nvidia_api_key"):
+        raise HTTPException(status_code=409, detail="Configure a chave NVIDIA em Configurações para gerar imagens de IA.")
     follow_script = merged.get("video_concat_mode") == "script"
-    if follow_script:
+    if follow_script or ai_images:
         # "Seguir o roteiro": one visual search term per script chunk, downloaded in that
         # order, instead of Turbo's handful of generic terms shared across the whole video
         # (see visual_terms()) - that's what made footage look unrelated to the narration.
@@ -67,6 +88,7 @@ async def create_job(project_id: str, input: m.JobCreate, *, generation_item_id:
                 voice_rate=float(merged.get("voice_rate") or 1.0), voice_name=str(merged.get("voice_name") or ""),
                 script_prompt=str(merged.get("video_script_prompt", "")),
                 system_prompt=str(merged.get("custom_system_prompt", "")),
+                persona=persona,
             ))
             script_text = script_response["script"]
     # The chosen duration wins over whatever was written, pasted or generated, in every mode: a
@@ -74,7 +96,13 @@ async def create_job(project_id: str, input: m.JobCreate, *, generation_item_id:
     max_words = m.job_max_words(input.format, merged)
     if script_text and max_words and not generation_item_id:
         script_text = m.trim_to_words(script_text, max_words)
-    if follow_script and script_text and not str(merged.get("video_terms", "")).strip():
+    if ai_images:
+        if not script_text:
+            raise HTTPException(status_code=409, detail="Escreva ou gere o roteiro antes de criar imagens de IA.")
+        materials, clip_seconds = await m.ai_image_materials(input.subject, script_text, input.format, float(merged.get("video_clip_duration") or 5), float(merged.get("voice_rate") or 1), visual_style)
+        merged.pop("video_terms", None)
+        merged.update(video_source="local", video_materials=materials, video_clip_duration=clip_seconds, video_concat_mode="sequential", match_materials_to_script=False)
+    elif follow_script and script_text and not str(merged.get("video_terms", "")).strip():
         terms, clip_seconds = await m.visual_terms(input.subject, script_text, float(merged.get("video_clip_duration") or 5), float(merged.get("voice_rate") or 1))
         merged["video_terms"], merged["video_clip_duration"] = ", ".join(terms), max(1, round(clip_seconds))
     request_payload = m.build_turbo_payload(input.subject, script_text, merged)
@@ -268,6 +296,52 @@ async def generate_metadata(job_id: str) -> dict[str, Any]:
     prompt = f"Crie metadados de YouTube no idioma {language} para o vídeo abaixo. Responda apenas JSON: {{{guidance}}}.\n\nTema: {job['subject']}\nRoteiro: {excerpt}"
     generated = m.parse_json_object(await m.llm_chat(prompt, json_mode=True))
     return m.store_metadata(job_id, {field: generated.get(field) for field in ("title", "description", "tags")})
+
+
+@router.post("/api/jobs/{job_id}/review")
+async def review_job(job_id: str) -> dict[str, Any]:
+    return await m.review_video_job(job_id)
+
+
+@router.post("/api/jobs/{job_id}/thumbnail")
+async def create_thumbnail(job_id: str, input: m.ThumbnailInput | None = None) -> dict[str, Any]:
+    input = input or m.ThumbnailInput()
+    with m.database() as db:
+        job = m.job_row_or_404(db, job_id)
+        if job["state"] not in m.METADATA_STATES:
+            raise HTTPException(status_code=409, detail="A thumbnail exige um vídeo concluído.")
+        target_ids = {row["channel_id"] for row in db.execute(
+            "SELECT channel_id FROM publications WHERE job_id=? AND platform='youtube' AND channel_id IS NOT NULL", (job_id,)
+        )}
+        channel_id = input.channel_id or next(iter(target_ids), None)
+        if channel_id and channel_id not in target_ids:
+            raise HTTPException(status_code=409, detail="Escolha um canal do YouTube associado a este vídeo.")
+        channel = m.channel_row_or_404(db, channel_id) if channel_id else None
+        metadata = db.execute("SELECT value_json FROM job_metadata WHERE job_id=?", (job_id,)).fetchone()
+    title = json.loads(metadata["value_json"]).get("title") if metadata else None
+    standing = str(channel["thumbnail_prompt"] or "") if channel else ""
+    visual_style = str(channel["visual_style"] or "") if channel else ""
+    user_idea = input.prompt.strip() or f"YouTube thumbnail about: {title or job['subject']}"
+    prompt = " ".join(part for part in (standing, f"Visual style: {visual_style}." if visual_style else "", user_idea, "bold clear composition, cinematic lighting, no text or letters") if part)
+    image = await m.generate_image(prompt, 1344, 768)
+    path = m.thumbnail_path(job_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.stem}.{uuid4().hex}.tmp")
+    try:
+        temporary.write_bytes(image)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    with m.database() as db:
+        return m.row_as_job(m.job_row_or_404(db, job_id), db)
+
+
+@router.get("/api/jobs/{job_id}/thumbnail")
+def get_thumbnail(job_id: str) -> FileResponse:
+    path = m.thumbnail_path(job_id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Nenhuma thumbnail foi gerada ainda.")
+    return FileResponse(path, media_type="image/jpeg")
 
 
 @router.post("/api/jobs/{job_id}/approve")

@@ -29,6 +29,7 @@ EDITABLE_SETTINGS = {
     "video_transition_mode", "video_clip_speed", "subtitle_enabled",
     "subtitle_position", "font_size", "text_fore_color", "stroke_color",
     "stroke_width", "bgm_type", "bgm_volume",
+    "video_source",
 }
 LEASE_SECONDS = 90
 
@@ -68,6 +69,19 @@ def _effective_context(project: dict[str, Any], channel: dict[str, Any], request
         **m.channel_generation_settings(channel, format), **request.settings,
         **m.FORMAT_LOCKED[format],
     }
+    if settings.get("video_source") in {"", "stock"}:
+        settings["video_source"] = m.generation_defaults(format).get("video_source", "pexels")
+        if settings["video_source"] == "ai_images":
+            settings["video_source"] = "pexels"
+    channel_source = str(channel.get("image_source") or "")
+    if channel_source == "ai_images" and "video_source" not in request.settings:
+        settings["video_source"] = "ai_images"
+    elif channel_source == "stock" and settings.get("video_source") == "ai_images" and "video_source" not in request.settings:
+        settings["video_source"] = "pexels"
+    if settings.get("video_source") not in {"pexels", "pixabay", "coverr", "ai_images"}:
+        raise HTTPException(status_code=422, detail="Origem das imagens inválida.")
+    if settings.get("video_source") == "ai_images" and not m.config_value("nvidia_api_key"):
+        raise HTTPException(status_code=409, detail="Configure a chave NVIDIA em Configurações para gerar imagens de IA.")
     if settings.get("video_language") not in m.VOICE_CHOICES:
         raise HTTPException(status_code=422, detail="Idioma de narração não suportado.")
     if "video_language" in request.settings and "voice_name" not in request.settings:
@@ -97,6 +111,7 @@ def _effective_context(project: dict[str, Any], channel: dict[str, Any], request
         raise HTTPException(status_code=422, detail="Modo de imagens inválido.")
     base_prompt = _unique_text(str(settings.get("custom_system_prompt") or ""), project.get("prompt_base") or "", request.screen_system_prompt)
     editorial = _unique_text(
+        f"Identidade e tom do canal: {channel['persona']}" if channel.get("persona") else "",
         channel.get("system_prompt") or "", base_prompt,
         f"Requisitos padrão do roteiro: {settings['video_script_prompt']}" if settings.get("video_script_prompt") else "",
     )
@@ -104,11 +119,11 @@ def _effective_context(project: dict[str, Any], channel: dict[str, Any], request
         raise HTTPException(status_code=422, detail="Os prompts do canal e do gerador juntos excedem 12.000 caracteres.")
     return {
         "format": format,
-        "channel": {key: channel[key] for key in ("id", "name", "platform", "niche", "language", "system_prompt")},
+        "channel": {key: channel[key] for key in ("id", "name", "platform", "niche", "language", "system_prompt", "persona", "visual_style", "image_source")},
         "settings": settings,
         "editorial": editorial,
         "render_system_prompt": base_prompt,
-        "visual_guide": json.loads(channel.get("visual_guides_json") or "{}").get(format, ""),
+        "visual_guide": _unique_text(json.loads(channel.get("visual_guides_json") or "{}").get(format, ""), channel.get("visual_style") or ""),
     }
 
 

@@ -420,6 +420,7 @@ window.CKV = (function () {
   }
   const CH_STATUS = { connected: ["active", "Conectado"], pending: ["pending", "Aguardando login"], expired: ["past_due", "Expirado"] };
   const CH_LANGS = [["pt-BR", "Português (Brasil)"], ["en-US", "English (US)"], ["es-ES", "Español"], ["de-DE", "Deutsch"]];
+  const IMAGE_SOURCES = [["", "Padrão das Configurações"], ["stock", "Banco de imagens (Pexels, Pixabay ou Coverr)"], ["ai_images", "Gerador de imagens da NVIDIA (FLUX.1 Schnell)"]];
   const CH_VOICES = [["pt-BR-FranciscaNeural", "Português (Brasil) — Francisca (F)"], ["pt-BR-AntonioNeural", "Português (Brasil) — Antonio (M)"], ["en-US-JennyNeural", "English (US) — Jenny (F)"], ["en-US-GuyNeural", "English (US) — Guy (M)"], ["es-ES-ElviraNeural", "Español — Elvira (F)"], ["es-ES-AlvaroNeural", "Español — Álvaro (M)"], ["de-DE-KatjaNeural", "Deutsch — Katja (F)"], ["de-DE-ConradNeural", "Deutsch — Conrad (M)"]];
   function chStatus(status) {
     const [dot, label] = CH_STATUS[status] || CH_STATUS.expired;
@@ -455,7 +456,7 @@ window.CKV = (function () {
   }
   function newCanalRec() {
     const media = { voice_name: "pt-BR-FranciscaNeural", voice_rate: 1, voice_volume: 1, subtitle_enabled: true, text_fore_color: "#FFFFFF", stroke_color: "#000000", stroke_width: 1.5 };
-    return { platform: "YouTube", niche: "", language: "pt-BR", publish_privacy: "private", visual_guides: { short: "", long: "" }, voice_name: media.voice_name, voice_rate: media.voice_rate, voice_volume: media.voice_volume, subtitle_enabled: media.subtitle_enabled, subtitle_position: "bottom", font_size: 56, text_fore_color: media.text_fore_color, stroke_color: media.stroke_color, stroke_width: media.stroke_width,
+    return { platform: "YouTube", niche: "", language: "pt-BR", persona: "", visual_style: "", image_source: "", thumbnail_prompt: "", publish_privacy: "private", visual_guides: { short: "", long: "" }, voice_name: media.voice_name, voice_rate: media.voice_rate, voice_volume: media.voice_volume, subtitle_enabled: media.subtitle_enabled, subtitle_position: "bottom", font_size: 56, text_fore_color: media.text_fore_color, stroke_color: media.stroke_color, stroke_width: media.stroke_width,
       video_defaults: {
         short: { ...media, subtitle_position: "center", font_size: 64, paragraph_number: 5, video_count: 1, video_clip_duration: 4, video_concat_mode: "script", video_transition_mode: "", video_clip_speed: 1, bgm_type: "", bgm_volume: 0.2 },
         long: { ...media, subtitle_position: "bottom", font_size: 48, target_minutes: 8, video_clip_duration: 6, video_concat_mode: "script", video_transition_mode: "", video_clip_speed: 1, bgm_type: "", bgm_volume: 0.2 },
@@ -468,8 +469,8 @@ window.CKV = (function () {
     const txt = (f, v, ph) => editing
       ? `<input class="np-input" style="width:100%" data-cfield="${f}" value="${esc(v)}" placeholder="${ph || ""}" />`
       : esc(v || "—");
-    const area = (f, v, ph) => editing
-      ? `<textarea class="np-input" style="width:100%;min-height:150px;resize:vertical" data-cfield="${f}" maxlength="4000" placeholder="${ph || ""}">${esc(v)}</textarea>`
+    const area = (f, v, ph, max = 4000) => editing
+      ? `<textarea class="np-input" style="width:100%;min-height:150px;resize:vertical" data-cfield="${f}" maxlength="${max}" placeholder="${ph || ""}">${esc(v)}</textarea>`
       : `<span style="white-space:pre-wrap">${esc(v || "Nenhum prompt de sistema configurado.")}</span>`;
     const sel = (f, v, opts) => editing
       ? `<select class="set-select" style="width:100%" data-cfield="${f}">${opts.map(([val, label]) => `<option value="${val}" ${val === v ? "selected" : ""}>${label}</option>`).join("")}</select>`
@@ -534,6 +535,10 @@ window.CKV = (function () {
         <div class="card-bd"><div class="grid2 ${fullRow ? "channel-profile-grid" : ""}" style="margin:0">
           ${profileField("Idioma da narração padrão", sel("language", c.language, CH_LANGS))}
           ${profileField("Visibilidade padrão", sel("publish_privacy", c.publish_privacy || "private", [["private", "Sempre como privado"], ["public", "Sempre como público"]]))}
+          ${profileField("Persona e tom do canal", editing ? area("persona", c.persona || "", "Descreva a voz e o público do canal.", 2000) : esc(c.persona || "Não configurada."))}
+          ${profileField("Origem das imagens", sel("image_source", c.image_source || "", IMAGE_SOURCES))}
+          ${profileField("Estilo visual", editing ? area("visual_style", c.visual_style || "", "Ex.: cinematic editorial illustration, teal and orange palette.", 1000) : esc(c.visual_style || "Não configurado."))}
+          ${profileField("Prompt padrão de thumbnail", editing ? area("thumbnail_prompt", c.thumbnail_prompt || "", "Descreva a identidade recorrente das thumbnails.", 1000) : esc(c.thumbnail_prompt || "Não configurado."))}
         </div></div></div>`;
     const kpi = (label, value) => `<div class="kpi" style="cursor:default"><div class="kpi-label">${label}</div><div class="kpi-value">${D.fmtInt(value || 0)}</div></div>`;
     const panes = {
@@ -1161,7 +1166,7 @@ window.CKV = (function () {
         <div class="dr-sec" style="margin-top:0">Filmagens e stock</div>
         <div class="card-note" style="margin:6px 0 14px;font-family:inherit">Fonte padrão usada para buscar as filmagens. Configure a chave de quem for usar antes de selecionar.</div>
         <div class="grid2" style="margin-top:10px">
-          ${field("Fonte de vídeo padrão", "pexels", { select: true, id: "cfgVideoSource", opts: [["pexels", "Pexels"], ["pixabay", "Pixabay"], ["coverr", "Coverr"]] })}
+          ${field("Fonte de vídeo padrão", "pexels", { select: true, id: "cfgVideoSource", opts: [["pexels", "Pexels"], ["pixabay", "Pixabay"], ["coverr", "Coverr"], ["ai_images", "Imagens geradas por IA (NVIDIA FLUX.1 Schnell)"]] })}
           ${field("Duração padrão do clipe (s)", "5", { id: "cfgDuration", type: "number" })}
           ${field("Cenas por vídeo (padrão)", "5", { id: "cfgParagraphs", type: "number" })}
         </div>
@@ -1242,7 +1247,7 @@ window.CKV = (function () {
    * - Roteiro personalizado opcional
    * - Seleção de canal cadastrado
    * - Monitor do pipeline em tempo real com 5 etapas:
-   *   1. Roteiro IA -> 2. Keywords -> 3. Voz e Legendas -> 4. Filmagens Stock -> 5. Render HD
+   *   1. Roteiro IA -> 2. Keywords -> 3. Voz e Legendas -> 4. Imagens e clipes -> 5. Render HD
    * - Player de pré-visualização integrado com ações de download e publicação
    */
   /* Every screen tab shares one id scheme ("genTabs"/data-gentab/data-genpane): Gerador and Shorts
@@ -1266,15 +1271,24 @@ window.CKV = (function () {
         </div>
       </div>`;
   }
+  function thumbnailPane(format) {
+    const channels = D.CHANNELS.filter(c => c.status === "connected" && (format === "short" || c.platform === "YouTube"));
+    return `<div class="card" style="margin-bottom:0"><div class="card-hd"><span class="card-title">Thumbnail com IA</span></div><div class="card-bd" style="display:flex;flex-direction:column;gap:12px">
+      <div class="card-note">A thumbnail usa o estilo visual e o prompt do canal. Só pode ser gerada para vídeos concluídos; no YouTube será enviada durante a publicação.</div>
+      <div class="grid2"><label class="md-field">Canal<select class="set-select" id="thbChannel"><option value="">Selecione…</option>${channels.map(c => `<option value="${esc(c.id)}">${esc(c.name)} · ${esc(c.platform)}</option>`).join("")}</select></label>
+      <label class="md-field">Vídeo concluído<select class="set-select" id="thbVideo"><option value="">Selecione um vídeo…</option></select></label></div>
+      <label class="md-field">Prompt padrão do canal<textarea class="np-input" id="thbSystemPrompt" rows="4" maxlength="1000" placeholder="Identidade visual recorrente"></textarea></label>
+      <div><button class="btn sm" id="thbSaveBtn" type="button">Salvar prompt no canal</button> <span class="card-note" id="thbSaveNote" role="status"></span></div>
+      <label class="md-field">Ideia desta thumbnail (opcional)<input class="np-input" id="thbIdea" maxlength="1000" placeholder="Vazio para usar o título do vídeo" /></label>
+      <button class="btn primary" id="thbGenBtn" type="button">Gerar thumbnail</button>
+      <div id="thbResult" hidden><img id="thbImg" alt="Thumbnail gerada" style="width:100%;max-width:480px;border-radius:8px" /><a class="btn sm" id="thbDownload" download="thumbnail.jpg">Baixar</a></div>
+    </div></div>`;
+  }
   function gerador(scope) {
-    return `<div class="card-note" style="margin-bottom:14px"><button class="btn sm" type="button" data-view="criar">Trocar canal ou formato</button> · Os parâmetros seguem o perfil do canal; alterações nesta tela valem apenas para esta geração.</div>
-      ${studioCreative(scope, "long")}
-      <details class="card" id="genAdvanced" style="margin-top:16px"><summary class="card-hd" style="cursor:pointer"><span class="card-title">Opções avançadas desta geração</span></summary><div class="card-bd">${studioParams("long")}${systemPromptPane("long")}</div></details>`;
+    return screenTabs([["gerar", "Gerador", studioCreative(scope, "long")], ["parametros", "Parâmetros", studioParams("long")], ["prompt", "Prompt", systemPromptPane("long")], ["thumbnail", "Thumbnail", thumbnailPane("long")], ["biblioteca", "Biblioteca", libraryCard("long")]]);
   }
   function youtubeShorts(scope) {
-    return `<div class="card-note" style="margin-bottom:14px"><button class="btn sm" type="button" data-view="criar">Trocar canal ou formato</button> · Os parâmetros seguem o perfil do canal; alterações nesta tela valem apenas para esta geração.</div>
-      ${studioCreative(scope, "short")}
-      <details class="card" id="genAdvanced" style="margin-top:16px"><summary class="card-hd" style="cursor:pointer"><span class="card-title">Opções avançadas desta geração</span></summary><div class="card-bd">${studioParams("short")}${systemPromptPane("short")}</div></details>`;
+    return screenTabs([["gerar", "Gerador", studioCreative(scope, "short")], ["parametros", "Parâmetros", studioParams("short")], ["prompt", "Prompt", systemPromptPane("short")], ["thumbnail", "Thumbnail", thumbnailPane("short")], ["biblioteca", "Biblioteca", libraryCard("short")]]);
   }
   /* One form, two formats: the engine (Turbo, approval, publishing) is shared; what differs is the
      aspect, the duration control, the script writer and which channels may receive the video.
@@ -1282,7 +1296,7 @@ window.CKV = (function () {
      "Gerador" tab; studioParams (voice/render/subtitle knobs) gets its own tab. */
   function studioCreative(scope, format) {
     const isLong = format === "long";
-    const steps = [["Roteiro IA", "doc"], ["Keywords", "search"], ["Voz e Legendas", "mic"], ["Filmagens Stock", "grid"], ["Render HD", "activity"]];
+    const steps = [["Roteiro IA", "doc"], ["Keywords", "search"], ["Voz e Legendas", "mic"], ["Imagens e clipes", "grid"], ["Render HD", "activity"]];
     return `
       <div class="grid-2-1">
         <div class="card" style="margin-bottom:0" data-format="${format}">
@@ -1323,6 +1337,8 @@ window.CKV = (function () {
               <div style="display:flex;justify-content:space-between;align-items:center;margin:0 0 7px"><label class="dr-sec" style="margin:0">Palavras-chave das filmagens (opcional)</label><button class="btn sm" type="button" id="genTermsAiBtn">Gerar palavras-chave</button></div>
               <input class="np-input" id="genTermsInput" style="width:100%" placeholder="deep ocean, ocean life — separadas por vírgula (em inglês o Pexels acha mais)" />
             </div>
+            <label class="md-field">Origem das imagens<select class="set-select" id="genVideoSource" style="width:100%"><option value="">Seguir canal/configurações</option><option value="stock">Banco de imagens (Pexels, Pixabay ou Coverr)</option><option value="ai_images">Imagens geradas por IA (NVIDIA FLUX.1 Schnell)</option></select></label>
+            <div class="card-note">Imagens NVIDIA usam cota de geração. A curadoria visual continua ativa.</div>
             </details>
             <div id="genChannelRow" ${isLong && localStorage.getItem("moneyprint-create-channel-long") ? "hidden" : ""}>
               <label class="dr-sec" style="margin:0 0 7px">${isLong ? "Selecione o canal" : "Segundo canal (opcional)"}</label>
@@ -1381,10 +1397,12 @@ window.CKV = (function () {
                     <button class="btn sm" id="genMetaAiBtn" type="button">Gerar com IA</button>
                     <button class="btn sm" id="genMetaSaveBtn" type="button">Salvar</button>
                     <button class="btn sm primary" id="genApproveBtn" type="button">Aprovar</button>
+                    <button class="btn sm" id="genReviewBtn" type="button">Revisar imagens com IA</button>
                     ${isLong ? `<button class="btn sm" id="genDeriveShortsBtn" type="button">Cortar Shorts</button>` : ""}
                     <label class="card-note" style="font-family:inherit;display:flex;align-items:center;gap:6px">Agendar para <input class="np-input" type="datetime-local" id="genPublishAt" style="padding:4px 6px" /></label>
                     <span class="card-note" id="genPublishStatus" role="status" style="font-family:inherit"></span>
                   </div>
+                  <div id="genReviewResult" class="card-note" role="status" style="font-family:inherit;margin-top:8px"></div>
                 </div>
               </div></div>
           </div>

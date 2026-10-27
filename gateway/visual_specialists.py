@@ -357,6 +357,42 @@ async def curate_scene(item_id: str, index: int, chunk: str, query: str, context
     aspect, clip_seconds = settings["video_aspect"], float(settings["video_clip_duration"])
     scene = {"index": index, "narration": chunk, "query": query, "expected": chunk, "candidates": [], "selected": None}
     seen = set(excluded_ids or set())
+    if settings.get("video_source") == "ai_images":
+        from gateway.services.visuals import generate_image
+
+        width, height = (768, 1344) if aspect == "9:16" else (1344, 768)
+        prompt = (
+            f"Create a coherent cinematic illustration for a video about {context.get('subject', '')}. "
+            f"Show this narration literally and clearly: {chunk}. "
+            f"Visual style: {context.get('visual_guide', '') or 'cinematic editorial illustration'}. "
+            "No text, letters, logos, watermarks, borders, or split panels."
+        )
+        image = await generate_image(prompt, width, height)
+        path = material_root(item_id) / f"scene{index:03d}option0.jpg"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(image)
+        info = await asyncio.to_thread(probe, path)
+        record = {
+            "id": f"nvidia-image-{index}", "provider": "nvidia", "kind": "image", "status": "rejected",
+            "width": info["width"], "height": info["height"], "duration": clip_seconds,
+            "query": query, "filename": path.name,
+        }
+        if info["width"] < 500 or info["height"] < 500 or not aspect_matches(record, aspect):
+            record["reason"] = "A imagem gerada não atende à resolução ou proporção exigida."
+        else:
+            frame = await asyncio.to_thread(sample_frame, path)
+            verdict = await judge_frame(
+                frame,
+                f"Avalie a imagem gerada para o tema {context.get('subject', '')}. Narração exata deste trecho: {chunk}. "
+                f"Estilo obrigatório: {context.get('visual_guide', '')}. Aprove somente se a cena representar diretamente a narração.",
+            )
+            record.update(verdict)
+            record["status"] = "approved" if verdict["approved"] else "rejected"
+            if record["status"] == "approved":
+                scene["selected"] = record["id"]
+        scene["candidates"].append(record)
+        choose_scene_material(scene)
+        return scene
     for search_index in range(2):
         if search_index:
             try:
