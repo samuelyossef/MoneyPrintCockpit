@@ -26,7 +26,7 @@ docker compose up -d --build --wait
 
 `setup.ps1` cria `runtime/secrets/admin.json`, `runtime/secrets/mpt_api_key.txt` e `runtime/moneyprinter/config.toml`. Chaves de Moonshot/Kimi, Pexels e Upload-Post podem ficar em branco e ser preenchidas depois. Os valores de exemplo estão em `.env.example`. Não coloque segredos no navegador nem no repositório.
 
-O setup também grava em `.env` senhas locais aleatórias para o PostgreSQL e o MinIO do Growth OS (o arquivo fica fora do versionamento e é lido automaticamente pelo Docker Compose; valores já presentes são preservados). Se o volume do PostgreSQL já existir de uma instalação anterior, a senha nova é aplicada em serviço com `ALTER USER`, sem recriar o volume e sem perder dados; serviços em execução são recriados para enxergar a senha nova. Para trocar a senha manualmente a qualquer momento, rode `.\setup.ps1 -RotateGrowthPassword`.
+O setup também grava em `.env` senhas locais aleatórias para o PostgreSQL e o armazenamento S3 do Growth OS (o arquivo fica fora do versionamento e é lido automaticamente pelo Docker Compose; valores já presentes são preservados). Se o volume do PostgreSQL já existir de uma instalação anterior, a senha nova é aplicada em serviço com `ALTER USER`, sem recriar o volume e sem perder dados; serviços em execução são recriados para enxergar a senha nova. Para trocar a senha manualmente a qualquer momento, rode `.\setup.ps1 -RotateGrowthPassword`.
 
 Abra [http://127.0.0.1:3000/Login.html](http://127.0.0.1:3000/Login.html).
 
@@ -50,12 +50,13 @@ Readiness: `GET /api/health/ready`. Liveness: `GET /api/health/live`. A versão 
 | `redis` | Fila do Turbo e stream de eventos do Growth OS |
 | `postgresql` | Domínio do Growth OS em `127.0.0.1:5433` |
 | `temporal` | Workflows duráveis em `127.0.0.1:7233` |
+| `rustfs` | Armazenamento S3 compatível persistente do Growth OS |
 | `growth-worker` | Planejamento |
 | `growth-outbox` | Publicação at-least-once dos eventos no Redis |
 
-O MinIO está descrito nas variáveis de object storage, mas o serviço está comentado no `compose.yaml` e não sobe com a composição atual.
+O Growth OS usa RustFS 1.0.4 como armazenamento S3 compatível em volume persistente. A API e o console do armazenamento não são expostos em portas do host.
 
-PostgreSQL e Temporal só escutam em `127.0.0.1`. As senhas do PostgreSQL/MinIO são geradas aleatoriamente pelo `setup.ps1` em `.env`; os defaults de desenvolvimento (ex.: `moneyprinter-local`) permanecem no `compose.yaml` apenas como fallback para rodar sem setup e não devem ser usados fora da máquina local.
+PostgreSQL e Temporal só escutam em `127.0.0.1`. As senhas do PostgreSQL e do armazenamento S3 são geradas aleatoriamente pelo `setup.ps1` em `.env`; os defaults de desenvolvimento (ex.: `moneyprinter-local`) permanecem no `compose.yaml` apenas como fallback para rodar sem setup e não devem ser usados fora da máquina local.
 
 ## Acesso
 

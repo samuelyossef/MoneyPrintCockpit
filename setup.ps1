@@ -29,7 +29,7 @@ function Invoke-DockerText([string[]]$DockerArguments) {
 
 if ((Invoke-DockerExit @('info')) -ne 0) { throw 'Docker Desktop não está em execução.' }
 
-# ---- Senhas locais do Growth OS (PostgreSQL/MinIO) -------------------------
+# ---- Credenciais locais do Growth OS (PostgreSQL/armazenamento S3) ----------
 # Ficam em `.env`, fora do versionamento e lido automaticamente pelo Docker
 # Compose; valores já presentes são preservados. Quando o volume do PostgreSQL
 # já existe (instalação anterior), a senha nova é aplicada em serviço com
@@ -55,7 +55,8 @@ function Set-EnvValue([string]$name, [string]$value) {
   }
 }
 
-# MinIO não tem volume na composição atual: basta gerar a senha se faltar.
+# Mantém MINIO_ROOT_* por compatibilidade com os valores existentes em .env;
+# o armazenamento S3 compatível recebe esses valores como credenciais próprias.
 if (-not (Get-EnvValue 'MINIO_ROOT_PASSWORD')) { Set-EnvValue 'MINIO_ROOT_PASSWORD' (New-LocalPasswordHex) }
 
 $growthExisting = Get-EnvValue 'GROWTH_POSTGRES_PASSWORD'
