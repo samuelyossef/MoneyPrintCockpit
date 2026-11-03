@@ -234,6 +234,14 @@ class GatewayContractTests(unittest.TestCase):
         self.assertFalse(result["valid"])
         self.assertTrue(result["detail"])
 
+    def test_pexels_validation_distinguishes_rate_limit_and_provider_failure(self):
+        from unittest.mock import AsyncMock, patch
+        for status in (429, 500, 503):
+            with self.subTest(status=status), patch("httpx.AsyncClient.get", new=AsyncMock(return_value=type("R", (), {"status_code": status})())):
+                result = asyncio.run(self.main.validate_provider_key(self.main.ProviderValidation(provider="pexels", api_key="test-key")))
+                self.assertIsNone(result["valid"])
+                self.assertNotIn("rejeitada", result["detail"])
+
     def test_validate_pixabay_and_coverr_keys(self):
         from unittest.mock import AsyncMock, patch
         ok, bad = (type("R", (), {"status_code": s})() for s in (200, 401))
