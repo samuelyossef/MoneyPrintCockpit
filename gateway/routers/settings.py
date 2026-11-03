@@ -129,7 +129,13 @@ async def validate_provider_key(input: m.ProviderValidation) -> dict[str, Any]:
                 # cache regardless of the Authorization header, making every key look
                 # valid; a random query forces a real cache bypass to Pexels' origin.
                 response = await client.get("https://api.pexels.com/v1/search", params={"query": str(uuid4()), "per_page": 1}, headers={"Authorization": input.api_key})
-                return {"valid": response.status_code == 200, "detail": None if response.status_code == 200 else "Chave rejeitada pelo Pexels."}
+                if response.status_code == 200:
+                    return {"valid": True, "detail": None}
+                if response.status_code in {401, 403}:
+                    return {"valid": False, "detail": "Chave rejeitada pelo Pexels."}
+                if response.status_code == 429:
+                    return {"valid": None, "detail": "Limite de requisições do Pexels atingido. Tente novamente mais tarde."}
+                return {"valid": None, "detail": f"Não foi possível verificar a chave no Pexels (HTTP {response.status_code}). Tente novamente."}
             if input.provider == "pixabay":
                 response = await client.get("https://pixabay.com/api/videos/", params={"key": input.api_key, "q": str(uuid4()), "per_page": 3})
                 return {"valid": response.status_code == 200, "detail": None if response.status_code == 200 else "Chave rejeitada pelo Pixabay."}

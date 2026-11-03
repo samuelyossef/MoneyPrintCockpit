@@ -1144,6 +1144,7 @@ window.CKV = (function () {
         <div class="grid2">
           <div><label class="dr-sec" style="margin:0 0 7px">Chave Moonshot/Kimi ${prov ? tag(!!prov.moonshot, prov.moonshot ? "Configurada" : "Não configurada") : ""}</label>
             <input class="np-input" id="cfgMoonshotKey" style="width:100%" type="password" placeholder="${prov && prov.moonshot ? "•••••••• (deixe em branco para manter)" : "sk-..."}" autocomplete="off" />
+            <div class="card-note" style="margin-top:6px"><a href="https://platform.kimi.ai/" target="_blank" rel="noopener noreferrer">Obter chave da API Kimi (Moonshot) ↗</a></div>
             <div class="card-note" id="cfgMoonshotKeyStatus" style="margin-top:5px;min-height:14px"></div></div>
           <div><label class="dr-sec" style="margin:0 0 7px">Modelo Moonshot/Kimi</label>
             <input class="np-input" id="cfgMoonshotModel" style="width:100%" value="${esc(prov && prov.moonshot_model || "")}" placeholder="kimi-k3 (padrão)" autocomplete="off" />
@@ -1153,6 +1154,7 @@ window.CKV = (function () {
         <div class="grid2">
           <div><label class="dr-sec" style="margin:0 0 7px">Chave NVIDIA ${prov ? tag(!!prov.nvidia, prov.nvidia ? "Configurada" : "Não configurada") : ""}</label>
             <input class="np-input" id="cfgNvidiaKey" style="width:100%" type="password" placeholder="${prov && prov.nvidia ? "•••••••• (deixe em branco para manter)" : "nvapi-..."}" autocomplete="off" />
+            <div class="card-note" style="margin-top:6px"><a href="https://build.nvidia.com/explore" target="_blank" rel="noopener noreferrer">Obter chave da API NVIDIA ↗</a></div>
             <div class="card-note" id="cfgNvidiaKeyStatus" style="margin-top:5px;min-height:14px"></div></div>
           <div><label class="dr-sec" style="margin:0 0 7px">Modelo de texto</label>
             <select class="set-select" id="cfgNvidiaTextModel" style="width:100%">${nvidiaModels.map(model => `<option value="${esc(model.id)}" ${model.id === nvidiaSelected ? "selected" : ""} ${model.available === false && model.id !== nvidiaSelected ? "disabled" : ""}>${esc(model.label)} — ${esc(model.provider)}${model.available === false ? " (indisponível)" : ""}</option>`).join("")}</select>
@@ -1173,12 +1175,15 @@ window.CKV = (function () {
         <div class="grid2" style="margin-top:14px">
           <div><label class="dr-sec" style="margin:0 0 7px">Chave Pexels ${prov ? tag(!!prov.pexels, prov.pexels ? "Configurada" : "Não configurada") : ""}</label>
             <input class="np-input" id="cfgPexelsKey" style="width:100%" type="password" placeholder="${prov && prov.pexels ? "•••••••• (deixe em branco para manter)" : "cole a chave aqui"}" autocomplete="off" />
+            <div class="card-note" style="margin-top:6px"><a href="https://www.pexels.com/api/" target="_blank" rel="noopener noreferrer">Obter chave da API Pexels ↗</a></div>
             <div class="card-note" id="cfgPexelsKeyStatus" style="margin-top:5px;min-height:14px"></div></div>
           <div><label class="dr-sec" style="margin:0 0 7px">Chave Pixabay ${prov ? tag(!!prov.pixabay, prov.pixabay ? "Configurada" : "Não configurada") : ""}</label>
             <input class="np-input" id="cfgPixabayKey" style="width:100%" type="password" placeholder="${prov && prov.pixabay ? "•••••••• (deixe em branco para manter)" : "cole a chave aqui"}" autocomplete="off" />
+            <div class="card-note" style="margin-top:6px"><a href="https://pixabay.com/service/about/api/" target="_blank" rel="noopener noreferrer">Obter chave da API Pixabay ↗</a></div>
             <div class="card-note" id="cfgPixabayKeyStatus" style="margin-top:5px;min-height:14px"></div></div>
           <div><label class="dr-sec" style="margin:0 0 7px">Chave Coverr ${prov ? tag(!!prov.coverr, prov.coverr ? "Configurada" : "Não configurada") : ""}</label>
             <input class="np-input" id="cfgCoverrKey" style="width:100%" type="password" placeholder="${prov && prov.coverr ? "•••••••• (deixe em branco para manter)" : "cole a chave aqui"}" autocomplete="off" />
+            <div class="card-note" style="margin-top:6px"><a href="https://api.coverr.co/docs/start/" target="_blank" rel="noopener noreferrer">Obter chave da API Coverr ↗</a></div>
             <div class="card-note" id="cfgCoverrKeyStatus" style="margin-top:5px;min-height:14px"></div></div>
         </div>
         <div class="dr-sec" style="margin-top:20px">Publicação (Upload-Post)</div>
